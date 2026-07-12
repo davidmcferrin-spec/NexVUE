@@ -1,0 +1,7 @@
+# Build artifacts
+decklink-status
+*.o
+
+# Local/test scratch
+*.pyc
+__pycache__/
