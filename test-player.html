@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NexVUE — WHEP Test Player</title>
+<!--
+  Phase 1 bring-up tool (v3).
+  Adds: Auto/HI/LO rendition selection with stats-driven auto-switching.
+        LO availability is detected live from the MediaMTX API (chNlo ready).
+  Auto-switch policy (reference implementation for the Phase 2 portal player):
+    - down HI->LO: packet-loss rate >3% for 3 consecutive seconds
+    - up   LO->HI: loss <0.5% for 20 consecutive seconds
+    - 10s cooldown between switches to prevent flapping
+  WebRTC has no rendition manifest — the browser cannot do this itself; every
+  switch is a deliberate reconnect to the other MediaMTX path.
+-->
+<style>
+  :root {
+    --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
+    --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--acc); }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  input, button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 7px 10px; font: inherit;
+  }
+  input:focus, button:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+  input#host { width: 260px; }
+  button { cursor: pointer; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.ch.active, button.tgl.active, button.q.active {
+    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+  }
+  /* Input status dot on each channel button, fed by the status daemon */
+  button.ch::before {
+    content: ""; display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; margin-right: 6px; background: var(--dim);
+    vertical-align: 1px;
+  }
+  button.ch.sig-ok::before   { background: var(--ok); }
+  button.ch.sig-lost::before { background: var(--bad); }
+  button#disconnect { border-color: var(--bad); color: var(--bad); }
+  #state { color: var(--dim); }
+  #state.ok { color: var(--ok); }
+  #state.bad { color: var(--bad); }
+  .qlabel { color: var(--dim); }
+  .videowrap { max-width: 1280px; }
+  video {
+    width: 100%; aspect-ratio: 16/9; display: block;
+    background: #000; border: 1px solid var(--edge); border-radius: 4px;
+  }
+  video.mirror        { transform: scaleX(-1); }
+  video.flip          { transform: scaleY(-1); }
+  video.mirror.flip   { transform: scale(-1, -1); }
+  #stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px; max-width: 1280px; margin-top: 12px;
+  }
+  .stat { background: var(--panel); border: 1px solid var(--edge); border-radius: 4px; padding: 8px 10px; }
+  .stat .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .stat .v { font-size: 16px; margin-top: 2px; }
+</style>
+</head>
+<body>
+<h1>NexVUE — WHEP Test Player</h1>
+
+<div class="bar">
+  <input id="host" value="http://127.0.0.1:8889" aria-label="Edge base URL">
+  <span id="channels"></span>
+  <button id="disconnect">Disconnect</button>
+  <span id="state">idle</span>
+</div>
+
+<div class="bar">
+  <span class="qlabel">quality:</span>
+  <button id="q-auto" class="q active">Auto</button>
+  <button id="q-hi" class="q">HI</button>
+  <button id="q-lo" class="q" disabled title="channel has no LO rendition">LO</button>
+  <span style="border-left:1px solid var(--edge);height:20px"></span>
+  <button id="mirror" class="tgl" title="Reflect left-right (confidence monitor)">Mirror ↔</button>
+  <button id="flip" class="tgl" title="Reflect top-bottom (inverted mounts)">Flip ↕</button>
+</div>
+
+<div class="videowrap">
+  <video id="video" autoplay playsinline controls muted></video>
+  <!-- muted: browsers block un-muted autoplay; unmute via controls once playing -->
+</div>
+
+<div id="stats">
+  <div class="stat"><div class="k">Rendition</div><div class="v" id="s-rend">—</div></div>
+  <div class="stat"><div class="k">Resolution / FPS</div><div class="v" id="s-res">—</div></div>
+  <div class="stat"><div class="k">My video bitrate</div><div class="v" id="s-vbr">—</div></div>
+  <div class="stat"><div class="k">RTT (ICE)</div><div class="v" id="s-rtt">—</div></div>
+  <div class="stat"><div class="k">Jitter buffer</div><div class="v" id="s-jb">—</div></div>
+  <div class="stat"><div class="k">Loss (1s)</div><div class="v" id="s-loss">—</div></div>
+  <div class="stat"><div class="k">Frames dropped</div><div class="v" id="s-drop">—</div></div>
+  <div class="stat"><div class="k">Viewers (path)</div><div class="v" id="s-viewers">—</div></div>
+  <div class="stat"><div class="k">Path egress</div><div class="v" id="s-chout">—</div></div>
+  <div class="stat"><div class="k">Edge egress (all)</div><div class="v" id="s-allout">—</div></div>
+  <div class="stat"><div class="k">SDI input</div><div class="v" id="s-input">—</div></div>
+  <div class="stat"><div class="k">Reference</div><div class="v" id="s-ref">—</div></div>
+</div>
+
+<script>
+"use strict";
+(() => {
+  const $ = id => document.getElementById(id);
+  const video = $("video"), stateEl = $("state");
+
+  // ---- Session / quality state -------------------------------------------------
+  let pc = null, statsTimer = null, apiTimer = null;
+  let currentBase = null;       // e.g. "ch3" (channel identity)
+  let currentPath = null;       // e.g. "ch3" or "ch3lo" (stream being watched)
+  let qualityMode = "auto";     // "auto" | "manual"
+  let rendition = "hi";         // "hi" | "lo" (current or desired)
+  let loAvailable = false;      // does currentBase publish a lo path?
+  let prevBytes = 0, prevTs = 0;
+  let prevLost = 0, prevRecv = 0, haveLossBaseline = false;
+  let badSeconds = 0, goodSeconds = 0, lastSwitchMs = 0;
+  let prevApi = null;
+
+  // Auto-switch policy constants (mirror these in the Phase 2 portal player)
+  const DOWN_LOSS = 0.03, DOWN_AFTER_S = 3;
+  const UP_LOSS = 0.005, UP_AFTER_S = 20;
+  const SWITCH_COOLDOWN_MS = 10000;
+
+  function setState(text, cls) {
+    stateEl.textContent = text;
+    stateEl.className = cls || "";
+  }
+
+  function apiBase() {
+    try {
+      const u = new URL($("host").value);
+      return `${u.protocol}//${u.hostname}:9997`;
+    } catch { return null; }
+  }
+
+  function pathFor(rend) {
+    return rend === "lo" ? `${currentBase}lo` : currentBase;
+  }
+
+  function updateQualityUI() {
+    $("q-auto").classList.toggle("active", qualityMode === "auto");
+    $("q-hi").classList.toggle("active", qualityMode === "manual" && rendition === "hi");
+    $("q-lo").classList.toggle("active", qualityMode === "manual" && rendition === "lo");
+    $("q-lo").disabled = !loAvailable;
+    $("s-rend").textContent = currentPath
+      ? `${rendition.toUpperCase()}${qualityMode === "auto" ? " (auto)" : ""}` : "—";
+  }
+
+  // ---- Session lifecycle ---------------------------------------------------------
+  function closeSession() {
+    if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+    if (apiTimer) { clearInterval(apiTimer); apiTimer = null; }
+    if (pc) { pc.close(); pc = null; }
+    video.srcObject = null;
+    currentPath = null;
+    prevBytes = 0; prevTs = 0;
+    prevLost = 0; prevRecv = 0; haveLossBaseline = false;
+    badSeconds = 0; goodSeconds = 0;
+    prevApi = null;
+  }
+
+  function teardown() {
+    closeSession();
+    currentBase = null;
+    loAvailable = false;
+    ["s-viewers", "s-chout", "s-allout"].forEach(id => $(id).textContent = "—");
+    document.querySelectorAll("button.ch").forEach(b => b.classList.remove("active"));
+    updateQualityUI();
+  }
+
+  async function openSession(path) {
+    closeSession();
+    currentPath = path;
+    setState(`connecting ${path}…`);
+    updateQualityUI();
+
+    const base = $("host").value.replace(/\/+$/, "");
+    const url = `${base}/${path}/whep`;
+
+    pc = new RTCPeerConnection();
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
+    pc.ontrack = ev => {
+      // Minimal receive buffering — the biggest LAN latency knob. Both hints
+      // set because browser support differs.
+      try { ev.receiver.playoutDelayHint = 0; } catch (e) { /* unsupported */ }
+      try { ev.receiver.jitterBufferTarget = 0; } catch (e) { /* unsupported */ }
+      if (!video.srcObject) video.srcObject = ev.streams[0];
+    };
+    pc.onconnectionstatechange = () => {
+      if (!pc) return;
+      if (pc.connectionState === "connected") setState(`connected ${path}`, "ok");
+      else if (["failed", "disconnected", "closed"].includes(pc.connectionState))
+        setState(pc.connectionState, "bad");
+    };
+
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await new Promise(resolve => {
+        if (pc.iceGatheringState === "complete") return resolve();
+        const check = () => {
+          if (pc.iceGatheringState === "complete") {
+            pc.removeEventListener("icegatheringstatechange", check);
+            resolve();
+          }
+        };
+        pc.addEventListener("icegatheringstatechange", check);
+        setTimeout(resolve, 2000);
+      });
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/sdp" },
+        body: pc.localDescription.sdp
+      });
+      if (!res.ok) throw new Error(`WHEP endpoint returned ${res.status}`);
+      await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
+
+      statsTimer = setInterval(pollRtcStats, 1000);
+      apiTimer = setInterval(pollApiStats, 2000);
+      pollApiStats();
+    } catch (err) {
+      setState(`error: ${err.message}`, "bad");
+      closeSession();
+      updateQualityUI();
+    }
+  }
+
+  function connectChannel(base, btn) {
+    teardown();
+    currentBase = base;
+    btn.classList.add("active");
+    // In auto mode always start on HI; the stats loop will step down if the
+    // link can't carry it. Manual LO is honored if the path exists.
+    if (qualityMode === "auto") rendition = "hi";
+    if (rendition === "lo" && !loAvailable) rendition = "hi";
+    openSession(pathFor(rendition));
+  }
+
+  function switchRendition(newRend, reason) {
+    if (!currentBase || newRend === rendition) return;
+    rendition = newRend;
+    lastSwitchMs = performance.now();
+    console.info(`[player] switching to ${newRend.toUpperCase()} (${reason})`);
+    openSession(pathFor(newRend));
+  }
+
+  // ---- Per-second receiver stats + auto-switch policy -----------------------------
+  async function pollRtcStats() {
+    if (!pc) return;
+    const report = await pc.getStats();
+    let lossRate = null;
+
+    report.forEach(s => {
+      if (s.type === "inbound-rtp" && s.kind === "video") {
+        $("s-res").textContent =
+          (s.frameWidth ? `${s.frameWidth}x${s.frameHeight}` : "—") +
+          (s.framesPerSecond ? ` @ ${s.framesPerSecond}` : "");
+        if (prevTs && s.timestamp > prevTs) {
+          const mbps = (s.bytesReceived - prevBytes) * 8 / (s.timestamp - prevTs) / 1000;
+          $("s-vbr").textContent = `${mbps.toFixed(2)} Mbps`;
+        }
+        prevBytes = s.bytesReceived; prevTs = s.timestamp;
+
+        // Windowed loss rate over the last poll interval — the auto-switch
+        // signal. Cumulative counters, so diff against the previous sample.
+        const lost = s.packetsLost ?? 0, recv = s.packetsReceived ?? 0;
+        if (haveLossBaseline) {
+          const dLost = Math.max(0, lost - prevLost);
+          const dRecv = Math.max(0, recv - prevRecv);
+          const total = dLost + dRecv;
+          lossRate = total > 0 ? dLost / total : 0;
+          $("s-loss").textContent = `${(lossRate * 100).toFixed(1)} %`;
+        }
+        prevLost = lost; prevRecv = recv; haveLossBaseline = true;
+
+        $("s-drop").textContent = s.framesDropped ?? "—";
+        if (s.jitterBufferDelay && s.jitterBufferEmittedCount) {
+          const ms = s.jitterBufferDelay / s.jitterBufferEmittedCount * 1000;
+          $("s-jb").textContent = `${ms.toFixed(0)} ms`;
+        }
+      }
+      if (s.type === "candidate-pair" && s.state === "succeeded" && s.nominated &&
+          s.currentRoundTripTime !== undefined) {
+        $("s-rtt").textContent = `${(s.currentRoundTripTime * 1000).toFixed(1)} ms`;
+      }
+    });
+
+    // ---- Auto-switch state machine ----
+    if (qualityMode !== "auto" || lossRate === null) return;
+    if (lossRate > DOWN_LOSS) { badSeconds++; goodSeconds = 0; }
+    else if (lossRate < UP_LOSS) { goodSeconds++; badSeconds = 0; }
+    else { badSeconds = 0; goodSeconds = 0; }
+
+    const cooled = performance.now() - lastSwitchMs > SWITCH_COOLDOWN_MS;
+    if (rendition === "hi" && loAvailable && badSeconds >= DOWN_AFTER_S && cooled) {
+      switchRendition("lo", `loss ${(lossRate * 100).toFixed(1)}% for ${DOWN_AFTER_S}s`);
+    } else if (rendition === "lo" && goodSeconds >= UP_AFTER_S && cooled) {
+      switchRendition("hi", `clean for ${UP_AFTER_S}s`);
+    }
+  }
+
+  // ---- MediaMTX API: viewer counts, egress, LO availability ------------------------
+  async function pollApiStats() {
+    const base = apiBase();
+    if (!base) return;
+    try {
+      const res = await fetch(`${base}/v3/paths/list`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      const now = performance.now();
+      const perPath = {};
+      let total = 0;
+
+      loAvailable = false;
+      for (const p of data.items || []) {
+        perPath[p.name] = p.bytesSent || 0;
+        total += p.bytesSent || 0;
+        if (currentBase && p.name === `${currentBase}lo` && p.ready !== false)
+          loAvailable = true;
+        if (p.name === currentPath)
+          $("s-viewers").textContent = (p.readers || []).length;
+      }
+      updateQualityUI();
+
+      if (prevApi) {
+        const dt = (now - prevApi.t) / 1000;
+        if (dt > 0) {
+          if (currentPath && perPath[currentPath] !== undefined &&
+              prevApi.perPath[currentPath] !== undefined) {
+            const mbps = (perPath[currentPath] - prevApi.perPath[currentPath]) * 8 / dt / 1e6;
+            $("s-chout").textContent = `${mbps.toFixed(2)} Mbps`;
+          }
+          const allMbps = (total - prevApi.total) * 8 / dt / 1e6;
+          $("s-allout").textContent = `${allMbps.toFixed(2)} Mbps`;
+        }
+      }
+      prevApi = { t: now, perPath, total };
+    } catch {
+      $("s-viewers").textContent = "n/a";
+      $("s-chout").textContent = "n/a";
+      $("s-allout").textContent = "n/a";
+    }
+  }
+
+  // ---- DeckLink input/reference status (:9998) — runs continuously -----------------
+  async function pollInputStatus() {
+    const base = apiBase();
+    if (!base) return;
+    const statusUrl = base.replace(":9997", ":9998") + "/status";
+    try {
+      const res = await fetch(statusUrl);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      const byIndex = {};
+      for (const d of data.devices || []) byIndex[d.index] = d;
+
+      document.querySelectorAll("button.ch").forEach((b, i) => {
+        const d = byIndex[i];
+        b.classList.remove("sig-ok", "sig-lost");
+        if (d && !data.stale) {
+          b.classList.add(d.input_locked ? "sig-ok" : "sig-lost");
+          b.title = d.input_locked ? `signal: ${d.input_mode}` : "no signal";
+        }
+      });
+
+      if (currentBase) {
+        const idx = parseInt(currentBase.replace(/\D/g, ""), 10);
+        const d = byIndex[idx];
+        if (d) {
+          $("s-input").textContent = d.input_locked ? d.input_mode : "NO SIGNAL";
+          $("s-input").style.color = d.input_locked ? "" : "var(--bad)";
+          $("s-ref").textContent = d.reference_locked
+            ? `locked · ${d.reference_mode}` : "free-run";
+          $("s-ref").style.color = d.reference_locked ? "" : "var(--dim)";
+        }
+      } else {
+        $("s-input").textContent = "—";
+        $("s-ref").textContent = "—";
+      }
+    } catch {
+      document.querySelectorAll("button.ch")
+        .forEach(b => b.classList.remove("sig-ok", "sig-lost"));
+      $("s-input").textContent = "n/a";
+      $("s-ref").textContent = "n/a";
+    }
+  }
+  setInterval(pollInputStatus, 2000);
+  pollInputStatus();
+
+  // ---- Quality selector -------------------------------------------------------------
+  $("q-auto").addEventListener("click", () => {
+    qualityMode = "auto";
+    badSeconds = 0; goodSeconds = 0;
+    updateQualityUI();
+  });
+  $("q-hi").addEventListener("click", () => {
+    qualityMode = "manual";
+    updateQualityUI();
+    if (currentBase && rendition !== "hi") switchRendition("hi", "manual");
+    else { rendition = "hi"; updateQualityUI(); }
+  });
+  $("q-lo").addEventListener("click", () => {
+    if (!loAvailable) return;
+    qualityMode = "manual";
+    updateQualityUI();
+    if (currentBase && rendition !== "lo") switchRendition("lo", "manual");
+    else { rendition = "lo"; updateQualityUI(); }
+  });
+
+  // ---- Video transforms ---------------------------------------------------------------
+  for (const name of ["mirror", "flip"]) {
+    $(name).addEventListener("click", () => {
+      video.classList.toggle(name);
+      $(name).classList.toggle("active");
+    });
+  }
+
+  // ---- Channel buttons ------------------------------------------------------------------
+  for (let i = 0; i < 8; i++) {
+    const b = document.createElement("button");
+    b.className = "ch";
+    b.textContent = `ch${i}`;
+    b.addEventListener("click", () => connectChannel(`ch${i}`, b));
+    $("channels").appendChild(b);
+  }
+  $("disconnect").addEventListener("click", () => { teardown(); setState("idle"); });
+})();
+</script>
+</body>
+</html>

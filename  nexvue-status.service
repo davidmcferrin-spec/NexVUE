@@ -1,0 +1,27 @@
+# /etc/systemd/system/nexvue-status.service
+#
+# DeckLink input/reference status daemon — serves JSON on :9998 for the
+# player UI and (later) the portal heartbeat / CheckMK checks.
+
+[Unit]
+Description=NexVUE input status daemon
+After=network-online.target
+
+[Service]
+Type=exec
+User=nexvue
+Group=nexvue
+SupplementaryGroups=video
+ExecStart=/usr/bin/python3 /usr/local/bin/nexvue-status-server.py
+
+Restart=always
+RestartSec=2
+StartLimitIntervalSec=0
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

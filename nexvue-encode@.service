@@ -1,0 +1,41 @@
+# /etc/systemd/system/nexvue-encode@.service
+#
+# Template unit: one instance per DeckLink channel.
+#   systemctl enable --now nexvue-encode@0 nexvue-encode@1 ...
+# Instance name %i selects /etc/nexvue/channels/%i.env
+#
+# Encoders restart independently of each other and of MediaMTX; if MediaMTX
+# bounces, rtspclientsink fails, the unit exits, and systemd relaunches it.
+
+[Unit]
+Description=NexVUE encoder channel %i (DeckLink -> MediaMTX)
+After=network-online.target mediamtx.service
+Wants=mediamtx.service
+
+[Service]
+Type=exec
+User=nexvue
+Group=nexvue
+# video  -> DeckLink device nodes (Desktop Video driver)
+# render -> /dev/dri/renderD* for VA-API (Quick Sync) encoding
+SupplementaryGroups=video render
+
+EnvironmentFile=/etc/nexvue/channels/%i.env
+ExecStart=/usr/local/bin/nexvue-encode.sh
+
+Restart=always
+RestartSec=3
+# If the pipeline crash-loops (e.g. driver fault), keep trying forever —
+# an unattended edge node must recover without hands. Rate-limited so the
+# journal stays readable.
+StartLimitIntervalSec=0
+
+# Hardening — encoder needs devices and loopback network, nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/etc/nexvue
+
+[Install]
+WantedBy=multi-user.target
