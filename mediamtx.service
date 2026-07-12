@@ -7,6 +7,7 @@
 Description=MediaMTX media server (NexVUE)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec
@@ -16,7 +17,6 @@ ExecStart=/usr/local/bin/mediamtx /etc/nexvue/mediamtx.yml
 
 Restart=always
 RestartSec=2
-StartLimitIntervalSec=0
 
 # Allows binding :443 directly in Phase 3 (DMZ) without running as root.
 AmbientCapabilities=CAP_NET_BIND_SERVICE

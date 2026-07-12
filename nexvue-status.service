@@ -6,6 +6,7 @@
 [Unit]
 Description=NexVUE input status daemon
 After=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec
@@ -16,7 +17,6 @@ ExecStart=/usr/bin/python3 /usr/local/bin/nexvue-status-server.py
 
 Restart=always
 RestartSec=2
-StartLimitIntervalSec=0
 
 NoNewPrivileges=yes
 ProtectSystem=strict

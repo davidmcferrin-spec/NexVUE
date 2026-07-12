@@ -11,6 +11,7 @@
 Description=NexVUE encoder channel %i (DeckLink -> MediaMTX)
 After=network-online.target mediamtx.service
 Wants=mediamtx.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec
@@ -28,7 +29,6 @@ RestartSec=3
 # If the pipeline crash-loops (e.g. driver fault), keep trying forever —
 # an unattended edge node must recover without hands. Rate-limited so the
 # journal stays readable.
-StartLimitIntervalSec=0
 
 # Hardening — encoder needs devices and loopback network, nothing else.
 NoNewPrivileges=yes
