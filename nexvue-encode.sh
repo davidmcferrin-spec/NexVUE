@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 ###############################################################################
-# nexvue-encode.sh — one DeckLink Quad 2 input -> H.264/Opus -> MediaMTX (RTSP)
+# nexvue-encode.sh — one DeckLink input -> H.264/Opus -> MediaMTX (RTSP)
 #
 # Invoked by systemd template unit nexvue-encode@<n>.service with environment
 # loaded from /etc/nexvue/channels/<n>.env
@@ -17,15 +17,24 @@
 #   - watchdog: silent capture hangs become clean systemd restarts
 #   - black frames on signal loss keep sessions alive
 ###############################################################################
+# Must run under bash (uses pipefail, [[ ]], arrays). Re-exec under bash if
+# launched via sh/dash so failures are clear, not "Illegal option -o pipefail".
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec bash "$0" "$@"
+fi
 set -euo pipefail
 
 log() { echo "[nexvue-encode] $*"; }
 
 # ---- Required environment ----------------------------------------------------
-: "${DEVICE_NUMBER:?DEVICE_NUMBER is required (0-7, DeckLink connector index)}"
+: "${DEVICE_NUMBER:?DEVICE_NUMBER is required (DeckLink connector index, 0-based)}"
 : "${CHANNEL_PATH:?CHANNEL_PATH is required (MediaMTX path, e.g. ch0)}"
 
 # ---- Optional environment (defaults tuned for 1080i59.94 sources) ------------
+# Channel count of the installed card, for input validation:
+#   Duo 2 / Duo 2 Mini = 4, Quad 2 = 8, original Duo = 2.
+# Default 8 keeps existing Quad 2 configs unchanged.
+MAX_DEVICES="${MAX_DEVICES:-8}"
 DEINT_FIELDS="${DEINT_FIELDS:-all}"         # all=59.94p out, top=29.97p out
 BITRATE_KBPS="${BITRATE_KBPS:-5000}"        # HI rendition video CBR, kbps
 GOP_FRAMES="${GOP_FRAMES:-60}"              # affects viewer JOIN time only
@@ -64,9 +73,9 @@ LO_HEIGHT="${LO_HEIGHT:-${LO_H_DEF}}"
 LO_BITRATE_KBPS="${LO_BITRATE_KBPS:-${LO_BR_DEF}}"
 
 # ---- Sanity checks ------------------------------------------------------------
-case "${DEVICE_NUMBER}" in [0-7]) ;; *)
-    log "ERROR: DEVICE_NUMBER must be 0-7, got '${DEVICE_NUMBER}'"; exit 64 ;;
-esac
+if ! [[ "${DEVICE_NUMBER}" =~ ^[0-9]+$ ]] || [ "${DEVICE_NUMBER}" -ge "${MAX_DEVICES}" ]; then
+    log "ERROR: DEVICE_NUMBER must be 0-$((MAX_DEVICES-1)) for this card (MAX_DEVICES=${MAX_DEVICES}), got '${DEVICE_NUMBER}'"; exit 64
+fi
 case "${DEINT_FIELDS}" in all|top) ;; *)
     log "ERROR: DEINT_FIELDS must be 'all' or 'top', got '${DEINT_FIELDS}'"; exit 64 ;;
 esac
