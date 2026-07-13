@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # Unit tests for nexvue-encode.sh pipeline assembly (GStreamer stubbed via PATH).
+#
+# Must run under bash (uses pipefail, [[ ]], <<< herestrings). If launched with
+# sh/dash (e.g. `sh test-pipeline-assembly.sh`), re-exec under bash so the
+# error is "bash not found" at worst, never a cryptic "Illegal option -o
+# pipefail".
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec bash "$0" "$@"
+fi
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$PWD/test/stubbin:$PATH"
@@ -63,5 +71,19 @@ grep -q "bitrate=400" <<<"$out" || fail "T8 override bitrate"
 
 # T9: invalid preset rejected
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_PRESET=1080p expect_usage_64 "T9 accepted bogus preset"
+
+
+# T10: MAX_DEVICES bounds validation (Duo 2 = 4 channels)
+DEVICE_NUMBER=4 CHANNEL_PATH=ch4 MAX_DEVICES=4 expect_usage_64 "T10 accepted device 4 on a 4-ch card"
+out=$(DEVICE_NUMBER=3 CHANNEL_PATH=ch3 MAX_DEVICES=4 run_encode)
+grep -q "device-number=3" <<<"$out" || fail "T10 rejected valid device 3 on Duo 2"
+
+# T11: default MAX_DEVICES=8 still allows Quad 2 range
+out=$(DEVICE_NUMBER=7 CHANNEL_PATH=ch7 run_encode)
+grep -q "device-number=7" <<<"$out" || fail "T11 default should allow device 7"
+DEVICE_NUMBER=8 CHANNEL_PATH=ch8 expect_usage_64 "T11 accepted device 8 at default MAX_DEVICES=8"
+
+# T12: non-numeric DEVICE_NUMBER rejected
+DEVICE_NUMBER=x CHANNEL_PATH=ch0 expect_usage_64 "T12 accepted non-numeric device"
 
 echo "All pipeline assembly tests passed."
