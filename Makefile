@@ -1,47 +1,42 @@
 # Build decklink-status.
 #
-# Requires the Blackmagic DeckLink SDK (free, but license-gated download —
-# grab "Desktop Video SDK" from the Blackmagic support site and unzip).
-# Use the SAME major version as the installed Desktop Video driver
-# (e.g. DV 16 + SDK 16).
+# Requires the Blackmagic DeckLink SDK (free, license-gated — grab the
+# "Desktop Video SDK" from the Blackmagic support site and unzip). Use the
+# SAME major version as the installed Desktop Video driver (DV 16 + SDK 16).
 #
 #   make DECKLINK_SDK=/opt/decklink-sdk
 #   sudo make install
 #
 # DECKLINK_SDK must point at the SDK ROOT (the folder containing Linux/).
-# Tip for space-in-path SDKs, symlink once:
-#   ln -s "/usr/local/src/Blackmagic DeckLink SDK 16.0" /opt/decklink-sdk
 #
-# DeckLinkAPIDispatch.cpp does the dlopen of the installed libDeckLinkAPI.so
-# at runtime (so the built binary has no hard link dependency). Its location
-# moved between SDK versions — under Linux/include in older SDKs, under
-# Linux/Samples (or elsewhere) in newer ones — so we locate it dynamically
-# rather than assuming a fixed path.
+# IMPORTANT — paths with spaces: make cannot reliably carry space-containing
+# paths in prerequisites or its text functions. The Blackmagic SDK unzips to
+# a folder WITH spaces ("Blackmagic DeckLink SDK 16.0"). Symlink it to a
+# space-free path once, and point DECKLINK_SDK at the symlink:
+#
+#   ln -s "/usr/local/src/Blackmagic DeckLink SDK 16.0" /opt/decklink-sdk
+#   make                       # /opt/decklink-sdk is the default
+#
+# The recipe resolves the header dir and dispatch source with a shell script
+# at build time (shell handles spaces fine), so even a symlink whose TARGET
+# contains spaces works — only the symlink path itself must be space-free.
 
 DECKLINK_SDK ?= /opt/decklink-sdk
-SDK_INC      := $(DECKLINK_SDK)/Linux/include
-
-# Find the header dir (dir containing DeckLinkAPI.h) and the dispatch source,
-# anywhere under the SDK root. Fall back to SDK_INC for the include path.
-DECKLINK_HDR_DIR := $(dir $(firstword $(shell find $(DECKLINK_SDK) -name DeckLinkAPI.h 2>/dev/null)))
-DECKLINK_DISPATCH := $(firstword $(shell find $(DECKLINK_SDK) -name DeckLinkAPIDispatch.cpp 2>/dev/null))
-INC_DIR := $(if $(DECKLINK_HDR_DIR),$(DECKLINK_HDR_DIR),$(SDK_INC))
 
 CXX      ?= g++
-CXXFLAGS += -std=c++17 -O2 -Wall -Wextra -I$(INC_DIR)
+CXXFLAGS += -std=c++17 -O2 -Wall -Wextra
 LDLIBS   += -ldl -lpthread
 
 decklink-status: decklink-status.cpp
-	@test -n "$(DECKLINK_DISPATCH)" || { \
-	  echo "ERROR: DeckLinkAPIDispatch.cpp not found under $(DECKLINK_SDK)"; \
-	  echo "       Check DECKLINK_SDK points at the SDK root (folder containing Linux/)."; \
-	  echo "       Found headers at: $(DECKLINK_HDR_DIR)"; \
-	  exit 1; }
-	@test -n "$(DECKLINK_HDR_DIR)" || { \
-	  echo "ERROR: DeckLinkAPI.h not found under $(DECKLINK_SDK)"; exit 1; }
-	@echo "Using headers:  $(INC_DIR)"
-	@echo "Using dispatch: $(DECKLINK_DISPATCH)"
-	$(CXX) $(CXXFLAGS) -o $@ decklink-status.cpp "$(DECKLINK_DISPATCH)" $(LDLIBS)
+	@sdk='$(DECKLINK_SDK)'; \
+	hdr="$$(find -L "$$sdk" -name DeckLinkAPI.h 2>/dev/null | head -n1)"; \
+	dispatch="$$(find -L "$$sdk" -name DeckLinkAPIDispatch.cpp 2>/dev/null | head -n1)"; \
+	if [ -z "$$hdr" ]; then echo "ERROR: DeckLinkAPI.h not found under $$sdk/Linux"; exit 1; fi; \
+	if [ -z "$$dispatch" ]; then echo "ERROR: DeckLinkAPIDispatch.cpp not found under $$sdk/Linux"; exit 1; fi; \
+	incdir="$$(dirname "$$hdr")"; \
+	echo "Using headers:  $$incdir"; \
+	echo "Using dispatch: $$dispatch"; \
+	$(CXX) $(CXXFLAGS) -I"$$incdir" -o decklink-status decklink-status.cpp "$$dispatch" $(LDLIBS)
 
 install: decklink-status
 	install -m 755 decklink-status /usr/local/bin/
