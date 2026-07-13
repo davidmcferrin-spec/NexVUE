@@ -21,8 +21,14 @@ Group=nexvue
 # render -> /dev/dri/renderD* for VA-API (Quick Sync) encoding
 SupplementaryGroups=video render
 
-EnvironmentFile=/etc/nexvue/channels/%i.env
-ExecStart=/usr/local/bin/nexvue-encode.sh
+# Channel config is SOURCED through a shell rather than read via
+# EnvironmentFile=, because systemd's native parser does NOT strip inline
+# "# comments" or surrounding whitespace — a line like "MAX_DEVICES=4  # note"
+# would pass the comment through as part of the value. Sourcing in bash gives
+# normal shell semantics (comments and whitespace handled correctly).
+# `set -a` exports every assignment so the script sees them as environment.
+# The %i is the systemd instance number; guard against a missing env file.
+ExecStart=/usr/bin/bash -c 'set -a; f="/etc/nexvue/channels/%i.env"; [ -r "$f" ] || { echo "missing env file: $f" >&2; exit 71; }; . "$f"; exec /usr/local/bin/nexvue-encode.sh'
 
 Restart=always
 RestartSec=3
