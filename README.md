@@ -2,15 +2,20 @@
 
 **NexVUE** — self-hosted SDI-to-WebRTC return-feed and remote-monitoring
 gateway (sibling of NexAlert). One edge node per station:
-DeckLink Quad 2 (8x 3G-SDI in) -> GStreamer (deinterlace + Quick Sync H.264 +
-Opus) -> MediaMTX -> WHEP (WebRTC) to any browser.
+DeckLink capture card (4 or 8x 3G-SDI in) -> GStreamer (deinterlace +
+Quick Sync H.264 + Opus) -> MediaMTX -> WHEP (WebRTC) to any browser.
+
+Supported capture cards (channel count set by `MAX_DEVICES` per channel env):
+DeckLink Quad 2 (8 ch), Duo 2 / Duo 2 Mini (4 ch), original Duo (2 ch). The
+code is card-agnostic — you enable one `nexvue-encode@N` service per input and
+stop; a Duo 2 uses instances 0-3.
 
 Phase 1 scope: single node, LAN only, no TLS, no auth. Proves ingest,
 encode stability, and latency numbers before the portal (Phase 2) and DMZ
 exposure (Phase 3) are built.
 
 ```
-SDI 1080i59.94 x8 --> [DeckLink Quad 2]
+SDI 1080i59.94 (4 or 8) --> [DeckLink card]
                         |  per channel (systemd template unit):
                         |  decklinkvideosrc -> deinterlace -> vah264enc (QSV)
                         |  decklinkaudiosrc -> opusenc
@@ -26,9 +31,13 @@ SDI 1080i59.94 x8 --> [DeckLink Quad 2]
   G1i Tower sibling; **Tower, not SFF** (the card is full height)
 - **Second 16GB DIMM** — the stock 1x16GB is single-channel; the iGPU media
   engine shares that bandwidth with 8-channel deinterlace. Cheap insurance.
-- Blackmagic DeckLink Quad 2 in the PCIe 4.0 x16 slot (card is Gen2 x8)
-- 8x DIN 1.0/2.3-to-BNC breakout cables — the Quad 2 has mini connectors,
-  NOT full-size BNC; easy to leave off the PO, painful to be missing
+- Blackmagic DeckLink Quad 2 in the PCIe 4.0 x16 slot (card is Gen2 x8).
+  **Duo 2 (4 ch)** works identically — set `MAX_DEVICES=4` and enable only
+  `nexvue-encode@0..3`. The Duo 2 Mini (low-profile) is the pick if the
+  chassis only takes half-height cards (e.g. an SFF box).
+- DIN 1.0/2.3-to-BNC breakout cables, one per channel (8 for Quad 2, 4 for
+  Duo 2) — the cards have mini connectors, NOT full-size BNC; easy to leave
+  off the PO, painful to be missing
 - Ubuntu 24.04 LTS Server
 - Optional: HP Care Pack to 3yr for unattended remote sites (base is 1/1/1)
 
@@ -107,6 +116,7 @@ sudo cp mediamtx.service nexvue-encode@.service /etc/systemd/system/
 # One env file per channel you want live (see channels-example.env):
 sudo cp channels-example.env /etc/nexvue/channels/0.env
 sudo nano /etc/nexvue/channels/0.env   # set DEVICE_NUMBER=0, CHANNEL_PATH=ch0
+                                       # (Duo 2: also set MAX_DEVICES=4)
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now mediamtx nexvue-encode@0
@@ -117,10 +127,12 @@ Add channels by creating `1.env` .. `7.env` and enabling `nexvue-encode@1` .. `@
 ### 5. Input status daemon (signal/reference display in the player)
 
 Requires the Blackmagic **DeckLink SDK** (separate download from Desktop
-Video — "Desktop Video SDK" on the same support page). Then:
+Video — "Desktop Video SDK" on the same support page). Use the **same major
+version** as the installed Desktop Video driver (e.g. DV 16 + SDK 16 — DV 16
+is current and preferred on the HWE kernel). Then:
 
 ```bash
-make DECKLINK_SDK=/path/to/Blackmagic_DeckLink_SDK_14.x
+make DECKLINK_SDK=/path/to/Blackmagic_DeckLink_SDK_16.x
 sudo make install                       # -> /usr/local/bin/decklink-status
 /usr/local/bin/decklink-status          # sanity: JSON with your 8 inputs
 
@@ -134,6 +146,64 @@ curl -s http://127.0.0.1:9998/status   # sanity: same JSON via HTTP
 
 Optional but recommended — the player degrades gracefully (dots grey,
 "n/a" tiles) if this isn't running.
+
+## Firewall (ufw)
+
+Ubuntu's `ufw` is default-deny once enabled, so the service ports must be
+opened explicitly. Port/protocol map:
+
+| Port      | Proto     | Scope        | Purpose                                   |
+|-----------|-----------|--------------|-------------------------------------------|
+| 8889      | TCP       | viewers      | WHEP signaling (HTTP POST/PATCH/DELETE)   |
+| 8189      | UDP + TCP | viewers      | WebRTC media (UDP) + ICE-TCP fallback     |
+| 9997      | TCP       | LAN mgmt     | MediaMTX API (viewer counts, egress)      |
+| 9998      | TCP       | LAN mgmt     | Status daemon (input/reference JSON)      |
+| 80 / 443  | TCP       | viewers      | Apache serving the player page            |
+| 8554      | —         | **loopback** | RTSP ingest — do NOT open (127.0.0.1 only)|
+
+Two things people get wrong here: the WebRTC **media** port (8189) needs
+**both UDP and TCP** — UDP carries the media, TCP is the fallback for
+viewers on UDP-hostile networks — and it is a *different* port from the WHEP
+signaling port (8889). Opening only 8889 gets you a session that negotiates
+then plays nothing.
+
+### Phase 1 (trusted LAN) — open to everyone on the subnet
+
+```bash
+sudo ufw allow 80/tcp comment 'NexVUE player (Apache)'
+sudo ufw allow 8889/tcp comment 'NexVUE WHEP signaling'
+sudo ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)'
+sudo ufw allow 9997/tcp comment 'NexVUE MediaMTX API'
+sudo ufw allow 9998/tcp comment 'NexVUE status daemon'
+sudo ufw enable
+sudo ufw status verbose
+```
+
+(`ufw allow 8189` with no proto opens both UDP and TCP, which is what the
+media port needs.)
+
+### Tighter: restrict the management ports to your ops subnet
+
+The API (9997) and status daemon (9998) expose viewer/session data and, in
+the case of the MediaMTX API, session-kick and config endpoints — no auth in
+Phase 1. Limit them to the engineering subnet rather than the whole LAN:
+
+```bash
+sudo ufw allow from 10.200.0.0/16 to any port 9997 proto tcp comment 'NexVUE API (ops only)'
+sudo ufw allow from 10.200.0.0/16 to any port 9998 proto tcp comment 'NexVUE status (ops only)'
+```
+
+### Phase 3 (DMZ) — viewers only, management goes loopback
+
+In the DMZ the two management ports must NOT be reachable at all (bind them
+to loopback in config; the portal relays their data via outbound heartbeat).
+Open only what viewers need, and 443 replaces 8889 once TLS is on:
+
+```bash
+sudo ufw allow 443/tcp comment 'NexVUE WHEP signaling (TLS)'
+sudo ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)'
+# 9997/9998 intentionally NOT opened — loopback only in DMZ
+```
 
 ## Verify
 
@@ -196,7 +266,8 @@ Leave all populated channels running for 72h before calling Phase 1 done:
 journalctl -u 'nexvue-encode@*' --since -72h | grep -ci restart   # want 0
 ```
 
-Watch for iGPU thermal throttling (`intel_gpu_top`) with all 8 channels hot.
+Watch for iGPU thermal throttling (`intel_gpu_top`) with all channels hot
+(8 on Quad 2, 4 on Duo 2).
 
 ## Operational notes
 
