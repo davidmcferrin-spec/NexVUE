@@ -115,7 +115,9 @@ sudo cp mediamtx.service nexvue-encode@.service /etc/systemd/system/
 
 # One env file per channel you want live (see channels-example.env):
 sudo cp channels-example.env /etc/nexvue/channels/0.env
-sudo nano /etc/nexvue/channels/0.env   # set DEVICE_NUMBER=0, CHANNEL_PATH=ch0
+sudo nano /etc/nexvue/channels/0.env
+#   (inline '# comments' and whitespace in the env file are fine —
+#    the unit sources it through a shell)   # set DEVICE_NUMBER=0, CHANNEL_PATH=ch0
                                        # (Duo 2: also set MAX_DEVICES=4)
 
 sudo systemctl daemon-reload
