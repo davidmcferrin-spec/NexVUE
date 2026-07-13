@@ -72,7 +72,7 @@
 <h1>NexVUE — WHEP Test Player</h1>
 
 <div class="bar">
-  <input id="host" value="http://127.0.0.1:8889" aria-label="Edge base URL">
+  <input id="host" placeholder="(auto)" aria-label="Edge WHEP base URL — leave blank to use this page's host" title="Leave blank to auto-use the address you loaded this page from. Override to point at a different edge, e.g. http://10.0.0.5:8889">
   <span id="channels"></span>
   <button id="disconnect">Disconnect</button>
   <span id="state">idle</span>
@@ -131,16 +131,50 @@
   const UP_LOSS = 0.005, UP_AFTER_S = 20;
   const SWITCH_COOLDOWN_MS = 10000;
 
+  // Service ports on the edge host. The page is served by Apache (port 80/443)
+  // but the three services live on their own ports on the SAME host — so we
+  // derive every URL from the hostname used to load the page, ignoring the
+  // page's own port. One edit here if a port ever changes.
+  const PORT = { whep: 8889, api: 9997, status: 9998 };
+  const PROTO = "http:";  // Phase 1 is plain HTTP; Phase 3 flips this to https:
+
+  // Auto-discovered once at load. Falls back to localhost when opened as a
+  // file:// (no hostname), so bring-up straight from disk still works.
+  const EDGE_HOST = (location.hostname && location.hostname.length)
+    ? location.hostname : "127.0.0.1";
+
+  function edgeUrl(service) {
+    return `${PROTO}//${EDGE_HOST}:${PORT[service]}`;
+  }
+
+  // Show the auto-discovered WHEP URL as the host-field placeholder so the
+  // user can see exactly what "auto" resolves to (and that it followed the
+  // address they loaded the page from).
+  document.addEventListener("DOMContentLoaded", () => {
+    const h = $("host");
+    if (h) h.placeholder = edgeUrl("whep");
+  });
+
   function setState(text, cls) {
     stateEl.textContent = text;
     stateEl.className = cls || "";
   }
 
-  function apiBase() {
+  // Base for WHEP requests — the host field allows a manual override (e.g.
+  // pointing the page at a different edge), otherwise the discovered host.
+  function whepBase() {
+    const override = $("host").value.trim().replace(/\/+$/, "");
+    return override || edgeUrl("whep");
+  }
+
+  // API and status live on the SAME host as WHEP but different ports. Derive
+  // them from whatever host WHEP is currently using, so a manual override in
+  // the host field propagates to all three services in lockstep.
+  function serviceBase(service) {
     try {
-      const u = new URL($("host").value);
-      return `${u.protocol}//${u.hostname}:9997`;
-    } catch { return null; }
+      const host = new URL(whepBase()).hostname;
+      return `${PROTO}//${host}:${PORT[service]}`;
+    } catch { return edgeUrl(service); }
   }
 
   function pathFor(rend) {
@@ -184,8 +218,7 @@
     setState(`connecting ${path}…`);
     updateQualityUI();
 
-    const base = $("host").value.replace(/\/+$/, "");
-    const url = `${base}/${path}/whep`;
+    const url = `${whepBase()}/${path}/whep`;
 
     pc = new RTCPeerConnection();
     pc.addTransceiver("video", { direction: "recvonly" });
@@ -313,7 +346,7 @@
 
   // ---- MediaMTX API: viewer counts, egress, LO availability ------------------------
   async function pollApiStats() {
-    const base = apiBase();
+    const base = serviceBase("api");
     if (!base) return;
     try {
       const res = await fetch(`${base}/v3/paths/list`);
@@ -356,9 +389,7 @@
 
   // ---- DeckLink input/reference status (:9998) — runs continuously -----------------
   async function pollInputStatus() {
-    const base = apiBase();
-    if (!base) return;
-    const statusUrl = base.replace(":9997", ":9998") + "/status";
+    const statusUrl = serviceBase("status") + "/status";
     try {
       const res = await fetch(statusUrl);
       if (!res.ok) throw new Error(res.status);
