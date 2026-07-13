@@ -56,9 +56,19 @@
     width: 100%; aspect-ratio: 16/9; display: block;
     background: #000; border: 1px solid var(--edge); border-radius: 4px;
   }
+  /* Transforms apply in both normal and fullscreen. The browser's fullscreen
+     styling targets the same <video> element and can override a plain
+     `transform`, so the :fullscreen selectors (with vendor prefixes) reassert
+     it. Each browser only understands its own prefix; the others are ignored. */
   video.mirror        { transform: scaleX(-1); }
   video.flip          { transform: scaleY(-1); }
   video.mirror.flip   { transform: scale(-1, -1); }
+  video.mirror:fullscreen              { transform: scaleX(-1); }
+  video.flip:fullscreen                { transform: scaleY(-1); }
+  video.mirror.flip:fullscreen         { transform: scale(-1, -1); }
+  video.mirror:-webkit-full-screen     { transform: scaleX(-1); }
+  video.flip:-webkit-full-screen       { transform: scaleY(-1); }
+  video.mirror.flip:-webkit-full-screen{ transform: scale(-1, -1); }
   #stats {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 8px; max-width: 1280px; margin-top: 12px;
