@@ -8,6 +8,8 @@
 #   sudo ./setup.sh            full install + sanity checks
 #   sudo ./setup.sh --check    sanity checks only (e.g. after HWE reboot or
 #                              after installing Desktop Video)
+#   sudo ./setup.sh --firewall install, then open Phase 1 ufw ports (does not
+#                              enable ufw for you — see note at that step)
 #
 # Python policy: NexVUE uses stdlib only — no pip, ever. Any future Python
 # dependency must come from apt (python3-<package>).
@@ -16,6 +18,11 @@
 #   - Blackmagic Desktop Video driver  (required for capture)
 #   - Blackmagic DeckLink SDK          (required to build decklink-status)
 ###############################################################################
+# Must run under bash (uses pipefail, [[ ]], arrays). Re-exec under bash if
+# launched via sh/dash so failures are clear, not "Illegal option -o pipefail".
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec bash "$0" "$@"
+fi
 set -euo pipefail
 
 # ---- Output helpers -------------------------------------------------------------
@@ -28,7 +35,13 @@ WARNINGS=()
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_ONLY=false
-[ "${1:-}" = "--check" ] && CHECK_ONLY=true
+APPLY_FIREWALL=false
+for arg in "$@"; do
+  case "$arg" in
+    --check)    CHECK_ONLY=true ;;
+    --firewall) APPLY_FIREWALL=true ;;
+  esac
+done
 
 [ "$(id -u)" -eq 0 ] || fail "run as root: sudo ./setup.sh"
 
@@ -162,6 +175,29 @@ done
   || warn "decklink-status helper not installed (optional; see step 5)"
 
 ###############################################################################
+# Optional: Phase 1 firewall rules (only with --firewall — never silent)
+###############################################################################
+if $APPLY_FIREWALL; then
+  step "Firewall (ufw) — Phase 1 LAN rules"
+  if ! command -v ufw >/dev/null; then
+    warn "ufw not installed — skipping (apt install ufw to use --firewall)"
+  else
+    # NOTE: does not enable ufw for you — enabling can drop your SSH session if
+    # 22 isn't already allowed. Opens NexVUE ports only; you enable ufw.
+    ufw allow 80/tcp comment 'NexVUE player (Apache)' >/dev/null
+    ufw allow 8889/tcp comment 'NexVUE WHEP signaling' >/dev/null
+    ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)' >/dev/null
+    ufw allow 9997/tcp comment 'NexVUE MediaMTX API' >/dev/null
+    ufw allow 9998/tcp comment 'NexVUE status daemon' >/dev/null
+    ok "NexVUE ports opened (80,8889,8189/udp+tcp,9997,9998)"
+    if ! ufw status | grep -q "Status: active"; then
+      warn "ufw is NOT active — rules staged but not enforced. Ensure 22/ssh is allowed, then: sudo ufw enable"
+    fi
+    warn "8554 (RTSP) left closed on purpose — loopback ingest only"
+  fi
+fi
+
+###############################################################################
 # Summary
 ###############################################################################
 echo
@@ -182,5 +218,8 @@ Next steps:
        sudo nano /etc/nexvue/channels/0.env
   4. Start services:
        sudo systemctl enable --now mediamtx nexvue-status nexvue-encode@0
-  5. Verify:  http://<edge-ip>:8889/ch0  and test-player.html
+  5. Firewall (if ufw is in use): open ports with
+       sudo ./setup.sh --firewall     (then: sudo ufw enable, once 22/ssh is allowed)
+     or apply the rules manually — see the Firewall section in README.md
+  6. Verify:  http://<edge-ip>:8889/ch0  and test-player.html
 NEXT
