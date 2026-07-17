@@ -98,4 +98,20 @@ grep -q "audioresample quality=3" <<<"$out" || fail "T14 custom resample quality
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_RESAMPLE_QUALITY=11 expect_usage_64 "T14 accepted out-of-range resample quality"
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_RESAMPLE_QUALITY=bogus expect_usage_64 "T14 accepted non-numeric resample quality"
 
+
+# T15: audio queue depth is wired in and defaults to 100
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 ./nexvue-encode.sh)
+grep -q "queue max-size-buffers=100 leaky=downstream" <<<"$out" || fail "T15 default audio queue depth should be 100"
+
+# T16: AUDIO_QUEUE_BUFFERS is configurable and validated
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_QUEUE_BUFFERS=250 ./nexvue-encode.sh)
+grep -q "max-size-buffers=250 leaky=downstream" <<<"$out" || fail "T16 custom audio queue depth not applied"
+DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_QUEUE_BUFFERS=0 expect_usage_64 "T16 accepted zero audio queue depth"
+DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_QUEUE_BUFFERS=bogus expect_usage_64 "T16 accepted non-numeric audio queue depth"
+
+# T17: with LO_ENABLE, both audio tee branches get the configured depth
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true AUDIO_QUEUE_BUFFERS=75 ./nexvue-encode.sh)
+occurrences=$(grep -o "max-size-buffers=75 leaky=downstream" <<<"$out" | wc -l)
+[ "$occurrences" -ge 3 ] || fail "T17 audio queue depth should apply to capture queue + both tee branches (got $occurrences)"
+
 echo "All pipeline assembly tests passed."

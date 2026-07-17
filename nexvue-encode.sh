@@ -58,6 +58,18 @@ ENABLE_AUDIO="$(strip_inline "${ENABLE_AUDIO:-true}")"
 AUDIO_BITRATE_BPS="$(strip_inline "${AUDIO_BITRATE_BPS:-128000}")"
 AUDIO_CHANNELS="$(strip_inline "${AUDIO_CHANNELS:-2}")"
 AUDIO_FRAME_MS="$(strip_inline "${AUDIO_FRAME_MS:-10}")"
+# Audio queue depth in buffers. 16 (the old default) is only ~160-320ms of
+# headroom at typical Opus frame sizes — thin against any transient stall
+# (encoder thermal cycling, brief CPU contention from other channels or the
+# metrics/status pollers). Unlike decklinkaudiosrc's own overflow protection
+# (which logs "Dropped N old packets"), a generic GStreamer `queue` element
+# silently drops on overflow with NO log message by default — so a queue
+# this shallow could be leaking under load for hours with zero trace in the
+# journal, and `audiorate` downstream papering over each gap with inserted
+# silence is a plausible source of a "watery"/phasy long-run audio artifact.
+# Bumped to 100 (~1-2s headroom) by default; still leaky, so a genuinely
+# sustained stall still drops rather than growing unbounded latency.
+AUDIO_QUEUE_BUFFERS="$(strip_inline "${AUDIO_QUEUE_BUFFERS:-100}")"
 # audioresample quality, 0-10. GStreamer's own default is a middling 4.
 # Under CONTINUOUS small corrections (e.g. the capture clock drifting
 # against the pipeline clock over many hours — watch for recurring
@@ -114,6 +126,9 @@ case "${AUDIO_FRAME_MS}" in 2|5|10|20|40|60) ;; *)
 esac
 if ! [[ "${AUDIO_RESAMPLE_QUALITY}" =~ ^([0-9]|10)$ ]]; then
     log "ERROR: AUDIO_RESAMPLE_QUALITY must be an integer 0-10, got '${AUDIO_RESAMPLE_QUALITY}'"; exit 64
+fi
+if ! [[ "${AUDIO_QUEUE_BUFFERS}" =~ ^[0-9]+$ ]] || [ "${AUDIO_QUEUE_BUFFERS}" -lt 1 ]; then
+    log "ERROR: AUDIO_QUEUE_BUFFERS must be a positive integer, got '${AUDIO_QUEUE_BUFFERS}'"; exit 64
 fi
 command -v gst-launch-1.0 >/dev/null || { log "ERROR: gst-launch-1.0 not found"; exit 69; }
 gst-inspect-1.0 decklinkvideosrc >/dev/null 2>&1 \
@@ -180,7 +195,7 @@ fi
 
 if [ "${ENABLE_AUDIO}" = "true" ]; then
   PIPELINE+=" decklinkaudiosrc device-number=${DEVICE_NUMBER} channels=${AUDIO_CHANNELS}"
-  PIPELINE+=" ! queue max-size-buffers=16 leaky=downstream"
+  PIPELINE+=" ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream"
   # audiorate enforces a gapless, constant-rate timeline: it inserts silence
   # for any gap (e.g. from the queue above leaking under momentary pressure)
   # instead of letting a timestamp discontinuity pass through. Without this,
@@ -193,8 +208,8 @@ if [ "${ENABLE_AUDIO}" = "true" ]; then
   PIPELINE+=" ! opusenc bitrate=${AUDIO_BITRATE_BPS} frame-size=${AUDIO_FRAME_MS}"
   if [ "${LO_ENABLE}" = "true" ]; then
     PIPELINE+=" ! tee name=at"
-    PIPELINE+=" at. ! queue max-size-buffers=16 leaky=downstream ! sink."
-    PIPELINE+=" at. ! queue max-size-buffers=16 leaky=downstream ! sinklo."
+    PIPELINE+=" at. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream ! sink."
+    PIPELINE+=" at. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream ! sinklo."
   else
     PIPELINE+=" ! sink."
   fi
