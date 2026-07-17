@@ -130,15 +130,17 @@ public:
 };
 
 // Probe one sub-device by actively enabling input with format detection.
-// Returns true if it opened the input (whether or not signal was found);
-// sets busy=true if the input could not be opened (in use by an encoder).
+// Returns true if it opened the input (whether or not signal was found).
+// Returns false if the active probe could not run — caller should fall back
+// to probeStatusFlag. Sets busy=true when EnableVideoInput fails (typically
+// the encoder already holds the input); QI failure leaves busy=false.
 static bool probeActive(IDeckLink* deckLink, bool& locked, int64_t& mode, bool& busy)
 {
     locked = false; mode = 0; busy = false;
 
     IDeckLinkInput* input = nullptr;
     if (deckLink->QueryInterface(IID_IDeckLinkInput, (void**)&input) != S_OK || !input)
-        return false;
+        return false; // no input interface (e.g. output-only) — status fallback
 
     DetectCallback cb;
     input->SetCallback(&cb);
@@ -183,8 +185,8 @@ static bool probeActive(IDeckLink* deckLink, bool& locked, int64_t& mode, bool& 
     return true;
 }
 
-// Fallback for a busy device: read the status flag (valid because a running
-// encoder means the input is active).
+// Status-flag fallback when the active probe cannot run. Authoritative when
+// an encoder holds the input (streams are active); best-effort otherwise.
 static void probeStatusFlag(IDeckLink* deckLink, bool& locked, int64_t& mode)
 {
     locked = false; mode = 0;
@@ -240,10 +242,9 @@ int main()
         int64_t inputMode = 0;
 
         if (!probeActive(deckLink, inputLocked, inputMode, busy)) {
-            if (busy) {
-                // In use by an encoder → status flag is authoritative here.
-                probeStatusFlag(deckLink, inputLocked, inputMode);
-            }
+            // Active probe unavailable (busy encoder, missing input interface,
+            // etc.) — try status flags rather than leaving locked=false/mode=0.
+            probeStatusFlag(deckLink, inputLocked, inputMode);
         }
 
         bool refLocked = false; int64_t refMode = 0;
