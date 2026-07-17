@@ -56,19 +56,13 @@
     width: 100%; aspect-ratio: 16/9; display: block;
     background: #000; border: 1px solid var(--edge); border-radius: 4px;
   }
-  /* Transforms apply in both normal and fullscreen. The browser's fullscreen
-     styling targets the same <video> element and can override a plain
-     `transform`, so the :fullscreen selectors (with vendor prefixes) reassert
-     it. Each browser only understands its own prefix; the others are ignored. */
-  video.mirror        { transform: scaleX(-1); }
-  video.flip          { transform: scaleY(-1); }
-  video.mirror.flip   { transform: scale(-1, -1); }
-  video.mirror:fullscreen              { transform: scaleX(-1); }
-  video.flip:fullscreen                { transform: scaleY(-1); }
-  video.mirror.flip:fullscreen         { transform: scale(-1, -1); }
-  video.mirror:-webkit-full-screen     { transform: scaleX(-1); }
-  video.flip:-webkit-full-screen       { transform: scaleY(-1); }
-  video.mirror.flip:-webkit-full-screen{ transform: scale(-1, -1); }
+  /* Mirror/flip transforms are applied inline via JS (not CSS classes) so they
+     survive fullscreen — the browser's fullscreen styling can override a
+     stylesheet `transform`, but not an inline one. Fullscreen targets the
+     wrapper div, not the video, so the video's transform is never touched. */
+  .videowrap:fullscreen { display: flex; align-items: center; background: #000; }
+  .videowrap:-webkit-full-screen { display: flex; align-items: center; background: #000; }
+  .videowrap:fullscreen video, .videowrap:-webkit-full-screen video { max-height: 100vh; }
   #stats {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 8px; max-width: 1280px; margin-top: 12px;
@@ -96,6 +90,7 @@
   <span style="border-left:1px solid var(--edge);height:20px"></span>
   <button id="mirror" class="tgl" title="Reflect left-right (confidence monitor)">Mirror ↔</button>
   <button id="flip" class="tgl" title="Reflect top-bottom (inverted mounts)">Flip ↕</button>
+  <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip)">⛶ Fullscreen</button>
 </div>
 
 <div class="videowrap">
@@ -116,6 +111,7 @@
   <div class="stat"><div class="k">Edge egress (all)</div><div class="v" id="s-allout">—</div></div>
   <div class="stat"><div class="k">SDI input</div><div class="v" id="s-input">—</div></div>
   <div class="stat"><div class="k">Reference</div><div class="v" id="s-ref">—</div></div>
+  <div class="stat"><div class="k">Screen awake</div><div class="v" id="s-wake">—</div></div>
 </div>
 
 <script>
@@ -146,7 +142,11 @@
   // derive every URL from the hostname used to load the page, ignoring the
   // page's own port. One edit here if a port ever changes.
   const PORT = { whep: 8889, api: 9997, status: 9998 };
-  const PROTO = "http:";  // Phase 1 is plain HTTP; Phase 3 flips this to https:
+  // Match the PAGE's own scheme. If Apache is served over HTTPS, the browser
+  // will block any fetch to plain HTTP as mixed content — so once the page is
+  // HTTPS, WHEP/API/status must be too (MediaMTX webrtcEncryption: yes, and
+  // the status daemon's NEXVUE_STATUS_TLS_CERT/_KEY, both set to match).
+  const PROTO = location.protocol === "https:" ? "https:" : "http:";
 
   // Auto-discovered once at load. Falls back to localhost when opened as a
   // file:// (no hostname), so bring-up straight from disk still works.
@@ -200,10 +200,60 @@
       ? `${rendition.toUpperCase()}${qualityMode === "auto" ? " (auto)" : ""}` : "—";
   }
 
-  // ---- Session lifecycle ---------------------------------------------------------
+  // ---- Long-running session resilience -------------------------------------------
+  // For unattended multi-hour playback (wall monitors, 8-15h shifts): the
+  // connection must recover itself from transient network blips without a
+  // human noticing a "failed" status text, and the display must not sleep.
+  let intentionalDisconnect = false;   // true only for user-initiated teardown
+  let reconnectTimer = null;
+  let reconnectAttempt = 0;
+  const RECONNECT_BASE_MS = 2000;      // first retry after 2s
+  const RECONNECT_MAX_MS = 30000;      // backoff caps at 30s between attempts
+  let wakeLock = null;
+
+  async function acquireWakeLock() {
+    if (!("wakeLock" in navigator)) { $("s-wake").textContent = "unsupported"; return; }
+    if (wakeLock) return;   // already held, nothing to do
+    try {
+      wakeLock = await navigator.wakeLock.request("screen");
+      $("s-wake").textContent = "on";
+      $("s-wake").style.color = "var(--ok)";
+      wakeLock.addEventListener("release", () => {
+        wakeLock = null;
+        $("s-wake").textContent = "released";
+        $("s-wake").style.color = "var(--dim)";
+      });
+    } catch (e) {
+      $("s-wake").textContent = "failed";
+      $("s-wake").style.color = "var(--bad)";
+    }
+  }
+  // Wake locks are released by the browser whenever the tab is hidden and
+  // must be re-acquired on return — otherwise a monitor that gets alt-tabbed
+  // once, even briefly, permanently loses its stay-awake behavior.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && currentBase && !wakeLock) {
+      acquireWakeLock();
+    }
+  });
+
+  function scheduleReconnect(base, rend) {
+    if (intentionalDisconnect || reconnectTimer) return;
+    reconnectAttempt++;
+    const delay = Math.min(RECONNECT_BASE_MS * 2 ** (reconnectAttempt - 1), RECONNECT_MAX_MS);
+    setState(`reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempt})…`, "bad");
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (intentionalDisconnect || !currentBase) return;
+      openSession(pathFor(rend));
+    }, delay);
+  }
+
+
   function closeSession() {
     if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
     if (apiTimer) { clearInterval(apiTimer); apiTimer = null; }
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (pc) { pc.close(); pc = null; }
     video.srcObject = null;
     currentPath = null;
@@ -214,9 +264,12 @@
   }
 
   function teardown() {
+    intentionalDisconnect = true;
     closeSession();
     currentBase = null;
     loAvailable = false;
+    if (wakeLock) { wakeLock.release(); wakeLock = null; }
+    $("s-wake").textContent = "—"; $("s-wake").style.color = "";
     ["s-viewers", "s-chout", "s-allout"].forEach(id => $(id).textContent = "—");
     document.querySelectorAll("button.ch").forEach(b => b.classList.remove("active"));
     updateQualityUI();
@@ -224,6 +277,7 @@
 
   async function openSession(path) {
     closeSession();
+    intentionalDisconnect = false;   // a new session is starting; arm auto-reconnect
     currentPath = path;
     setState(`connecting ${path}…`);
     updateQualityUI();
@@ -242,9 +296,19 @@
     };
     pc.onconnectionstatechange = () => {
       if (!pc) return;
-      if (pc.connectionState === "connected") setState(`connected ${path}`, "ok");
-      else if (["failed", "disconnected", "closed"].includes(pc.connectionState))
+      if (pc.connectionState === "connected") {
+        setState(`connected ${path}`, "ok");
+        reconnectAttempt = 0;               // link is good again — reset backoff
+        acquireWakeLock();
+      } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         setState(pc.connectionState, "bad");
+        // Only auto-recover from an UNEXPECTED drop — not a user-initiated
+        // disconnect/channel-switch/quality-switch, which already have their
+        // own deliberate teardown+reopen paths.
+        if (!intentionalDisconnect && currentBase) {
+          scheduleReconnect(currentBase, rendition);
+        }
+      }
     };
 
     try {
@@ -461,11 +525,35 @@
   });
 
   // ---- Video transforms ---------------------------------------------------------------
-  for (const name of ["mirror", "flip"]) {
-    $(name).addEventListener("click", () => {
-      video.classList.toggle(name);
-      $(name).classList.toggle("active");
-    });
+  // Applied as an INLINE transform on the video (survives fullscreen, which a
+  // CSS-class transform does not). State tracked in these flags.
+  let mir = false, flp = false;
+  function applyTransform() {
+    const x = mir ? -1 : 1, y = flp ? -1 : 1;
+    video.style.transform = (x === 1 && y === 1) ? "" : `scale(${x}, ${y})`;
+  }
+  $("mirror").addEventListener("click", () => {
+    mir = !mir; $("mirror").classList.toggle("active", mir); applyTransform();
+  });
+  $("flip").addEventListener("click", () => {
+    flp = !flp; $("flip").classList.toggle("active", flp); applyTransform();
+  });
+
+  // Fullscreen the WRAPPER (not the video element), so the video's inline
+  // transform is never overridden by the browser's fullscreen video styling.
+  const wrap = document.querySelector(".videowrap");
+  $("fs").addEventListener("click", () => {
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fsEl) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else {
+      (wrap.requestFullscreen || wrap.webkitRequestFullscreen).call(wrap);
+    }
+  });
+  // Re-assert the transform on fullscreen enter/exit, belt-and-suspenders in
+  // case a browser resets inline styles across the transition.
+  for (const ev of ["fullscreenchange", "webkitfullscreenchange"]) {
+    document.addEventListener(ev, applyTransform);
   }
 
   // ---- Channel buttons ------------------------------------------------------------------

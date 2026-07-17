@@ -6,7 +6,8 @@ README.md current as the project progresses.
 ## What this is
 
 **NexVUE** — self-hosted SDI-to-WebRTC gateway replacing Dejero CuePoint.
-Per-station edge nodes capture 8x 3G-SDI (DeckLink Quad 2), encode with Intel
+Per-station edge nodes capture 3G-SDI (DeckLink Quad 2 = 8ch, Duo 2 = 4ch;
+card-agnostic via MAX_DEVICES), encode with Intel
 Quick Sync, and serve sub-250ms WebRTC (WHEP) to browsers. A future central
 portal (Phase 2) provides the channel catalog and auth; **video never
 transits the portal** — viewers connect directly to edge nodes. Sibling
@@ -15,6 +16,11 @@ product to NexAlert.
 Packet analysis of a real CuePoint confirmed it is standard WebRTC
 (ICE/STUN -> DTLS-SRTP, single muxed UDP port, cloud signaling + local
 media) — NexVUE mirrors that architecture, self-hosted.
+
+A `nexvue-metrics` component (port 9999) provides usage/analytics history
+(bandwidth, viewers, active streams, input lock/format over time) — this is
+explicitly NOT the health/uptime monitoring planned for CheckMK in Phase 4;
+it's a separate, simpler concern (SQLite + Chart.js, no CheckMK dependency).
 
 ## Architecture (agreed, do not relitigate casually)
 
@@ -35,27 +41,47 @@ media) — NexVUE mirrors that architecture, self-hosted.
 
 ## Phase status
 
-- **Phase 1 (this repo): complete, NOT yet hardware-tested.** Exit criteria:
-  measured <=~200ms via burnt-in clock method, 72h zero-restart soak.
+- **Phase 1: hardware-validated on real DeckLink Duo 2 + Core Ultra 5 235,
+  latency measurement still pending.** Confirmed working end-to-end: SDK 16
+  compile, active input detection (decklink-status), Quick Sync H.264 encode
+  on Arrow Lake, full SDI -> encode -> MediaMTX -> WHEP -> browser chain with
+  real video on device-number 2. TLS enabled across all four ports (WHEP,
+  API, status, metrics) to satisfy an IT-mandated HTTPS-only Apache front end.
+  Usage-metrics dashboard (bandwidth/viewers/streams/input-lock history,
+  `nexvue-metrics`) landed ahead of schedule — separate from and not a
+  substitute for the Phase 4 CheckMK health-monitoring plan below.
+  Remaining before Phase 1 is formally "done": burnt-in-clock latency
+  measurement, flip the two Duo 2 connectors still set to Output back to
+  Input (see README "DeckLink Duo 2 connector direction"), 72h soak.
 - **Phase 1.5 (next): Python supervisor** — persistent RTSP session with
   DeckLink/slate input switching ("NO SIGNAL" burn-in) so no-signal-at-boot
   serves a slate instead of a restart loop. Spec review before code.
 - **Phase 2: PHP portal** — channel catalog, local bcrypt + JWT issuance,
   MediaMTX JWKS auth. Open decision: publisher auth pattern (long-lived
   publish JWT vs authMethod:http with loopback exemption) — see mediamtx.yml.
-- **Phase 3: DMZ** — TLS :443, webrtcAdditionalHosts, bind MediaMTX API and
-  status daemon back to loopback (portal relays stats), Entra OIDC, CORS.
+  Real (non-self-signed) TLS cert for 8889/9997/9998 belongs here too, to
+  drop the per-browser self-signed click-through noted in the TLS section.
+- **Phase 3: DMZ** — webrtcAdditionalHosts, bind MediaMTX API and status
+  daemon back to loopback (portal relays stats), Entra OIDC, CORS. (TLS
+  itself landed early, in Phase 1, ahead of schedule — see README TLS section.)
 - **Phase 4: fleet** — config mgmt, CheckMK checks (status daemon JSON +
   MediaMTX /v3/paths/list), portal ops dashboard via outbound heartbeats.
 
 ## Known open items / risks
 
-- `decklink-status.cpp` compiles against the DeckLink SDK, which was not
-  available at authoring time — expect possible minor enum/API fixes on
-  first `make` against a given SDK version.
-- `vah264enc` property names verified for GStreamer 1.24; VA plugins have
-  shifted between releases — `gst-inspect-1.0 vah264enc` is the source of
-  truth if properties are rejected.
+- Two of four Duo 2 connectors are still configured as Output, not Input —
+  card config task, not code. See README "DeckLink Duo 2 connector direction".
+- Self-signed TLS cert (Apache's `ssl-cert-snakeoil` or similar) on
+  8889/9997/9998 requires a one-time per-browser click-through — fine for
+  bench testing, plan a real cert before this reaches other users.
+- `decklink-status.cpp`'s active-detection probe takes ~0.7s per IDLE input
+  it has to open and test; status daemon poll interval was raised to 5s
+  (from 2s) to accommodate. Inputs held by a running encoder use the fast
+  status-flag fallback instead, so production (encoders running) stays quick.
+- `vah264enc` property names confirmed working on this deployment's
+  GStreamer/driver combo (Arrow Lake, Ubuntu 24.04 HWE) — `gst-inspect-1.0
+  vah264enc` is still the source of truth if a different box rejects a
+  property.
 - MediaMTX API (:9997) and status daemon (:9998) are LAN-trust in Phase 1
   config; MUST be loopback-bound before DMZ exposure (Phase 3).
 - Auto-switch thresholds in test-player.html are conservative first guesses;

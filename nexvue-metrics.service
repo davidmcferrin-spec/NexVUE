@@ -1,0 +1,51 @@
+# /etc/systemd/system/nexvue-metrics.service
+#
+# NexVUE usage/analytics metrics collector + dashboard — bandwidth, viewer
+# counts, active streams, input lock/format history. NOT health/uptime
+# monitoring (that's CheckMK's job per the project roadmap). Polls the
+# MediaMTX API and nexvue-status daemon every N seconds, stores time-series
+# in SQLite, serves a Chart.js dashboard on :9999.
+
+[Unit]
+Description=NexVUE usage metrics collector and dashboard
+After=network-online.target mediamtx.service nexvue-status.service
+Wants=mediamtx.service nexvue-status.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=nexvue
+Group=nexvue
+
+# Poll targets — defaults assume TLS is enabled on both (see README's TLS
+# section). Set to http:// instead if either service is still plain HTTP.
+#Environment=NEXVUE_MEDIAMTX_API_URL=https://127.0.0.1:9997
+#Environment=NEXVUE_STATUS_URL=https://127.0.0.1:9998
+
+# Collection tuning.
+#Environment=NEXVUE_METRICS_POLL_INTERVAL_S=15
+#Environment=NEXVUE_METRICS_RETENTION_DAYS=30
+
+# TLS for THIS service's own :9999 API/dashboard (optional) — same cert as
+# the other two services, set both or neither.
+#Environment=NEXVUE_METRICS_TLS_CERT=/etc/nexvue/tls/fullchain.pem
+#Environment=NEXVUE_METRICS_TLS_KEY=/etc/nexvue/tls/privkey.pem
+
+# StateDirectory creates /var/lib/nexvue (owned by User/Group above) and
+# implicitly permits read-write there under ProtectSystem=strict below — the
+# SQLite database lives at /var/lib/nexvue/metrics.db by default.
+StateDirectory=nexvue
+Environment=NEXVUE_METRICS_DB=/var/lib/nexvue/metrics.db
+
+ExecStart=/usr/bin/python3 /usr/local/bin/nexvue-metrics-server.py
+
+Restart=always
+RestartSec=2
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

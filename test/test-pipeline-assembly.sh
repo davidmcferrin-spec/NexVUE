@@ -29,6 +29,7 @@ grep -q "rtsp://127.0.0.1:8554/ch0" <<<"$out" || fail "T1 default RTSP url"
 grep -q "watchdog" <<<"$out" || fail "T1 watchdog present"
 grep -q "width=1920,height=1080,framerate=60000/1001" <<<"$out" || fail "T1 normalization caps"
 grep -q "opusenc" <<<"$out" || fail "T1 audio present by default"
+grep -q "audiorate" <<<"$out" || fail "T1 audiorate present (gapless timestamp fix)"
 grep -q "tee" <<<"$out" && fail "T1 no tee when LO disabled"
 
 # T2: LO rendition adds tee, second sink, lo caps, audio tee
@@ -85,5 +86,16 @@ DEVICE_NUMBER=8 CHANNEL_PATH=ch8 expect_usage_64 "T11 accepted device 8 at defau
 
 # T12: non-numeric DEVICE_NUMBER rejected
 DEVICE_NUMBER=x CHANNEL_PATH=ch0 expect_usage_64 "T12 accepted non-numeric device"
+
+
+# T13: audioresample quality is wired in and defaults high (9)
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 ./nexvue-encode.sh)
+grep -q "audioresample quality=9" <<<"$out" || fail "T13 default resample quality should be 9"
+
+# T14: AUDIO_RESAMPLE_QUALITY is configurable and validated
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_RESAMPLE_QUALITY=3 ./nexvue-encode.sh)
+grep -q "audioresample quality=3" <<<"$out" || fail "T14 custom resample quality not applied"
+DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_RESAMPLE_QUALITY=11 expect_usage_64 "T14 accepted out-of-range resample quality"
+DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_RESAMPLE_QUALITY=bogus expect_usage_64 "T14 accepted non-numeric resample quality"
 
 echo "All pipeline assembly tests passed."

@@ -1,34 +1,39 @@
 // decklink-status.cpp — dump SDI input & reference status for all DeckLink
 // sub-devices as JSON on stdout.
 //
-// Queries the IDeckLinkStatus interface, which is safe to use while another
-// process (the GStreamer encoder) holds the capture interface.
+// The DeckLink Status API only reports input signal lock on a sub-device that
+// has an active input stream. An idle connector always reads "unlocked" even
+// with signal present. So for each sub-device this tool:
 //
-// Output shape:
-// {
-//   "devices": [
-//     { "index": 0, "name": "DeckLink Quad 2 (1)",
-//       "input_locked": true, "input_mode": "1080i59.94",
-//       "reference_locked": true, "reference_mode": "1080i59.94" },
-//     ...
-//   ]
-// }
+//   1. If we can open its input, enable video input WITH format detection,
+//      start streams, and wait briefly for a detected format / lock. This is
+//      what makes an idle-but-cabled input report correctly.
+//   2. If the input is busy (a running encoder holds it), we cannot open it a
+//      second time — but a running encoder means the input IS active, so we
+//      fall back to reading IDeckLinkStatus, which is valid in that case.
 //
-// Build (requires the Blackmagic DeckLink SDK, free download):
-//   make DECKLINK_SDK=/path/to/SDK   (see Makefile)
+// Output shape (per device):
+//   { "index":0, "name":"DeckLink Duo (1)", "input_locked":true,
+//     "input_mode":"1080i59.94", "reference_locked":false,
+//     "reference_mode":"unknown", "busy":false }
 //
-// Device index order matches GStreamer's decklinkvideosrc device-number —
-// both walk the same IDeckLinkIterator enumeration order.
+// Build: see Makefile (requires the Blackmagic DeckLink SDK).
+// Device index order matches GStreamer decklinkvideosrc device-number.
 
 #include "DeckLinkAPI.h"
-#include <cstdio>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
-#include <vector>
+#include <thread>
 
-// Map common BMDDisplayMode values to broadcast-friendly names; anything
-// unmapped falls back to the raw fourcc so new formats still report usefully.
+// Milliseconds to wait for format detection on an idle input before giving up.
+static const int DETECT_TIMEOUT_MS = 700;
+
 static std::string modeName(int64_t mode)
 {
     switch ((BMDDisplayMode)mode) {
@@ -72,6 +77,142 @@ static std::string jsonEscape(const char* s)
     return out;
 }
 
+// Input callback: fires when the card detects (or changes) the input video
+// format. Receiving this with a valid mode is our positive signal-present
+// result for an idle input we opened.
+class DetectCallback : public IDeckLinkInputCallback {
+public:
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::atomic<bool> detected{false};
+    int64_t detectedMode{0};
+
+    HRESULT STDMETHODCALLTYPE VideoInputFormatChanged(
+        BMDVideoInputFormatChangedEvents /*events*/,
+        IDeckLinkDisplayMode* newMode,
+        BMDDetectedVideoInputFormatFlags /*flags*/) override
+    {
+        if (newMode) {
+            {
+                std::lock_guard<std::mutex> lk(mtx);
+                detectedMode = (int64_t)newMode->GetDisplayMode();
+                detected = true;
+            }
+            cv.notify_all();
+        }
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE VideoInputFrameArrived(
+        IDeckLinkVideoInputFrame* frame,
+        IDeckLinkAudioInputPacket* /*audio*/) override
+    {
+        // A frame WITHOUT the NoInputSource flag also confirms lock — covers
+        // sources whose format equals the enable default (no "changed" event).
+        if (frame) {
+            BMDFrameFlags ff = frame->GetFlags();
+            if (!(ff & bmdFrameHasNoInputSource)) {
+                {
+                    std::lock_guard<std::mutex> lk(mtx);
+                    if (detectedMode == 0) detectedMode = 0; // mode via status
+                    detected = true;
+                }
+                cv.notify_all();
+            }
+        }
+        return S_OK;
+    }
+
+    // IUnknown — this is a stack object; no real refcounting needed.
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) override { return E_NOINTERFACE; }
+    ULONG   STDMETHODCALLTYPE AddRef()  override { return 1; }
+    ULONG   STDMETHODCALLTYPE Release() override { return 1; }
+};
+
+// Probe one sub-device by actively enabling input with format detection.
+// Returns true if it opened the input (whether or not signal was found);
+// sets busy=true if the input could not be opened (in use by an encoder).
+static bool probeActive(IDeckLink* deckLink, bool& locked, int64_t& mode, bool& busy)
+{
+    locked = false; mode = 0; busy = false;
+
+    IDeckLinkInput* input = nullptr;
+    if (deckLink->QueryInterface(IID_IDeckLinkInput, (void**)&input) != S_OK || !input)
+        return false;
+
+    DetectCallback cb;
+    input->SetCallback(&cb);
+
+    // Enable a common mode with format detection on; the card will report the
+    // real incoming format via the callback regardless of this initial mode.
+    HRESULT hr = input->EnableVideoInput(
+        bmdModeHD1080i5994, bmdFormat8BitYUV, bmdVideoInputEnableFormatDetection);
+    if (hr != S_OK) {
+        // Most likely E_ACCESSDENIED / device in use by the encoder.
+        busy = true;
+        input->SetCallback(nullptr);
+        input->Release();
+        return false;
+    }
+
+    if (input->StartStreams() == S_OK) {
+        std::unique_lock<std::mutex> lk(cb.mtx);
+        cb.cv.wait_for(lk, std::chrono::milliseconds(DETECT_TIMEOUT_MS),
+                       [&]{ return cb.detected.load(); });
+        locked = cb.detected.load();
+        mode = cb.detectedMode;
+        lk.unlock();
+        input->StopStreams();
+    }
+
+    // If a frame confirmed lock but no explicit mode came through, read the
+    // detected mode from status while the input is still enabled.
+    if (locked && mode == 0) {
+        IDeckLinkStatus* st = nullptr;
+        if (deckLink->QueryInterface(IID_IDeckLinkStatus, (void**)&st) == S_OK) {
+            int64_t v = 0;
+            if (st->GetInt(bmdDeckLinkStatusDetectedVideoInputMode, &v) == S_OK)
+                mode = v;
+            st->Release();
+        }
+    }
+
+    input->DisableVideoInput();
+    input->SetCallback(nullptr);
+    input->Release();
+    return true;
+}
+
+// Fallback for a busy device: read the status flag (valid because a running
+// encoder means the input is active).
+static void probeStatusFlag(IDeckLink* deckLink, bool& locked, int64_t& mode)
+{
+    locked = false; mode = 0;
+    IDeckLinkStatus* status = nullptr;
+    if (deckLink->QueryInterface(IID_IDeckLinkStatus, (void**)&status) == S_OK) {
+        bool b = false; int64_t v = 0;
+        if (status->GetFlag(bmdDeckLinkStatusVideoInputSignalLocked, &b) == S_OK)
+            locked = b;
+        if (status->GetInt(bmdDeckLinkStatusDetectedVideoInputMode, &v) == S_OK)
+            mode = v;
+        status->Release();
+    }
+}
+
+static void readReference(IDeckLink* deckLink, bool& refLocked, int64_t& refMode)
+{
+    refLocked = false; refMode = 0;
+    IDeckLinkStatus* status = nullptr;
+    if (deckLink->QueryInterface(IID_IDeckLinkStatus, (void**)&status) == S_OK) {
+        bool b = false; int64_t v = 0;
+        if (status->GetFlag(bmdDeckLinkStatusReferenceSignalLocked, &b) == S_OK)
+            refLocked = b;
+        if (status->GetInt(bmdDeckLinkStatusReferenceSignalMode, &v) == S_OK)
+            refMode = v;
+        status->Release();
+    }
+}
+
 int main()
 {
     IDeckLinkIterator* iterator = CreateDeckLinkIteratorInstance();
@@ -95,34 +236,31 @@ int main()
             free((void*)name);
         }
 
-        bool    inputLocked = false, refLocked = false;
-        int64_t inputMode = 0, refMode = 0;
+        bool inputLocked = false, busy = false;
+        int64_t inputMode = 0;
 
-        IDeckLinkStatus* status = nullptr;
-        if (deckLink->QueryInterface(IID_IDeckLinkStatus, (void**)&status) == S_OK) {
-            bool    b = false;
-            int64_t v = 0;
-            if (status->GetFlag(bmdDeckLinkStatusVideoInputSignalLocked, &b) == S_OK)
-                inputLocked = b;
-            if (status->GetInt(bmdDeckLinkStatusDetectedVideoInputMode, &v) == S_OK)
-                inputMode = v;
-            if (status->GetFlag(bmdDeckLinkStatusReferenceSignalLocked, &b) == S_OK)
-                refLocked = b;
-            if (status->GetInt(bmdDeckLinkStatusReferenceSignalMode, &v) == S_OK)
-                refMode = v;
-            status->Release();
+        if (!probeActive(deckLink, inputLocked, inputMode, busy)) {
+            if (busy) {
+                // In use by an encoder → status flag is authoritative here.
+                probeStatusFlag(deckLink, inputLocked, inputMode);
+            }
         }
+
+        bool refLocked = false; int64_t refMode = 0;
+        readReference(deckLink, refLocked, refMode);
 
         printf("%s{\"index\":%d,\"name\":\"%s\","
                "\"input_locked\":%s,\"input_mode\":\"%s\","
-               "\"reference_locked\":%s,\"reference_mode\":\"%s\"}",
+               "\"reference_locked\":%s,\"reference_mode\":\"%s\","
+               "\"busy\":%s}",
                first ? "" : ",",
                index,
                jsonEscape(displayName.c_str()).c_str(),
                inputLocked ? "true" : "false",
                modeName(inputLocked ? inputMode : 0).c_str(),
                refLocked ? "true" : "false",
-               modeName(refLocked ? refMode : 0).c_str());
+               modeName(refLocked ? refMode : 0).c_str(),
+               busy ? "true" : "false");
 
         first = false;
         index++;

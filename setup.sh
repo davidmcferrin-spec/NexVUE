@@ -50,6 +50,7 @@ REQUIRED_FILES=(
   mediamtx.yml mediamtx.service
   nexvue-encode.sh nexvue-encode@.service
   nexvue-status-server.py nexvue-status.service
+  nexvue-metrics-server.py nexvue-metrics-dashboard.html nexvue-metrics.service
   channels-example.env
 )
 if ! $CHECK_ONLY; then
@@ -113,9 +114,12 @@ else
 fi
 install -m 755 "${REPO_DIR}/nexvue-encode.sh" /usr/local/bin/nexvue-encode.sh
 install -m 755 "${REPO_DIR}/nexvue-status-server.py" /usr/local/bin/nexvue-status-server.py
+install -m 755 "${REPO_DIR}/nexvue-metrics-server.py" /usr/local/bin/nexvue-metrics-server.py
+install -m 644 "${REPO_DIR}/nexvue-metrics-dashboard.html" /usr/local/bin/nexvue-metrics-dashboard.html
 install -m 644 "${REPO_DIR}/mediamtx.service" \
                "${REPO_DIR}/nexvue-encode@.service" \
-               "${REPO_DIR}/nexvue-status.service" /etc/systemd/system/
+               "${REPO_DIR}/nexvue-status.service" \
+               "${REPO_DIR}/nexvue-metrics.service" /etc/systemd/system/
 systemctl daemon-reload
 ok "scripts + units installed, systemd reloaded"
 
@@ -166,7 +170,7 @@ done
 
 # MediaMTX + units
 [ -x /usr/local/bin/mediamtx ] && ok "mediamtx binary present" || warn "mediamtx binary missing"
-for u in mediamtx.service nexvue-encode@.service nexvue-status.service; do
+for u in mediamtx.service nexvue-encode@.service nexvue-status.service nexvue-metrics.service; do
   [ -f "/etc/systemd/system/$u" ] && ok "unit installed: $u" || warn "unit missing: $u"
 done
 
@@ -189,6 +193,11 @@ if $APPLY_FIREWALL; then
     ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)' >/dev/null
     ufw allow 9997/tcp comment 'NexVUE MediaMTX API' >/dev/null
     ufw allow 9998/tcp comment 'NexVUE status daemon' >/dev/null
+    # 9999 (metrics) is NOT opened here — it binds loopback-only by default
+    # and is meant to be reached via an Apache proxy on 443 instead. See
+    # README "Usage Metrics Dashboard" for that setup, or for the
+    # NEXVUE_METRICS_BIND=0.0.0.0 direct-access alternative if you'd rather
+    # open this port too.
     ok "NexVUE ports opened (80,8889,8189/udp+tcp,9997,9998)"
     if ! ufw status | grep -q "Status: active"; then
       warn "ufw is NOT active — rules staged but not enforced. Ensure 22/ssh is allowed, then: sudo ufw enable"
@@ -217,7 +226,7 @@ Next steps:
        sudo cp channels-example.env /etc/nexvue/channels/0.env
        sudo nano /etc/nexvue/channels/0.env
   4. Start services:
-       sudo systemctl enable --now mediamtx nexvue-status nexvue-encode@0
+       sudo systemctl enable --now mediamtx nexvue-status nexvue-metrics nexvue-encode@0
   5. Firewall (if ufw is in use): open ports with
        sudo ./setup.sh --firewall     (then: sudo ufw enable, once 22/ssh is allowed)
      or apply the rules manually — see the Firewall section in README.md

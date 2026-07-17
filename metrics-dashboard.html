@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NexVUE — Usage Metrics</title>
+<!--
+  Usage/analytics dashboard — bandwidth, viewer counts, active streams, and
+  input lock/format history over time. This is NOT health/uptime monitoring
+  (see CheckMK for that, per the project roadmap) — it answers "how much
+  bandwidth did we serve last week," not "is the service up right now."
+  Served by nexvue-metrics-server.py at its own root path.
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
+    --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--acc); }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+  button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 7px 12px; font: inherit; cursor: pointer;
+  }
+  button.active { background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600; }
+  #state { color: var(--dim); margin-left: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 12px; }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--dim); margin: 0 0 8px; font-weight: 600;
+  }
+  canvas { max-height: 260px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--edge); }
+  th { color: var(--dim); text-transform: uppercase; font-size: 11px; letter-spacing: .04em;
+       cursor: pointer; user-select: none; }
+  th:hover { color: var(--text); }
+  td.ip { font-family: inherit; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .dot.live { background: var(--ok); }
+  .dot.ended { background: var(--dim); }
+  td.ua { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+</style>
+</head>
+<body>
+<h1>NexVUE — Usage Metrics</h1>
+
+<div class="bar">
+  <span style="color:var(--dim)">range:</span>
+  <button class="range" data-hours="1">1h</button>
+  <button class="range" data-hours="6">6h</button>
+  <button class="range active" data-hours="24">24h</button>
+  <button class="range" data-hours="168">7d</button>
+  <button class="range" data-hours="720">30d</button>
+  <span id="state">loading…</span>
+</div>
+
+<div class="grid">
+  <div class="panel"><h2>Total bandwidth</h2><canvas id="c-bw"></canvas></div>
+  <div class="panel"><h2>Viewers connected</h2><canvas id="c-viewers"></canvas></div>
+  <div class="panel"><h2>Active streams</h2><canvas id="c-streams"></canvas></div>
+  <div class="panel"><h2>Input lock status</h2><canvas id="c-inputs"></canvas></div>
+</div>
+
+<div class="panel" style="margin-top:16px">
+  <h2>Viewer sessions — drill down by IP / channel</h2>
+  <table id="viewer-table">
+    <thead>
+      <tr>
+        <th>Status</th><th>IP address</th><th>Channel</th>
+        <th>First seen</th><th>Last seen</th><th>Duration</th>
+        <th>Data served</th><th>Client</th>
+      </tr>
+    </thead>
+    <tbody id="viewer-tbody"></tbody>
+  </table>
+  <div id="viewer-empty" style="display:none; color:var(--dim); padding:12px 0;">
+    No viewer sessions in this time range.
+  </div>
+</div>
+
+<script>
+"use strict";
+(() => {
+  const stateEl = document.getElementById("state");
+  let hours = 24;
+  const charts = {};
+
+  const palette = ["#56c4f5", "#4cc38a", "#e5484d", "#f5a623", "#b56cf5", "#f56ca0", "#6ce0f5", "#c3e54c"];
+
+  function fmtTime(ms) {
+    const d = new Date(ms);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    return sameDay
+      ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
+        d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function xScaleConfig() {
+    return {
+      type: "linear",
+      ticks: { color: "#7d8a99", callback: v => fmtTime(v), maxRotation: 0, autoSkip: true },
+      grid: { color: "#2c3542" }
+    };
+  }
+
+  function defaultYScale(label) {
+    return {
+      title: { display: true, text: label, color: "#7d8a99" },
+      ticks: { color: "#7d8a99" },
+      grid: { color: "#2c3542" },
+      beginAtZero: true
+    };
+  }
+
+  // Shared tooltip label formatter — if a data point carries a `.mode`
+  // field (input-lock charts), show it alongside locked/unlocked; otherwise
+  // fall back to Chart.js's normal formatted value.
+  function tooltipLabel(item) {
+    const pt = item.raw;
+    if (pt && pt.mode !== undefined) {
+      const state = pt.y === 1 ? "locked" : "unlocked";
+      return `${item.dataset.label}: ${state}${pt.mode ? " (" + pt.mode + ")" : ""}`;
+    }
+    return `${item.dataset.label}: ${item.formattedValue}`;
+  }
+
+  function chartOptions(yScaleConfig) {
+    return {
+      responsive: true,
+      animation: false,
+      interaction: { mode: "nearest", intersect: false },
+      scales: { x: xScaleConfig(), y: yScaleConfig },
+      plugins: {
+        legend: { labels: { color: "#d6dde6", boxWidth: 12, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            title: items => items.length ? fmtTime(items[0].parsed.x) : "",
+            label: tooltipLabel
+          }
+        }
+      }
+    };
+  }
+
+  function makeChart(canvasId, datasets, yScaleConfig) {
+    const ctx = document.getElementById(canvasId).getContext("2d");
+    if (charts[canvasId]) charts[canvasId].destroy();
+    charts[canvasId] = new Chart(ctx, {
+      type: "line",
+      data: { datasets },
+      options: chartOptions(yScaleConfig)
+    });
+  }
+
+  async function load() {
+    stateEl.textContent = "loading…";
+    try {
+      // Relative paths (no leading slash) — resolve correctly whether this
+      // page is loaded directly (http://host:9999/) or via an Apache
+      // reverse-proxy at any path prefix (e.g. https://host/metrics/),
+      // which is the recommended setup when port 9999 can't be opened
+      // through the firewall directly. See README "Usage Metrics Dashboard".
+      const [historyRes, viewersRes] = await Promise.all([
+        fetch(`api/history?hours=${hours}`),
+        fetch(`api/viewers?hours=${hours}`)
+      ]);
+      if (!historyRes.ok) throw new Error(`history HTTP ${historyRes.status}`);
+      if (!viewersRes.ok) throw new Error(`viewers HTTP ${viewersRes.status}`);
+      render(await historyRes.json());
+      renderViewers((await viewersRes.json()).sessions);
+      stateEl.textContent = `updated ${new Date().toLocaleTimeString()}`;
+    } catch (err) {
+      stateEl.textContent = `error: ${err.message}`;
+    }
+  }
+
+  let viewerSort = { col: "last_seen", dir: -1 };
+  let lastViewerRows = [];
+
+  function renderViewers(sessions) {
+    lastViewerRows = sessions || [];
+    drawViewerTable();
+  }
+
+  function drawViewerTable() {
+    const tbody = document.getElementById("viewer-tbody");
+    const empty = document.getElementById("viewer-empty");
+    const rows = [...lastViewerRows].sort((a, b) => {
+      const av = a[viewerSort.col], bv = b[viewerSort.col];
+      return av < bv ? -viewerSort.dir : av > bv ? viewerSort.dir : 0;
+    });
+
+    if (rows.length === 0) {
+      tbody.innerHTML = "";
+      empty.style.display = "block";
+      return;
+    }
+    empty.style.display = "none";
+
+    tbody.innerHTML = rows.map(r => {
+      const ip = (r.remote_addr || "").split(":")[0];  // strip :port for readability
+      const dur = r.duration_s >= 3600
+        ? `${(r.duration_s / 3600).toFixed(1)}h`
+        : r.duration_s >= 60 ? `${Math.round(r.duration_s / 60)}m` : `${Math.round(r.duration_s)}s`;
+      const mb = ((r.bytes_sent || 0) / 1e6).toFixed(1);
+      const dotClass = r.active ? "live" : "ended";
+      const statusText = r.active ? "live" : "ended";
+      return `<tr>
+        <td><span class="dot ${dotClass}"></span>${statusText}</td>
+        <td class="ip">${ip}</td>
+        <td>${r.channel}</td>
+        <td>${fmtTime(r.first_seen * 1000)}</td>
+        <td>${fmtTime(r.last_seen * 1000)}</td>
+        <td>${dur}</td>
+        <td>${mb} MB</td>
+        <td class="ua" title="${(r.user_agent || "").replace(/"/g, '&quot;')}">${r.user_agent || ""}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  document.querySelectorAll("#viewer-table th").forEach((th, i) => {
+    const cols = ["active", "remote_addr", "channel", "first_seen", "last_seen", "duration_s", "bytes_sent", "user_agent"];
+    th.addEventListener("click", () => {
+      const col = cols[i];
+      viewerSort = viewerSort.col === col ? { col, dir: -viewerSort.dir } : { col, dir: 1 };
+      drawViewerTable();
+    });
+  });
+
+  function render(data) {
+    // --- Total bandwidth (Mbps) ---
+    makeChart("c-bw", [{
+      label: "Total (Mbps)",
+      data: data.totals.map(t => ({ x: t.ts * 1000, y: (t.total_bandwidth_bps || 0) / 1e6 })),
+      borderColor: palette[0], backgroundColor: "transparent", borderWidth: 2,
+      pointRadius: 0, tension: 0.15
+    }], defaultYScale("Mbps"));
+
+    // --- Viewers connected (total, across all channels) ---
+    makeChart("c-viewers", [{
+      label: "Viewers",
+      data: data.totals.map(t => ({ x: t.ts * 1000, y: t.total_readers || 0 })),
+      borderColor: palette[1], backgroundColor: "transparent", borderWidth: 2,
+      pointRadius: 0, stepped: true
+    }], defaultYScale("count"));
+
+    // --- Active streams (channels currently publishing) ---
+    makeChart("c-streams", [{
+      label: "Active streams",
+      data: data.totals.map(t => ({ x: t.ts * 1000, y: t.active_streams || 0 })),
+      borderColor: palette[2], backgroundColor: "transparent", borderWidth: 2,
+      pointRadius: 0, stepped: true
+    }], defaultYScale("count"));
+
+    // --- Input lock status: one stepped 0/1 line per DeckLink input ---
+    const byDevice = {};
+    for (const s of data.input_status) {
+      (byDevice[s.device_index] ||= []).push({ x: s.ts * 1000, y: s.input_locked, mode: s.input_mode });
+    }
+    const deviceKeys = Object.keys(byDevice).sort((a, b) => a - b);
+    const inputDatasets = deviceKeys.map((idx, i) => ({
+      label: `Input ${idx}`,
+      data: byDevice[idx],
+      borderColor: palette[i % palette.length],
+      backgroundColor: "transparent", borderWidth: 2,
+      pointRadius: 0, stepped: true
+    }));
+    makeChart("c-inputs", inputDatasets, {
+      min: -0.1, max: 1.1,
+      ticks: {
+        color: "#7d8a99", stepSize: 1,
+        callback: v => (v === 1 ? "locked" : v === 0 ? "unlocked" : "")
+      },
+      grid: { color: "#2c3542" }
+    });
+  }
+
+  document.querySelectorAll("button.range").forEach(b => {
+    b.addEventListener("click", () => {
+      document.querySelectorAll("button.range").forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
+      hours = parseFloat(b.dataset.hours);
+      load();
+    });
+  });
+
+  load();
+  setInterval(load, 30000);
+})();
+</script>
+</body>
+</html>

@@ -30,19 +30,43 @@ log() { echo "[nexvue-encode] $*"; }
 : "${DEVICE_NUMBER:?DEVICE_NUMBER is required (DeckLink connector index, 0-based)}"
 : "${CHANNEL_PATH:?CHANNEL_PATH is required (MediaMTX path, e.g. ch0)}"
 
+# systemd's EnvironmentFile= (unlike a shell) does NOT strip inline "# comments",
+# so a channel env line like "MAX_DEVICES=4   # count" would otherwise pass the
+# comment through as part of the value. Defensively strip a trailing
+# whitespace+comment and surrounding whitespace from the values we consume, so
+# a hand-edited env file with a stray inline comment degrades gracefully
+# instead of erroring cryptically in an arithmetic test.
+strip_inline() {  # echo the value with any trailing " # comment" and edge spaces removed
+  local v="$1"
+  v="${v%%#*}"                        # drop from first # to end
+  v="${v#"${v%%[![:space:]]*}"}"      # ltrim
+  v="${v%"${v##*[![:space:]]}"}"      # rtrim
+  printf '%s' "$v"
+}
+DEVICE_NUMBER="$(strip_inline "${DEVICE_NUMBER}")"
+CHANNEL_PATH="$(strip_inline "${CHANNEL_PATH}")"
+
 # ---- Optional environment (defaults tuned for 1080i59.94 sources) ------------
 # Channel count of the installed card, for input validation:
 #   Duo 2 / Duo 2 Mini = 4, Quad 2 = 8, original Duo = 2.
 # Default 8 keeps existing Quad 2 configs unchanged.
-MAX_DEVICES="${MAX_DEVICES:-8}"
-DEINT_FIELDS="${DEINT_FIELDS:-all}"         # all=59.94p out, top=29.97p out
-BITRATE_KBPS="${BITRATE_KBPS:-5000}"        # HI rendition video CBR, kbps
-GOP_FRAMES="${GOP_FRAMES:-60}"              # affects viewer JOIN time only
-ENABLE_AUDIO="${ENABLE_AUDIO:-true}"        # false: no A/V-sync buffer in browser
-AUDIO_BITRATE_BPS="${AUDIO_BITRATE_BPS:-128000}"
-AUDIO_CHANNELS="${AUDIO_CHANNELS:-2}"
-AUDIO_FRAME_MS="${AUDIO_FRAME_MS:-10}"
-DECKLINK_BUFFER_FRAMES="${DECKLINK_BUFFER_FRAMES:-2}"
+MAX_DEVICES="$(strip_inline "${MAX_DEVICES:-8}")"
+DEINT_FIELDS="$(strip_inline "${DEINT_FIELDS:-all}")"
+BITRATE_KBPS="$(strip_inline "${BITRATE_KBPS:-5000}")"
+GOP_FRAMES="$(strip_inline "${GOP_FRAMES:-60}")"
+ENABLE_AUDIO="$(strip_inline "${ENABLE_AUDIO:-true}")"
+AUDIO_BITRATE_BPS="$(strip_inline "${AUDIO_BITRATE_BPS:-128000}")"
+AUDIO_CHANNELS="$(strip_inline "${AUDIO_CHANNELS:-2}")"
+AUDIO_FRAME_MS="$(strip_inline "${AUDIO_FRAME_MS:-10}")"
+# audioresample quality, 0-10. GStreamer's own default is a middling 4.
+# Under CONTINUOUS small corrections (e.g. the capture clock drifting
+# against the pipeline clock over many hours — watch for recurring
+# "Dropped N old packets" warnings well after startup as the tell), a low
+# resample quality is what turns an inaudible correction into an audible
+# "watery"/phasy artifact. Bumped to 9 by default: costs negligible CPU for
+# one audio stream, standard fix for this symptom.
+AUDIO_RESAMPLE_QUALITY="$(strip_inline "${AUDIO_RESAMPLE_QUALITY:-9}")"
+DECKLINK_BUFFER_FRAMES="$(strip_inline "${DECKLINK_BUFFER_FRAMES:-2}")"
 WATCHDOG_MS="${WATCHDOG_MS:-3000}"
 OUTPUT_WIDTH="${OUTPUT_WIDTH:-1920}"        # normalized HI raster — constant
 OUTPUT_HEIGHT="${OUTPUT_HEIGHT:-1080}"      # regardless of input format
@@ -88,6 +112,9 @@ esac
 case "${AUDIO_FRAME_MS}" in 2|5|10|20|40|60) ;; *)
     log "ERROR: AUDIO_FRAME_MS must be one of 2,5,10,20,40,60"; exit 64 ;;
 esac
+if ! [[ "${AUDIO_RESAMPLE_QUALITY}" =~ ^([0-9]|10)$ ]]; then
+    log "ERROR: AUDIO_RESAMPLE_QUALITY must be an integer 0-10, got '${AUDIO_RESAMPLE_QUALITY}'"; exit 64
+fi
 command -v gst-launch-1.0 >/dev/null || { log "ERROR: gst-launch-1.0 not found"; exit 69; }
 gst-inspect-1.0 decklinkvideosrc >/dev/null 2>&1 \
     || { log "ERROR: GStreamer decklink plugin missing (install Desktop Video + gst-plugins-bad)"; exit 69; }
@@ -154,7 +181,15 @@ fi
 if [ "${ENABLE_AUDIO}" = "true" ]; then
   PIPELINE+=" decklinkaudiosrc device-number=${DEVICE_NUMBER} channels=${AUDIO_CHANNELS}"
   PIPELINE+=" ! queue max-size-buffers=16 leaky=downstream"
-  PIPELINE+=" ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2"
+  # audiorate enforces a gapless, constant-rate timeline: it inserts silence
+  # for any gap (e.g. from the queue above leaking under momentary pressure)
+  # instead of letting a timestamp discontinuity pass through. Without this,
+  # a dropped chunk shows up downstream as a burst of "catch-up" playback —
+  # the browser's jitter buffer has no pacing information to know the gap was
+  # supposed to take real time, so it just drains the backlog as fast as it
+  # arrives. This is the standard GStreamer fix for that symptom.
+  PIPELINE+=" ! audiorate"
+  PIPELINE+=" ! audioconvert ! audioresample quality=${AUDIO_RESAMPLE_QUALITY} ! audio/x-raw,rate=48000,channels=2"
   PIPELINE+=" ! opusenc bitrate=${AUDIO_BITRATE_BPS} frame-size=${AUDIO_FRAME_MS}"
   if [ "${LO_ENABLE}" = "true" ]; then
     PIPELINE+=" ! tee name=at"

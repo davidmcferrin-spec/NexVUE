@@ -11,6 +11,29 @@ StartLimitIntervalSec=0
 [Service]
 Type=exec
 User=nexvue
+
+# Watchdog: the daemon pings systemd once per poll-loop iteration (every
+# POLL_INTERVAL_S, ~5s). If that ping is ever missed for WatchdogSec, systemd
+# restarts the unit — this is the safety net for "the process is alive but
+# a thread inside it silently stopped making progress," which a plain
+# Restart=always (below) cannot detect since the PROCESS never actually
+# exits in that failure mode. Set generously above the poll interval so
+# transient slow polls (helper probing several idle inputs) don't trip it.
+WatchdogSec=30
+
+# Bump for troubleshooting: DEBUG logs every poll cycle and every request
+# (client IP, path, status, duration). INFO (default) keeps periodic
+# 5-minute health summaries plus warnings/errors only.
+#Environment=NEXVUE_STATUS_LOG_LEVEL=DEBUG
+
+# TLS (optional) — set both to enable HTTPS, e.g. once Apache is TLS-only and
+# browsers block the player from fetching plain HTTP (mixed content). Reuse
+# Apache's cert/key. The nexvue user must be able to READ the key file — a
+# typical Apache-owned privkey.pem is root:root 600, so either loosen its
+# group/perms for the nexvue group or copy the pair to /etc/nexvue/tls/ with
+# appropriate ownership. Leave both unset for plain HTTP (Phase 1 default).
+#Environment=NEXVUE_STATUS_TLS_CERT=/etc/nexvue/tls/fullchain.pem
+#Environment=NEXVUE_STATUS_TLS_KEY=/etc/nexvue/tls/privkey.pem
 Group=nexvue
 SupplementaryGroups=video
 ExecStart=/usr/bin/python3 /usr/local/bin/nexvue-status-server.py

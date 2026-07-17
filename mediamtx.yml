@@ -22,6 +22,14 @@ logDestinations: [stdout]          # journald captures stdout via systemd
 api: yes
 apiAddress: :9997
 apiAllowOrigin: '*'
+# The API has its OWN encryption setting, separate from webrtcEncryption
+# above — enabling one does not enable the other. Once Apache/the player page
+# is HTTPS, this must be enabled too or the browser blocks it (mixed content
+# if the page went HTTPS-only, or ERR_SSL_PROTOCOL_ERROR if the browser is
+# probing HTTPS here directly). Same cert/key as the WHEP listener.
+apiEncryption: yes
+apiServerKey: /etc/nexvue/tls/privkey.pem
+apiServerCert: /etc/nexvue/tls/fullchain.pem
 
 # --- Disable everything we don't use -----------------------------------------
 hls: no
@@ -36,10 +44,10 @@ rtspAddress: 127.0.0.1:8554
 
 # --- WebRTC / WHEP egress -----------------------------------------------------
 webrtc: yes
-webrtcAddress: :8889               # Phase 3 (DMZ): move to :443 + TLS below
-webrtcEncryption: no
-# webrtcServerKey: /etc/nexvue/tls/privkey.pem
-# webrtcServerCert: /etc/nexvue/tls/fullchain.pem
+webrtcAddress: :8889
+webrtcEncryption: yes
+webrtcServerKey: /etc/nexvue/tls/privkey.pem
+webrtcServerCert: /etc/nexvue/tls/fullchain.pem
 
 # Single UDP port for ALL WebRTC media sessions -> one firewall rule in the DMZ
 webrtcLocalUDPAddress: :8189
@@ -49,8 +57,15 @@ webrtcLocalTCPAddress: :8189
 webrtcIPsFromInterfaces: yes
 # Phase 3 (DMZ): advertise the public address in ICE candidates, otherwise
 # external viewers connect signaling but get no media. #1 NAT gotcha.
-webrtcAdditionalHosts: []
-# webrtcAdditionalHosts: [stream-hsv.example.com]
+# CRITICAL for any client NOT on this box's local subnet: without this, ICE
+# candidates only advertise the box's private/LAN address (webrtcIPsFromInterfaces
+# below), which off-LAN clients (e.g. a phone on cellular) cannot route to.
+# Signaling (TCP: WHEP POST, API, status) succeeds regardless — it's ONLY the
+# UDP media (port 8189) that silently fails, producing "connects but no video"
+# exactly like TCP-only checks (curl, browser hitting :8889/:9997/:9998) would
+# never reveal. Use the real hostname (works with a real TLS cert too, unlike
+# a bare IP) rather than the public IP where possible.
+webrtcAdditionalHosts: [nexvue-dc.area51consulting.com]
 
 # --- Authentication -----------------------------------------------------------
 # Phase 1: internal auth, open. Publishing is safe because RTSP is bound to
@@ -80,8 +95,9 @@ pathDefaults:
   source: publisher                # only accept pushed streams
 
 paths:
-  # ch0..ch7 map 1:1 to DeckLink Quad 2 connectors (device-number 0..7);
-  # ch0lo..ch7lo are the optional LO renditions (LO_ENABLE=true in the
-  # channel env). Friendly names/descriptions live in the portal catalog
-  # (Phase 2), not here — keeps edge config static across the fleet.
-  ~^ch[0-7](lo)?$:
+  # chN maps 1:1 to a DeckLink connector (device-number N); chNlo is the
+  # optional LO rendition. Regex accepts ch0..ch15(lo) to cover any card
+  # (Duo 2 = ch0-3, Quad 2 = ch0-7); unused paths simply never get published.
+  # Friendly names/descriptions live in the portal catalog (Phase 2), not
+  # here — keeps edge config static across the fleet.
+  ~^ch([0-9]|1[0-5])(lo)?$:

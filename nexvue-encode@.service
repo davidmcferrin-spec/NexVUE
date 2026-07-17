@@ -21,6 +21,15 @@ Group=nexvue
 # render -> /dev/dri/renderD* for VA-API (Quick Sync) encoding
 SupplementaryGroups=video render
 
+# Some GStreamer elements probe a dconf/GLib settings cache under $HOME. The
+# nexvue user's home is /nonexistent (locked down), which spams the journal
+# with harmless "Read-only file system" dconf warnings. Point HOME and the
+# XDG cache at the unit's private tmp so those elements write to a throwaway
+# location instead of complaining. PrivateTmp=yes makes /tmp per-unit.
+Environment=HOME=/tmp
+Environment=XDG_CACHE_HOME=/tmp/.cache
+Environment=GST_REGISTRY=/tmp/.gstreamer-registry.bin
+
 # Channel config is SOURCED through a shell rather than read via
 # EnvironmentFile=, because systemd's native parser does NOT strip inline
 # "# comments" or surrounding whitespace — a line like "MAX_DEVICES=4  # note"
