@@ -71,9 +71,10 @@ specifically because this box can't get additional ports opened.
   Metrics reporting timezone defaults to America/New_York (heatmap buckets,
   chart labels, custom From/To); override with `NEXVUE_METRICS_TZ` only if needed.
   Metrics Kick writes a short-lived registry via `nexvue-ops.php`
-  (`kick_viewer` + `kick_check`); Player / Multiview / Cast suppress
-  self-healing and show an admin disconnect message. Not a rejoin ban —
-  Phase 2 auth owns enforcement.
+  (`kick_viewer` + `kick_check`); Player / Multiview / Cast read the WHEP
+  `ID` header (API session UUID, not Location secret), suppress self-healing,
+  and show an admin disconnect message. Not a rejoin ban — Phase 2 auth owns
+  enforcement.
   Selectable CC overlay (CEA-608/CC1 side channel) landed —
   `nexvue-captions-decode.py` + `nexvue-captions.php` + player **CC** toggle
   (`localStorage.nexvue-captions-on`); Cast payload carries `captions`.

@@ -715,11 +715,12 @@ live rows. It POSTs `kick_viewer` (optional `reason`) to `nexvue-ops.php`,
 which looks up the session on MediaMTX, calls
 `POST /v3/webrtcsessions/kick/{session_id}` on loopback, and records the
 session in a short-lived kick registry (temp JSON, ~10 min TTL). Metrics PHP
-stays read-only. Player / Multiview / Cast capture the WHEP `Location`
-session UUID and call `kick_check` before self-healing reconnect — kicked
-viewers see a disconnect message and stop auto-retry. Matching is by
-MediaMTX WebRTC session UUID only (safe when many viewers share a NAT IP
-or the same channel). Manual rejoin (pick a channel again) still works;
+stays read-only. Player / Multiview / Cast capture the WHEP `ID` response
+header (MediaMTX API session UUID — not the `Location` WHEP secret) and call
+`kick_check` before self-healing reconnect — kicked viewers see a disconnect
+message and stop auto-retry. Matching is by MediaMTX WebRTC session UUID only
+(safe when many viewers share a NAT IP or the same channel). Manual rejoin
+(pick a channel again) still works;
 real rejoin enforcement is Phase 2 auth. Phase 1 LAN-trust (same as
 Services/Channels).
 

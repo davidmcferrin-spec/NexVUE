@@ -398,11 +398,13 @@
   }
 
   function parseWhepSessionId(res) {
-    const loc = res.headers.get("Location") || res.headers.get("location") || "";
-    const m = String(loc).match(
-      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
-    );
-    return m ? m[0] : null;
+    // MediaMTX WHEP POST exposes ID (API session uuid) and Location (.../whep/<secret>).
+    // Kick registry / Metrics use the API uuid — Location's secret must not be used.
+    const idHdr = res.headers.get("ID") || res.headers.get("id") || "";
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idHdr)) {
+      return idHdr;
+    }
+    return null;
   }
 
   function decodeKickReason(s) {

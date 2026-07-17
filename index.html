@@ -291,7 +291,7 @@ window.__onGCastApiAvailable = function (isAvailable) {
   let pc = null, statsTimer = null, apiTimer = null;
   let currentBase = null;       // e.g. "ch3" (channel identity)
   let currentPath = null;       // e.g. "ch3" or "ch3lo" (stream being watched)
-  let currentSessionId = null;  // MediaMTX WebRTC UUID from WHEP Location header
+  let currentSessionId = null;  // MediaMTX WebRTC UUID from WHEP ID header
   let qualityMode = "auto";     // "auto" | "manual"
   let rendition = "hi";         // "hi" | "lo" (current or desired)
   let loAvailable = false;      // does currentBase publish a lo path?
@@ -405,11 +405,13 @@ window.__onGCastApiAvailable = function (isAvailable) {
   });
 
   function parseWhepSessionId(res) {
-    const loc = res.headers.get("Location") || res.headers.get("location") || "";
-    const m = String(loc).match(
-      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
-    );
-    return m ? m[0] : null;
+    // MediaMTX WHEP POST exposes ID (API session uuid) and Location (.../whep/<secret>).
+    // Kick registry / Metrics use the API uuid — Location's secret must not be used.
+    const idHdr = res.headers.get("ID") || res.headers.get("id") || "";
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idHdr)) {
+      return idHdr;
+    }
+    return null;
   }
 
   function hideKickedOverlay() {
