@@ -46,6 +46,12 @@
   .topnav a.active {
     background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
   }
+  /* Controls share the video column: centered frame, bars full-width inside it. */
+  .frame {
+    flex: 1; min-height: 0; width: min(1280px, 100%);
+    margin-inline: auto;
+    display: flex; flex-direction: column;
+  }
   .bar {
     display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     margin-bottom: 12px; flex-shrink: 0;
@@ -73,13 +79,13 @@
   #state.ok { color: var(--ok); }
   #state.bad { color: var(--bad); }
   .qlabel { color: var(--dim); }
-  /* Video grows with the window; on ultrawide, letterbox on the right. */
+  /* Video fills the centered frame; letterbox on the right when height-limited. */
   .stage {
     flex: 1; min-height: 0; width: 100%;
     display: flex; justify-content: flex-start; align-items: center;
   }
   .videowrap {
-    width: min(1280px, 100%);
+    width: 100%;
     max-height: 100%;
     aspect-ratio: 16 / 9;
   }
@@ -148,6 +154,7 @@
   <a href="/channels.html">Channels</a>
 </nav>
 
+<div class="frame">
 <div class="bar">
   <span id="channels"></span>
   <button id="disconnect">Disconnect</button>
@@ -171,6 +178,7 @@
     <video id="video" autoplay playsinline controls muted></video>
     <!-- muted: browsers block un-muted autoplay; unmute via controls once playing -->
   </div>
+</div>
 </div>
 
 <div id="stats-drawer" class="stats-drawer">

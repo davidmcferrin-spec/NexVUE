@@ -44,6 +44,7 @@
   .bar {
     display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     margin-bottom: 12px; flex-shrink: 0;
+    box-sizing: border-box;
   }
   input, button, select {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge);
@@ -62,15 +63,17 @@
   #state.ok { color: var(--ok); }
   #state.bad { color: var(--bad); }
 
-  /* Grid stays reactive; on ultrawide, letterbox on the right. */
+  /* Grid stays reactive; on ultrawide, letterbox and center horizontally.
+     .bar width/left inset are synced to #grid via ResizeObserver below. */
   .stage {
     flex: 1; min-height: 0; width: 100%;
-    display: flex; justify-content: flex-start; align-items: center;
+    display: flex; justify-content: center; align-items: center;
     container-type: size;
   }
   #grid {
     display: grid; gap: 8px;
     max-width: 100%; max-height: 100%;
+    margin-inline: auto;
   }
   #grid.dual {
     grid-template-columns: 1fr 1fr; grid-template-rows: 1fr;
@@ -496,6 +499,23 @@
 
   for (let i = 0; i < PANE_COUNT; i++) createPane(i);
   applyLayout("quad");
+
+  // Keep the control bar's left edge glued to the centered grid.
+  (function syncBarToGrid() {
+    const stage = document.querySelector(".stage");
+    const bar = document.querySelector(".bar");
+    if (!stage || !bar || !grid) return;
+    function sync() {
+      const gr = grid.getBoundingClientRect();
+      const sr = stage.getBoundingClientRect();
+      bar.style.width = gr.width + "px";
+      bar.style.marginLeft = Math.max(0, gr.left - sr.left) + "px";
+      bar.style.marginRight = "auto";
+    }
+    new ResizeObserver(sync).observe(grid);
+    window.addEventListener("resize", sync);
+    sync();
+  })();
 
   // Friendly labels from CHANNEL_ALIAS when ops API is available.
   (async () => {
