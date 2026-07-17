@@ -8,7 +8,10 @@
  *
  * Actions (GET or POST JSON body):
  *   services | journal | channels_list | channel_get | channel_put
- *   | channels_bulk | restart | aliases
+ *   | channels_bulk | restart | aliases | kick_viewer
+ *
+ * kick_viewer POSTs to MediaMTX /v3/webrtcsessions/kick/{id} on loopback
+ * (no sudo). Used by Metrics → Viewer sessions. Phase 1 LAN-trust.
  */
 
 declare(strict_types=1);
@@ -346,6 +349,63 @@ if ($action === 'restart') {
     }
     echo json_encode(['ok' => true, 'restarted' => $clean]);
     exit;
+}
+
+// ---- kick_viewer (MediaMTX WebRTC session) ------------------------------------
+
+if ($action === 'kick_viewer') {
+    $sessionId = $body['session_id'] ?? ($_GET['session_id'] ?? '');
+    if (!is_string($sessionId)
+        || !preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $sessionId)) {
+        fail(400, 'session_id must be a UUID');
+    }
+
+    $base = getenv('NEXVUE_MEDIAMTX_API_URL');
+    if (!is_string($base) || $base === '') {
+        $base = 'https://127.0.0.1:9997';
+    }
+    $base = rtrim($base, '/');
+    $host = parse_url($base, PHP_URL_HOST);
+    // Unverified TLS is only acceptable for loopback-to-self (same rule as
+    // nexvue-metrics-server.py). Reject anything else rather than phone home.
+    if (!is_string($host) || !in_array(strtolower($host), ['127.0.0.1', 'localhost', '::1'], true)) {
+        fail(500, 'NEXVUE_MEDIAMTX_API_URL must be loopback');
+    }
+
+    $url = $base . '/v3/webrtcsessions/kick/' . rawurlencode($sessionId);
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'timeout' => 5,
+            'ignore_errors' => true,
+            'header' => "Content-Length: 0\r\n",
+        ],
+        'ssl' => [
+            'verify_peer' => false,
+            'verify_peer_name' => false,
+        ],
+    ]);
+    $bodyOut = @file_get_contents($url, false, $ctx);
+    $status = 0;
+    if (isset($http_response_header[0])
+        && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
+        $status = (int)$m[1];
+    }
+    if ($status === 200) {
+        echo json_encode(['ok' => true, 'session_id' => $sessionId]);
+        exit;
+    }
+    if ($status === 404) {
+        fail(404, 'session not found');
+    }
+    if ($status === 0) {
+        fail(502, 'MediaMTX API unreachable');
+    }
+    $snippet = is_string($bodyOut) ? trim($bodyOut) : '';
+    if (strlen($snippet) > 200) {
+        $snippet = substr($snippet, 0, 200);
+    }
+    fail(502, $snippet !== '' ? "MediaMTX kick failed ({$status}): {$snippet}" : "MediaMTX kick failed ({$status})");
 }
 
 fail(400, 'unknown action');

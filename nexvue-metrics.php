@@ -12,34 +12,28 @@
  *
  * ---- Query parameters -------------------------------------------------------
  *
- *   view      one of: totals | channels | viewers | inputs   (required)
- *   range     lookback window: 15m | 1h | 6h | 24h | 7d | 30d  (default 1h)
+ *   view      one of: totals | channels | viewers | inputs | weekday_hours | host
+ *   range     lookback: 15m | 1h | 6h | 24h | 7d | 30d  (default 1h; ignored if from+to set)
+ *   from      optional Unix epoch (seconds) — custom window start (requires to)
+ *   to        optional Unix epoch (seconds) — custom window end (requires from)
  *   channel   optional — restrict "viewers" to one channel (e.g. ch0)
  *
  * ---- Views -------------------------------------------------------------------
  *
- *   totals    System-wide time series: bandwidth, viewer count, active
- *             stream count, one row per poll cycle in range. Matches the
- *             dashboard's three top-line charts.
- *
- *   channels  Per-channel BREAKDOWN over the range: average bandwidth,
- *             average viewers, and time-in-ready(%) for EACH channel —
- *             "how much bandwidth did ch0 use in the last hour" as a single
- *             row per channel, not a time series.
- *
- *   viewers   Per-viewer session drill-down: IP, channel, user (once Phase 2
- *             auth exists), first/last seen, duration, bytes served,
- *             live/ended status. Optionally filtered to one channel.
- *
- *   inputs    Per-DeckLink-input lock/format history as a time series —
- *             matches the dashboard's input-lock chart.
+ *   totals         System-wide time series: bandwidth, viewers, active streams.
+ *   channels       Per-channel breakdown aggregated over the window.
+ *   viewers        Per-viewer session drill-down (IP/channel/user/…).
+ *   inputs         DeckLink input lock/format time series.
+ *   weekday_hours  Mon–Fri × hour-of-day heatmap buckets from totals.
+ *   host           Host CPU % / memory / load1 time series (capacity analytics;
+ *                  not a CheckMK substitute).
  *
  * ---- Example calls -------------------------------------------------------------
  *
  *   nexvue-metrics.php?view=totals&range=1h
- *   nexvue-metrics.php?view=channels&range=24h        (system broken down by channel)
- *   nexvue-metrics.php?view=viewers&range=15m&channel=ch0
- *   nexvue-metrics.php?view=inputs&range=6h
+ *   nexvue-metrics.php?view=channels&from=1710000000&to=1710086400
+ *   nexvue-metrics.php?view=weekday_hours&range=30d
+ *   nexvue-metrics.php?view=host&range=24h
  */
 
 declare(strict_types=1);
@@ -47,10 +41,6 @@ declare(strict_types=1);
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
 
-// ---- Configuration ------------------------------------------------------------
-// Same DB the Python collector writes to. Override via a Apache/PHP-FPM env
-// var (SetEnv NEXVUE_METRICS_DB /path/to/metrics.db in the vhost) if it
-// isn't at the default location.
 $DB_PATH = getenv('NEXVUE_METRICS_DB') ?: '/var/lib/nexvue/metrics.db';
 
 const VALID_RANGES = [
@@ -62,37 +52,75 @@ const VALID_RANGES = [
     '30d' => 30 * 24 * 60 * 60,
 ];
 
+const MAX_WINDOW_S = 30 * 24 * 60 * 60;
+
 function fail(int $status, string $message): never {
     http_response_code($status);
     echo json_encode(['error' => $message]);
     exit;
 }
 
+function metrics_timezone(): DateTimeZone {
+    $tzName = getenv('NEXVUE_METRICS_TZ');
+    if (is_string($tzName) && $tzName !== '') {
+        try {
+            return new DateTimeZone($tzName);
+        } catch (Exception $e) {
+            fail(500, 'invalid NEXVUE_METRICS_TZ: ' . $tzName);
+        }
+    }
+    return new DateTimeZone(date_default_timezone_get());
+}
+
 // ---- Parse & validate query params ---------------------------------------------
 
 $view = $_GET['view'] ?? '';
-if (!in_array($view, ['totals', 'channels', 'viewers', 'inputs'], true)) {
-    fail(400, "view must be one of: totals, channels, viewers, inputs");
+$validViews = ['totals', 'channels', 'viewers', 'inputs', 'weekday_hours', 'host'];
+if (!in_array($view, $validViews, true)) {
+    fail(400, 'view must be one of: ' . implode(', ', $validViews));
 }
 
+$fromRaw = $_GET['from'] ?? null;
+$toRaw = $_GET['to'] ?? null;
 $rangeKey = $_GET['range'] ?? '1h';
-if (!array_key_exists($rangeKey, VALID_RANGES)) {
-    fail(400, 'range must be one of: ' . implode(', ', array_keys(VALID_RANGES)));
-}
-$sinceTs = time() - VALID_RANGES[$rangeKey];
+$now = time();
 
-// Channel filter: alphanumeric only (matches NexVUE's chN/chNlo naming) —
-// rejected outright rather than escaped, since there's no legitimate reason
-// for it to contain anything else and this keeps the SQL trivially safe.
+if ($fromRaw !== null || $toRaw !== null) {
+    if ($fromRaw === null || $toRaw === null) {
+        fail(400, 'from and to must both be set for a custom window');
+    }
+    if (!ctype_digit((string)$fromRaw) || !ctype_digit((string)$toRaw)) {
+        fail(400, 'from and to must be Unix epoch integers (seconds)');
+    }
+    $sinceTs = (int)$fromRaw;
+    $untilTs = (int)$toRaw;
+    if ($sinceTs >= $untilTs) {
+        fail(400, 'from must be earlier than to');
+    }
+    if (($untilTs - $sinceTs) > MAX_WINDOW_S) {
+        fail(400, 'custom window must be at most 30 days');
+    }
+    $rangeKey = 'custom';
+} else {
+    if (!array_key_exists($rangeKey, VALID_RANGES)) {
+        fail(400, 'range must be one of: ' . implode(', ', array_keys(VALID_RANGES)));
+    }
+    $sinceTs = $now - VALID_RANGES[$rangeKey];
+    $untilTs = $now;
+}
+
 $channelFilter = $_GET['channel'] ?? null;
 if ($channelFilter !== null && !preg_match('/^[a-zA-Z0-9]+$/', $channelFilter)) {
     fail(400, 'channel must be alphanumeric');
 }
 
+$windowMeta = [
+    'range' => $rangeKey,
+    'from' => $sinceTs,
+    'to' => $untilTs,
+];
+
 // ---- Open the database, READ-ONLY -------------------------------------------------
-// SQLITE3_OPEN_READONLY means this script can never corrupt or block the
-// collector's writes, and needs no write permission on the file or its
-// containing directory (only read+execute-to-traverse).
 
 if (!is_readable($DB_PATH)) {
     fail(503, "metrics database not readable at $DB_PATH — is nexvue-metrics.service running?");
@@ -104,8 +132,6 @@ try {
 } catch (Exception $e) {
     fail(503, 'could not open metrics database: ' . $e->getMessage());
 }
-
-// ---- Helpers --------------------------------------------------------------------
 
 function queryAll(SQLite3 $db, string $sql, array $params = []): array {
     $stmt = $db->prepare($sql);
@@ -120,24 +146,23 @@ function queryAll(SQLite3 $db, string $sql, array $params = []): array {
     return $rows;
 }
 
-// ---- View: totals (system-wide time series) --------------------------------------
+$tsParams = [':since' => $sinceTs, ':until' => $untilTs];
+
+// ---- View: totals ----------------------------------------------------------------
 
 if ($view === 'totals') {
     $rows = queryAll($db,
         'SELECT ts, active_streams, total_readers, total_bandwidth_bps
-         FROM totals WHERE ts >= :since ORDER BY ts ASC',
-        [':since' => $sinceTs]
+         FROM totals WHERE ts >= :since AND ts <= :until ORDER BY ts ASC',
+        $tsParams
     );
-    echo json_encode(['range' => $rangeKey, 'totals' => $rows]);
+    echo json_encode($windowMeta + ['totals' => $rows]);
     exit;
 }
 
-// ---- View: channels (per-channel breakdown, aggregated over the range) -----------
+// ---- View: channels --------------------------------------------------------------
 
 if ($view === 'channels') {
-    // One row per channel: averages over the window, plus % of samples the
-    // channel was actually "ready" (publishing) — a channel that only came
-    // up partway through the range will show a lower ready% accordingly.
     $rows = queryAll($db,
         'SELECT channel,
                 AVG(bandwidth_bps)                                  AS avg_bandwidth_bps,
@@ -147,23 +172,23 @@ if ($view === 'channels') {
                 ROUND(100.0 * SUM(ready) / COUNT(*), 1)             AS ready_pct,
                 COUNT(*)                                            AS sample_count
          FROM samples
-         WHERE ts >= :since
+         WHERE ts >= :since AND ts <= :until
          GROUP BY channel
          ORDER BY avg_bandwidth_bps DESC',
-        [':since' => $sinceTs]
+        $tsParams
     );
-    echo json_encode(['range' => $rangeKey, 'channels' => $rows]);
+    echo json_encode($windowMeta + ['channels' => $rows]);
     exit;
 }
 
-// ---- View: viewers (per-session IP/channel drill-down) ---------------------------
+// ---- View: viewers ---------------------------------------------------------------
 
 if ($view === 'viewers') {
     $sql = 'SELECT session_id, remote_addr, channel, user, user_agent,
                    first_seen, last_seen, bytes_sent
             FROM viewer_sessions
-            WHERE last_seen >= :since';
-    $params = [':since' => $sinceTs];
+            WHERE last_seen >= :since AND last_seen <= :until';
+    $params = $tsParams;
     if ($channelFilter !== null) {
         $sql .= ' AND channel = :channel';
         $params[':channel'] = $channelFilter;
@@ -171,26 +196,131 @@ if ($view === 'viewers') {
     $sql .= ' ORDER BY last_seen DESC';
 
     $rows = queryAll($db, $sql, $params);
-    $now = time();
     foreach ($rows as &$r) {
         $r['duration_s'] = round($r['last_seen'] - $r['first_seen'], 1);
-        $r['active'] = ($now - $r['last_seen']) < 45;  // ~3x the collector's poll interval
+        $r['active'] = ($now - $r['last_seen']) < 45;
     }
     unset($r);
 
-    echo json_encode(['range' => $rangeKey, 'channel_filter' => $channelFilter, 'sessions' => $rows]);
+    echo json_encode($windowMeta + ['channel_filter' => $channelFilter, 'sessions' => $rows]);
     exit;
 }
 
-// ---- View: inputs (DeckLink lock/format time series) -----------------------------
+// ---- View: inputs ----------------------------------------------------------------
 
 if ($view === 'inputs') {
     $rows = queryAll($db,
         'SELECT ts, device_index, card_name, input_locked, input_mode,
                 reference_locked, reference_mode
-         FROM input_status WHERE ts >= :since ORDER BY ts ASC',
-        [':since' => $sinceTs]
+         FROM input_status WHERE ts >= :since AND ts <= :until ORDER BY ts ASC',
+        $tsParams
     );
-    echo json_encode(['range' => $rangeKey, 'inputs' => $rows]);
+    echo json_encode($windowMeta + ['inputs' => $rows]);
     exit;
 }
+
+// ---- View: weekday_hours (Mon–Fri × hour heatmap) --------------------------------
+
+if ($view === 'weekday_hours') {
+    $tz = metrics_timezone();
+    $tzName = $tz->getName();
+
+    // Dense 5×24 grid (Mon=1 … Fri=5). Empty cells keep zeros.
+    $cells = [];
+    for ($dow = 1; $dow <= 5; $dow++) {
+        for ($hour = 0; $hour <= 23; $hour++) {
+            $cells["{$dow}_{$hour}"] = [
+                'weekday' => $dow,
+                'hour' => $hour,
+                'avg_bandwidth_bps' => 0.0,
+                'peak_bandwidth_bps' => 0.0,
+                'avg_readers' => 0.0,
+                'peak_readers' => 0,
+                'sample_count' => 0,
+            ];
+        }
+    }
+
+    $rows = queryAll($db,
+        'SELECT ts, total_readers, total_bandwidth_bps
+         FROM totals WHERE ts >= :since AND ts <= :until',
+        $tsParams
+    );
+
+    // Accumulate in PHP so weekday/hour use NEXVUE_METRICS_TZ (or PHP default),
+    // not the SQLite connection's UTC assumption.
+    $acc = [];
+    foreach ($rows as $r) {
+        $dt = (new DateTimeImmutable('@' . (int)$r['ts']))->setTimezone($tz);
+        $dow = (int)$dt->format('N'); // 1=Mon … 7=Sun
+        if ($dow > 5) {
+            continue;
+        }
+        $hour = (int)$dt->format('G');
+        $key = "{$dow}_{$hour}";
+        if (!isset($acc[$key])) {
+            $acc[$key] = [
+                'sum_bw' => 0.0, 'max_bw' => 0.0,
+                'sum_r' => 0.0, 'max_r' => 0, 'n' => 0,
+            ];
+        }
+        $bw = (float)$r['total_bandwidth_bps'];
+        $rd = (int)$r['total_readers'];
+        $acc[$key]['sum_bw'] += $bw;
+        $acc[$key]['max_bw'] = max($acc[$key]['max_bw'], $bw);
+        $acc[$key]['sum_r'] += $rd;
+        $acc[$key]['max_r'] = max($acc[$key]['max_r'], $rd);
+        $acc[$key]['n']++;
+    }
+
+    foreach ($acc as $key => $a) {
+        $n = $a['n'];
+        $cells[$key] = [
+            'weekday' => (int)explode('_', $key)[0],
+            'hour' => (int)explode('_', $key)[1],
+            'avg_bandwidth_bps' => $n ? $a['sum_bw'] / $n : 0.0,
+            'peak_bandwidth_bps' => $a['max_bw'],
+            'avg_readers' => $n ? $a['sum_r'] / $n : 0.0,
+            'peak_readers' => $a['max_r'],
+            'sample_count' => $n,
+        ];
+    }
+
+    $out = [];
+    for ($dow = 1; $dow <= 5; $dow++) {
+        for ($hour = 0; $hour <= 23; $hour++) {
+            $out[] = $cells["{$dow}_{$hour}"];
+        }
+    }
+
+    echo json_encode($windowMeta + [
+        'timezone' => $tzName,
+        'weekday_hours' => $out,
+    ]);
+    exit;
+}
+
+// ---- View: host (CPU / memory / load) --------------------------------------------
+
+if ($view === 'host') {
+    $stmt = $db->prepare(
+        'SELECT ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1
+         FROM host_samples WHERE ts >= :since AND ts <= :until ORDER BY ts ASC'
+    );
+    if ($stmt === false) {
+        // Table missing until nexvue-metrics is restarted after upgrade.
+        echo json_encode($windowMeta + ['host' => []]);
+        exit;
+    }
+    $stmt->bindValue(':since', $sinceTs);
+    $stmt->bindValue(':until', $untilTs);
+    $result = $stmt->execute();
+    $rows = [];
+    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+        $rows[] = $row;
+    }
+    echo json_encode($windowMeta + ['host' => $rows]);
+    exit;
+}
+
+fail(400, 'unknown view');

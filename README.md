@@ -565,7 +565,7 @@ as both pieces are running with their shipped units/script — just know
 
 Open `http://<edge-ip>/metrics.html` (top nav → Metrics).
 
-### Views (`nexvue-metrics.php?view=...&range=...`)
+### Views (`nexvue-metrics.php?view=...&range=...` or `&from=&to=`)
 
 | `view` | Returns |
 |---|---|
@@ -573,15 +573,22 @@ Open `http://<edge-ip>/metrics.html` (top nav → Metrics).
 | `channels` | **Per-channel breakdown**, aggregated over the range: avg/peak bandwidth, avg/peak viewers, % of the window the channel was `ready`. "How much bandwidth did ch0 use in the last hour" as one row. |
 | `viewers` | Per-viewer session drill-down: IP, channel, user (blank until Phase 2 auth), first/last seen, duration, bytes served, live/ended. Add `&channel=chN` to filter to one channel. |
 | `inputs` | Per-DeckLink-input lock/format history as a time series. Powers the input-lock chart. |
+| `weekday_hours` | Mon–Fri × hour-of-day buckets (avg/peak bandwidth & viewers) for the heatmap. Timezone: `NEXVUE_METRICS_TZ` or PHP default. |
+| `host` | Host CPU %, memory used/total, load1 time series — capacity correlation on the Metrics page, **not** a CheckMK substitute. |
 
 `range` accepts `15m`, `1h`, `6h`, `24h`, `7d`, `30d` — matching the
-dashboard's buttons, including the quarter-hour granularity for "what's
-happening right now" checks.
+dashboard's preset buttons. For a specific day or window, pass Unix epoch
+seconds as `from` and `to` instead (both required; max span 30 days, matching
+retention). The dashboard exposes datetime-local From/To + Apply/Clear.
 
 Example: `nexvue-metrics.php?view=channels&range=24h` — bandwidth/viewer
 breakdown per channel over the last day, system-wide (omit `channel=`) or
 `nexvue-metrics.php?view=viewers&range=15m&channel=ch0` for who's watching
-channel 0 right now.
+channel 0 right now. Custom:
+`nexvue-metrics.php?view=totals&from=1710000000&to=1710086400`.
+
+After upgrading the collector, restart `nexvue-metrics` so it creates the
+`host_samples` table (`sudo systemctl restart nexvue-metrics`).
 
 ### Configuration
 
@@ -604,6 +611,7 @@ variable to `http://` instead of the `https://` default.
 | Variable | Default | Purpose |
 |---|---|---|
 | `NEXVUE_METRICS_DB` | `/var/lib/nexvue/metrics.db` | Must match the collector's DB path |
+| `NEXVUE_METRICS_TZ` | PHP default / system TZ | Timezone for weekday-hour heatmap bucketing |
 
 ### Viewer drill-down: how it works
 
@@ -624,6 +632,12 @@ still active. That gives a clean per-viewer lifecycle record without one row
 per poll cycle per viewer bloating the table. A session reads as "live" if
 seen within the PHP script's active-session window (45s — about 3 poll
 cycles); otherwise "ended."
+
+**Kick (live sessions only).** The Metrics viewer table has a Kick button on
+live rows. It POSTs `kick_viewer` to `nexvue-ops.php`, which calls MediaMTX
+`POST /v3/webrtcsessions/kick/{session_id}` on loopback — metrics PHP stays
+read-only. Phase 1 LAN-trust (same as Services/Channels); the client can
+reconnect unless Phase 2 auth later blocks them.
 
 ### Notes
 

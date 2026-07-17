@@ -44,6 +44,48 @@ class TestBandwidthMath(unittest.TestCase):
         self.assertEqual(nms._compute_bandwidth_bps(0, 1000, 10, 1000), 0.0)
 
 
+class TestHostSampling(unittest.TestCase):
+    """CPU/mem/load parsers — fixture strings only, no live /proc required."""
+
+    STAT_IDLE = (
+        "cpu  100 0 50 850 0 0 0 0 0 0\n"
+        "cpu0 50 0 25 425 0 0 0 0 0 0\n"
+    )
+    STAT_BUSY = (
+        "cpu  200 0 100 900 0 0 0 0 0 0\n"
+        "cpu0 100 0 50 450 0 0 0 0 0 0\n"
+    )
+    MEMINFO = (
+        "MemTotal:       1000000 kB\n"
+        "MemFree:         200000 kB\n"
+        "MemAvailable:    400000 kB\n"
+        "Buffers:          10000 kB\n"
+    )
+
+    def test_parse_proc_stat_cpu(self):
+        idle, total = nms._parse_proc_stat_cpu(self.STAT_IDLE)
+        self.assertEqual(idle, 850)
+        self.assertEqual(total, 100 + 0 + 50 + 850)
+
+    def test_compute_cpu_pct(self):
+        i0, t0 = nms._parse_proc_stat_cpu(self.STAT_IDLE)
+        i1, t1 = nms._parse_proc_stat_cpu(self.STAT_BUSY)
+        pct = nms._compute_cpu_pct(i0, t0, i1, t1)
+        # delta total = 200, delta idle = 50 → busy 150 → 75%
+        self.assertAlmostEqual(pct, 75.0)
+
+    def test_compute_cpu_pct_zero_delta(self):
+        self.assertEqual(nms._compute_cpu_pct(10, 100, 10, 100), 0.0)
+
+    def test_parse_meminfo(self):
+        used, total = nms._parse_meminfo(self.MEMINFO)
+        self.assertEqual(total, 1000000 * 1024)
+        self.assertEqual(used, (1000000 - 400000) * 1024)
+
+    def test_parse_loadavg(self):
+        self.assertAlmostEqual(nms._parse_loadavg("1.25 0.80 0.50 1/200 1234\n"), 1.25)
+
+
 class TestSchemaAndRetention(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -51,11 +93,39 @@ class TestSchemaAndRetention(unittest.TestCase):
         nms.DB_PATH = self.db_path
         nms.init_db()
 
+    def test_host_samples_table_exists(self):
+        with sqlite3.connect(self.db_path) as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(host_samples)")]
+        self.assertEqual(
+            cols,
+            ["ts", "cpu_pct", "mem_used_bytes", "mem_total_bytes", "load1"],
+        )
+
+    def test_pruning_removes_old_host_samples(self):
+        now = int(time.time())
+        old_ts = now - int(nms.RETENTION_DAYS * 86400) - 3600
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO host_samples (ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1) "
+                "VALUES (?,?,?,?,?)",
+                (old_ts, 10.0, 100, 1000, 0.5),
+            )
+            conn.execute(
+                "INSERT INTO host_samples (ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1) "
+                "VALUES (?,?,?,?,?)",
+                (now, 20.0, 200, 1000, 1.0),
+            )
+            conn.commit()
+        nms.prune_old_samples()
+        with sqlite3.connect(self.db_path) as conn:
+            rows = list(conn.execute("SELECT ts FROM host_samples"))
+        self.assertEqual(rows, [(now,)])
+
     def test_tables_created(self):
         with sqlite3.connect(self.db_path) as conn:
             tables = {r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertTrue({"samples", "totals", "input_status"} <= tables)
+        self.assertTrue({"samples", "totals", "input_status", "host_samples"} <= tables)
 
     def test_init_db_is_idempotent(self):
         nms.init_db()  # must not raise on repeated calls

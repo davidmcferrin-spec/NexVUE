@@ -14,8 +14,8 @@ per the project roadmap) — it answers "how much bandwidth did we serve last
 week," "was this input locked all night," and "which IP was watching
 channel 2 at 3am," not "is the service up right now."
 
-Polls two existing NexVUE services on an interval and stores time-series
-samples in SQLite (stdlib `sqlite3` — no pip, no new dependency):
+Polls existing NexVUE services (and local /proc) on an interval and stores
+time-series samples in SQLite (stdlib `sqlite3` — no pip, no new dependency):
   - MediaMTX Control API   -> per-path bandwidth (bytesSent delta), viewer
                               counts (readers), active-stream (ready) state
   - MediaMTX Control API   -> per-VIEWER session detail: remote IP, channel,
@@ -24,6 +24,9 @@ samples in SQLite (stdlib `sqlite3` — no pip, no new dependency):
                               endpoint from the paths list above)
   - nexvue-status daemon   -> per-input signal lock, detected format,
                               reference lock/format
+  - /proc/stat, meminfo, loadavg -> host CPU %, memory used/total, load1
+                              (capacity correlation for Metrics — not a
+                              CheckMK substitute)
 
 Old samples are pruned hourly (NEXVUE_METRICS_RETENTION_DAYS, default 30) so
 the SQLite file does not grow unbounded.
@@ -62,6 +65,8 @@ _db_lock = threading.Lock()
 # byte totals can be turned into instantaneous bandwidth between samples.
 # Touched only from the single poll_loop thread — no lock needed.
 _prev_bytes: dict = {}
+# Previous /proc/stat counters for CPU % between polls.
+_prev_cpu: tuple | None = None
 
 
 def _unverified_ssl_context() -> "ssl.SSLContext | None":
@@ -92,6 +97,87 @@ def _compute_bandwidth_bps(prev_ts: int, prev_bytes: int, now_ts: int, now_bytes
     if dt <= 0 or now_bytes < prev_bytes:
         return 0.0
     return (now_bytes - prev_bytes) * 8 / dt
+
+
+def _parse_proc_stat_cpu(text: str) -> tuple[int, int]:
+    """Return (idle_ticks, total_ticks) from a /proc/stat blob. First line
+    must be the aggregate `cpu ` row. Raises ValueError if malformed."""
+    for line in text.splitlines():
+        if line.startswith("cpu "):
+            parts = line.split()
+            # cpu user nice system idle iowait irq softirq steal guest guest_nice
+            nums = [int(x) for x in parts[1:]]
+            if len(nums) < 4:
+                raise ValueError("cpu line too short")
+            idle = nums[3] + (nums[4] if len(nums) > 4 else 0)  # idle + iowait
+            total = sum(nums)
+            return idle, total
+    raise ValueError("no cpu line in /proc/stat")
+
+
+def _compute_cpu_pct(prev_idle: int, prev_total: int, idle: int, total: int) -> float:
+    """Percent non-idle CPU between two /proc/stat samples (0–100)."""
+    d_total = total - prev_total
+    d_idle = idle - prev_idle
+    if d_total <= 0:
+        return 0.0
+    busy = d_total - d_idle
+    if busy < 0:
+        return 0.0
+    return 100.0 * busy / d_total
+
+
+def _parse_meminfo(text: str) -> tuple[int, int]:
+    """Return (mem_used_bytes, mem_total_bytes) from /proc/meminfo text.
+    Prefers MemAvailable for used = total − available."""
+    vals: dict[str, int] = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, rest = line.split(":", 1)
+        parts = rest.split()
+        if not parts:
+            continue
+        # Values are kB
+        vals[key] = int(parts[0]) * 1024
+    total = vals.get("MemTotal", 0)
+    available = vals.get("MemAvailable", vals.get("MemFree", 0))
+    used = max(0, total - available)
+    return used, total
+
+
+def _parse_loadavg(text: str) -> float:
+    """1-minute load average from /proc/loadavg."""
+    return float(text.split()[0])
+
+
+def sample_host() -> tuple[float | None, int, int, float]:
+    """Read host CPU/memory/load. cpu_pct is None on the first sample (no
+    prior /proc/stat baseline yet)."""
+    global _prev_cpu
+    cpu_pct: float | None = None
+    try:
+        stat_text = Path("/proc/stat").read_text(encoding="utf-8")
+        idle, total = _parse_proc_stat_cpu(stat_text)
+        if _prev_cpu is not None:
+            cpu_pct = _compute_cpu_pct(_prev_cpu[0], _prev_cpu[1], idle, total)
+        _prev_cpu = (idle, total)
+    except (OSError, ValueError) as exc:
+        log.warning("host cpu sample failed: %s", exc)
+
+    mem_used, mem_total = 0, 0
+    try:
+        mem_used, mem_total = _parse_meminfo(Path("/proc/meminfo").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning("host mem sample failed: %s", exc)
+
+    load1 = 0.0
+    try:
+        load1 = _parse_loadavg(Path("/proc/loadavg").read_text(encoding="utf-8"))
+    except (OSError, ValueError, IndexError) as exc:
+        log.warning("host loadavg sample failed: %s", exc)
+
+    return cpu_pct, mem_used, mem_total, load1
 
 
 # ---- Database --------------------------------------------------------------------
@@ -171,6 +257,16 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_viewer_sessions_channel ON viewer_sessions(channel);
             CREATE INDEX IF NOT EXISTS idx_viewer_sessions_remote ON viewer_sessions(remote_addr);
             CREATE INDEX IF NOT EXISTS idx_viewer_sessions_last_seen ON viewer_sessions(last_seen);
+
+            -- Host capacity samples (CPU/memory/load) for Metrics correlation.
+            -- Not a health monitor — CheckMK remains Phase 4 for that.
+            CREATE TABLE IF NOT EXISTS host_samples (
+                ts INTEGER NOT NULL PRIMARY KEY,
+                cpu_pct REAL,
+                mem_used_bytes INTEGER,
+                mem_total_bytes INTEGER,
+                load1 REAL
+            );
         """)
         # Safe migration for databases created before the `user` column
         # existed — ALTER TABLE ADD COLUMN has no "IF NOT EXISTS" in SQLite,
@@ -188,7 +284,7 @@ def init_db() -> None:
 def prune_old_samples() -> None:
     cutoff = int(time.time() - RETENTION_DAYS * 86400)
     with _db_lock, sqlite3.connect(DB_PATH) as conn:
-        for table in ("samples", "totals", "input_status"):
+        for table in ("samples", "totals", "input_status", "host_samples"):
             conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
         # viewer_sessions has no `ts` column (it's a lifecycle row, not a
         # timestamped sample) — prune on last_seen instead.
@@ -300,6 +396,20 @@ def poll_once() -> None:
                 conn.commit()
     except (urllib.error.URLError, TimeoutError, socket.timeout, ValueError, OSError) as exc:
         log.warning("status daemon poll failed: %s", exc)
+
+    # --- Host CPU / memory / load (capacity analytics for Metrics) ---
+    cpu_pct, mem_used, mem_total, load1 = sample_host()
+    if cpu_pct is not None:
+        try:
+            with _db_lock, sqlite3.connect(DB_PATH) as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO host_samples "
+                    "(ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1) VALUES (?,?,?,?,?)",
+                    (now, cpu_pct, mem_used, mem_total, load1),
+                )
+                conn.commit()
+        except OSError as exc:
+            log.warning("host_samples write failed: %s", exc)
 
 
 def poll_loop() -> None:
