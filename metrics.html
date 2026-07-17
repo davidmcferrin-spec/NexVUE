@@ -160,7 +160,7 @@
 
 <div class="panel">
   <h2>Weekday usage by hour (Mon–Fri)</h2>
-  <p class="heat-tip">Use 7d / 30d or a multi-day custom window so buckets fill in. Timezone follows the edge (or NEXVUE_METRICS_TZ).</p>
+  <p class="heat-tip">Use 7d / 30d or a multi-day custom window so buckets fill in. Hours are America/New_York (or NEXVUE_METRICS_TZ).</p>
   <div class="bar" style="margin-bottom:12px">
     <span style="color:var(--dim)">metric:</span>
     <button type="button" class="heat-metric active" data-metric="bw">Bandwidth</button>
@@ -285,28 +285,91 @@
     throw new Error("Chart is not defined — tried local chart.umd.min.js and jsDelivr; " + errors.join("; "));
   }
 
+  // All Metrics timestamps are America/New_York wall time (matches PHP default).
+  // Updated from API responses when present so NEXVUE_METRICS_TZ stays in sync.
+  let reportTz = "America/New_York";
+
+  function tzParts(ms, opts) {
+    return Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", { timeZone: reportTz, ...opts })
+        .formatToParts(new Date(ms))
+        .filter(p => p.type !== "literal")
+        .map(p => [p.type, p.value])
+    );
+  }
+
+  function sameReportDay(msA, msB) {
+    const a = tzParts(msA, { year: "numeric", month: "2-digit", day: "2-digit" });
+    const b = tzParts(msB, { year: "numeric", month: "2-digit", day: "2-digit" });
+    return a.year === b.year && a.month === b.month && a.day === b.day;
+  }
+
   function fmtTime(ms) {
-    const d = new Date(ms);
-    const now = new Date();
-    const sameDay = d.toDateString() === now.toDateString();
-    return sameDay
-      ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-      : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
-        d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const timeOpts = { hour: "2-digit", minute: "2-digit", hour12: false };
+    if (sameReportDay(ms, Date.now())) {
+      return new Date(ms).toLocaleTimeString("en-US", { timeZone: reportTz, ...timeOpts });
+    }
+    return new Date(ms).toLocaleString("en-US", {
+      timeZone: reportTz,
+      month: "short",
+      day: "numeric",
+      ...timeOpts,
+    });
   }
 
   function fmtWindowLabel(fromTs, toTs) {
-    const a = new Date(fromTs * 1000);
-    const b = new Date(toTs * 1000);
-    const opts = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
-    return `${a.toLocaleString([], opts)} → ${b.toLocaleString([], opts)}`;
+    const opts = {
+      timeZone: reportTz,
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    };
+    const a = new Date(fromTs * 1000).toLocaleString("en-US", opts);
+    const b = new Date(toTs * 1000).toLocaleString("en-US", opts);
+    return `${a} → ${b}`;
+  }
+
+  function zonedWallTimeToEpoch(year, month, day, hour, minute) {
+    // Interpret Y-M-D H:M as reportTz wall clock → Unix seconds.
+    // Iterate: guess UTC, see how that instant formats in reportTz, correct.
+    let utc = Date.UTC(year, month - 1, day, hour, minute, 0);
+    const wanted = Date.UTC(year, month - 1, day, hour, minute, 0);
+    for (let i = 0; i < 4; i++) {
+      const p = tzParts(utc, {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      });
+      const asUtc = Date.UTC(
+        Number(p.year),
+        Number(p.month) - 1,
+        Number(p.day),
+        Number(p.hour),
+        Number(p.minute),
+        Number(p.second || 0)
+      );
+      const delta = wanted - asUtc;
+      if (delta === 0) break;
+      utc += delta;
+    }
+    return Math.floor(utc / 1000);
   }
 
   function fromDatetimeLocalValue(s) {
+    // datetime-local is timezone-naive; treat the wall clock as reportTz.
     if (!s) return null;
-    const t = Date.parse(s);
-    if (Number.isNaN(t)) return null;
-    return Math.floor(t / 1000);
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(s);
+    if (!m) return null;
+    return zonedWallTimeToEpoch(
+      Number(m[1]), Number(m[2]), Number(m[3]),
+      Number(m[4]), Number(m[5])
+    );
   }
 
   function fmtBps(bps) {
@@ -400,11 +463,13 @@
         fetchView("viewers", channelFilterEl.value ? { channel: channelFilterEl.value } : {}),
         fetchView("weekday_hours"), fetchView("host"),
       ]);
+      const tzFromApi = totals.timezone || weekday.timezone || host.timezone;
+      if (tzFromApi) reportTz = tzFromApi;
       renderTotals(totals.totals);
       renderChannels(channels.channels);
       renderInputs(inputs.inputs);
       renderViewers(viewers.sessions);
-      renderHeatmap(weekday.weekday_hours || [], weekday.timezone || "");
+      renderHeatmap(weekday.weekday_hours || [], weekday.timezone || reportTz);
       renderHost(host.host || []);
       // #region agent log
       dbg("verify", "metrics.html:load-ok", "load() succeeded", { typeofChart: typeof Chart, chartJsLoadFlag: window.__nexvueChartJsLoad || "unset", chartCount: Object.keys(charts).length });
@@ -414,7 +479,10 @@
       const windowLabel = (fromTs != null && toTs != null)
         ? fmtWindowLabel(fromTs, toTs)
         : range;
-      setState(`${windowLabel} · updated ${new Date().toLocaleTimeString()}`);
+      const updated = new Date().toLocaleTimeString("en-US", {
+        timeZone: reportTz, hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+      });
+      setState(`${windowLabel} · ${reportTz} · updated ${updated}`);
     } catch (err) {
       // #region agent log
       dbg("A-B", "metrics.html:load-catch", "load() failed", { errMessage: String(err && err.message || err), typeofChart: typeof Chart, chartJsLoadFlag: window.__nexvueChartJsLoad || "unset", online: navigator.onLine });

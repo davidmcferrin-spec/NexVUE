@@ -59,7 +59,9 @@ RETENTION_DAYS = float(os.environ.get("NEXVUE_METRICS_RETENTION_DAYS", "30"))
 PRUNE_EVERY_S = 3600  # retention sweep runs hourly, not every poll
 
 MEDIAMTX_API_URL = os.environ.get("NEXVUE_MEDIAMTX_API_URL", "https://127.0.0.1:9997")
-STATUS_DAEMON_URL = os.environ.get("NEXVUE_STATUS_URL", "https://127.0.0.1:9998")
+# When unset, try HTTP then HTTPS (status TLS is optional; matches nexvue-status.php).
+# When set, use that single base URL only.
+_STATUS_URL_ENV = os.environ.get("NEXVUE_STATUS_URL", "").strip()
 FETCH_TIMEOUT_S = 5.0
 
 _db_lock = threading.Lock()
@@ -94,6 +96,29 @@ def _fetch_json(url: str) -> dict:
     ctx = _unverified_ssl_context() if url.startswith("https://") else None
     with urllib.request.urlopen(url, timeout=FETCH_TIMEOUT_S, context=ctx) as resp:
         return json.loads(resp.read().decode())
+
+
+def _status_base_urls() -> list[str]:
+    """Base URLs for the status daemon (no trailing path). Env override wins."""
+    if _STATUS_URL_ENV:
+        return [_STATUS_URL_ENV.rstrip("/")]
+    return ["http://127.0.0.1:9998", "https://127.0.0.1:9998"]
+
+
+def _fetch_json_first(urls: list[str]) -> dict:
+    """Try each URL in order; return the first successful JSON body.
+
+    Raises the last exception if every candidate fails — callers log once.
+    """
+    last_exc: BaseException | None = None
+    for url in urls:
+        try:
+            return _fetch_json(url)
+        except (urllib.error.URLError, TimeoutError, socket.timeout, ValueError, OSError) as exc:
+            last_exc = exc
+    if last_exc is not None:
+        raise last_exc
+    raise urllib.error.URLError("no status URL candidates")
 
 
 def _compute_bandwidth_bps(prev_ts: int, prev_bytes: int, now_ts: int, now_bytes: int) -> float:
@@ -279,6 +304,11 @@ def sample_gpu() -> dict:
     """
     One-shot intel_gpu_top JSON sample. Returns empty-ish dict with None fields
     on failure; rate-limits warning logs.
+
+    intel_gpu_top -J streams NDJSON forever and never exits on its own, so we
+    always kill it via timeout after enough wall time for at least one -s
+    period. TimeoutExpired is therefore the *normal* success path — parse
+    whatever landed on stdout before the kill.
     """
     global _gpu_warn_last
     empty = {
@@ -287,8 +317,9 @@ def sample_gpu() -> dict:
         "gpu_video_enhance_pct": None,
         "gpu_freq_mhz": None,
     }
+    out = ""
     try:
-        # -s 100 ≈ one 100ms sample; -o - writes JSON to stdout (NDJSON stream).
+        # -s 100 ≈ one 100ms sample period; -o - writes JSON to stdout.
         proc = subprocess.run(
             [INTEL_GPU_TOP, "-J", "-s", "100", "-o", "-"],
             capture_output=True,
@@ -300,14 +331,41 @@ def sample_gpu() -> dict:
         if not out:
             err = (proc.stderr or "").strip() or f"exit {proc.returncode}"
             raise RuntimeError(err)
-        return _parse_intel_gpu_top_json(out)
+    except subprocess.TimeoutExpired as exc:
+        # Expected: tool is a continuous stream. Prefer captured stdout.
+        raw = exc.stdout
+        if isinstance(raw, bytes):
+            out = raw.decode(errors="replace").strip()
+        else:
+            out = (raw or "").strip()
+        if not out:
+            now = time.time()
+            if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
+                err = exc.stderr
+                if isinstance(err, bytes):
+                    err = err.decode(errors="replace")
+                log.warning(
+                    "intel GPU sample timed out with empty stdout (%s)",
+                    (err or "").strip() or f"timeout {INTEL_GPU_TOP_TIMEOUT_S}s",
+                )
+                _gpu_warn_last = now
+            return empty
     except FileNotFoundError:
         now = time.time()
         if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
             log.warning("intel_gpu_top not found — install intel-gpu-tools for iGPU metrics")
             _gpu_warn_last = now
         return empty
-    except (subprocess.TimeoutExpired, RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
+    except (RuntimeError, OSError) as exc:
+        now = time.time()
+        if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
+            log.warning("intel GPU sample failed: %s", exc)
+            _gpu_warn_last = now
+        return empty
+
+    try:
+        return _parse_intel_gpu_top_json(out)
+    except (ValueError, json.JSONDecodeError) as exc:
         now = time.time()
         if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
             log.warning("intel GPU sample failed: %s", exc)
@@ -518,7 +576,8 @@ def poll_once() -> None:
 
     # --- Status daemon: per-input lock/format history ---
     try:
-        data = _fetch_json(f"{STATUS_DAEMON_URL}/status")
+        status_urls = [f"{base}/status" for base in _status_base_urls()]
+        data = _fetch_json_first(status_urls)
         if not data.get("stale"):
             rows = [
                 (

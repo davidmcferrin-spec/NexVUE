@@ -8,11 +8,15 @@ Run: python3 test/test_nexvue_metrics.py
 import importlib.util
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
+from unittest import mock
 
 # Import the script as a module directly from its file path — it's a
 # standalone deployed script, not a pip package, so no installed import path.
@@ -123,6 +127,64 @@ class TestIntelGpuTopParse(unittest.TestCase):
         self.assertEqual(nms._classify_gpu_engine("VideoEnhance/0"), "enhance")
         self.assertEqual(nms._classify_gpu_engine("Render/3D/0"), "render")
         self.assertIsNone(nms._classify_gpu_engine("Blitter/0"))
+
+
+class TestSampleGpu(unittest.TestCase):
+    """sample_gpu must treat TimeoutExpired-with-stdout as success.
+
+    intel_gpu_top -J never exits; subprocess.run always times out. The old
+    path discarded that stdout and left the iGPU charts empty forever.
+    """
+
+    def setUp(self):
+        self._prev_warn = nms._gpu_warn_last
+        nms._gpu_warn_last = 0.0
+
+    def tearDown(self):
+        nms._gpu_warn_last = self._prev_warn
+
+    def test_timeout_with_stdout_parses_sample(self):
+        sample = TestIntelGpuTopParse.SAMPLE.strip()
+
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(
+                cmd=args[0] if args else "intel_gpu_top",
+                timeout=2.5,
+                output=sample,
+            )
+
+        with mock.patch.object(subprocess, "run", side_effect=boom):
+            got = nms.sample_gpu()
+        self.assertAlmostEqual(got["gpu_video_pct"], 42.0)
+        self.assertAlmostEqual(got["gpu_render_pct"], 5.5)
+
+    def test_timeout_with_bytes_stdout_parses_sample(self):
+        sample = TestIntelGpuTopParse.SAMPLE.strip().encode()
+
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(
+                cmd=["intel_gpu_top"],
+                timeout=2.5,
+                output=sample,
+            )
+
+        with mock.patch.object(subprocess, "run", side_effect=boom):
+            got = nms.sample_gpu()
+        self.assertAlmostEqual(got["gpu_video_pct"], 42.0)
+
+    def test_timeout_empty_stdout_returns_none_fields(self):
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(
+                cmd=["intel_gpu_top"],
+                timeout=2.5,
+                output="",
+            )
+
+        with mock.patch.object(subprocess, "run", side_effect=boom):
+            got = nms.sample_gpu()
+        self.assertIsNone(got["gpu_video_pct"])
+        self.assertIsNone(got["gpu_render_pct"])
+        self.assertIsNone(got["gpu_freq_mhz"])
 
 
 class TestSchemaAndRetention(unittest.TestCase):
@@ -341,6 +403,73 @@ class TestViewerSessions(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             remaining = [r[0] for r in conn.execute("SELECT session_id FROM viewer_sessions")]
         self.assertEqual(remaining, ["sess-current"])
+
+
+class TestStatusUrlCandidates(unittest.TestCase):
+    """HTTP-then-HTTPS discovery for the optional-TLS status daemon."""
+
+    def setUp(self):
+        self._prev_status_env = nms._STATUS_URL_ENV
+
+    def tearDown(self):
+        nms._STATUS_URL_ENV = self._prev_status_env
+
+    def test_unset_tries_http_then_https(self):
+        nms._STATUS_URL_ENV = ""
+        self.assertEqual(
+            nms._status_base_urls(),
+            ["http://127.0.0.1:9998", "https://127.0.0.1:9998"],
+        )
+
+    def test_env_override_is_single_url(self):
+        nms._STATUS_URL_ENV = "https://127.0.0.1:9998/"
+        self.assertEqual(nms._status_base_urls(), ["https://127.0.0.1:9998"])
+
+    def test_fetch_json_first_falls_through_on_scheme_error(self):
+        calls = []
+
+        class FakeResp:
+            def __init__(self, body):
+                self._body = body.encode()
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(url, timeout=None, context=None):
+            calls.append(url)
+            if url.startswith("https://"):
+                raise urllib.error.URLError("SSL: WRONG_VERSION_NUMBER")
+            return FakeResp('{"devices":[],"stale":false}')
+
+        with mock.patch.object(urllib.request, "urlopen", side_effect=fake_urlopen):
+            data = nms._fetch_json_first([
+                "https://127.0.0.1:9998/status",
+                "http://127.0.0.1:9998/status",
+            ])
+
+        self.assertEqual(calls, [
+            "https://127.0.0.1:9998/status",
+            "http://127.0.0.1:9998/status",
+        ])
+        self.assertEqual(data, {"devices": [], "stale": False})
+
+    def test_fetch_json_first_raises_last_error(self):
+        def always_fail(url, timeout=None, context=None):
+            raise urllib.error.URLError(f"fail:{url}")
+
+        with mock.patch.object(urllib.request, "urlopen", side_effect=always_fail):
+            with self.assertRaises(urllib.error.URLError) as ctx:
+                nms._fetch_json_first([
+                    "http://127.0.0.1:9998/status",
+                    "https://127.0.0.1:9998/status",
+                ])
+        self.assertIn("https://127.0.0.1:9998/status", str(ctx.exception))
 
 
 if __name__ == "__main__":

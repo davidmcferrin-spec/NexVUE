@@ -376,7 +376,7 @@ mistake is enabling some and assuming the rest inherited it. They did not:
 |---|---|---|---|
 | MediaMTX WHEP (viewers)   | 8889 | `webrtcEncryption`, `webrtcServerKey/Cert` | Mixed-content block (if page is HTTPS) |
 | MediaMTX Control API      | 9997 | `apiEncryption`, `apiServerKey/Cert` — **separate from webrtcEncryption above, does NOT inherit it** | `ERR_SSL_PROTOCOL_ERROR` |
-| NexVUE status daemon      | 9998 | Optional for the **player UI** (see below). Still needed if the metrics collector uses `https://127.0.0.1:9998`, or for direct curl/CheckMK hits on `:9998`. | `ERR_SSL_PROTOCOL_ERROR` on direct `:9998` |
+| NexVUE status daemon      | 9998 | Optional for the **player UI** and **metrics collector** (both try HTTP then HTTPS on loopback). Still needed for direct curl/CheckMK hits on `:9998`, or if `NEXVUE_STATUS_URL` is pinned to `https://`. | `ERR_SSL_PROTOCOL_ERROR` on direct `:9998` |
 | NexVUE metrics dashboard  | —    | N/A — no port, no TLS needed for this piece at all. The collector has no listener; PHP reads SQLite directly and Apache (already TLS) serves the result. | N/A |
 | Player input-status dots  | —    | `nexvue-status.php` on Apache (same-origin). Proxies to loopback `:9998` over HTTP or HTTPS. | Gray dots + SDI input line = `status unreachable` (not “daemon down”) |
 
@@ -573,7 +573,7 @@ Open `http://<edge-ip>/metrics.html` (top nav → Metrics).
 | `channels` | **Per-channel breakdown**, aggregated over the range: avg/peak bandwidth, avg/peak viewers, % of the window the channel was `ready`. "How much bandwidth did ch0 use in the last hour" as one row. |
 | `viewers` | Per-viewer session drill-down: IP, channel, user (blank until Phase 2 auth), first/last seen, duration, bytes served, live/ended. Add `&channel=chN` to filter to one channel. |
 | `inputs` | Per-DeckLink-input lock/format history as a time series. Powers the input-lock chart. |
-| `weekday_hours` | Mon–Fri × hour-of-day buckets (avg/peak bandwidth & viewers) for the heatmap. Timezone: `NEXVUE_METRICS_TZ` or PHP default. |
+| `weekday_hours` | Mon–Fri × hour-of-day buckets (avg/peak bandwidth & viewers) for the heatmap. Timezone: `America/New_York` by default (`NEXVUE_METRICS_TZ` override). |
 | `host` | Host CPU %, memory used/total, load1, and (when available) iGPU Video/Render/VideoEnhance busy % + GPU freq — capacity correlation on the Metrics page, **not** a CheckMK substitute. Requires `intel-gpu-tools` / `intel_gpu_top` + CAP_PERFMON (see setup). |
 
 `range` accepts `15m`, `1h`, `6h`, `24h`, `7d`, `30d` — matching the
@@ -591,12 +591,15 @@ After upgrading the collector, restart `nexvue-metrics` so it creates the
 `host_samples` table / new columns (`sudo systemctl restart nexvue-metrics`).
 
 **iGPU (Quick Sync) charts.** The collector samples `intel_gpu_top -J` each
-poll when `intel-gpu-tools` is installed. Video engine % is the primary
-encode-load signal; Render/3D and VideoEnhance are also stored. If the tool
-is missing, lacks PMU permission, or the kernel uses `xe` without a working
-`intel_gpu_top`, those series stay empty (CPU/memory still collect). `setup.sh`
-installs `intel-gpu-tools`, `setcap`s `intel_gpu_top` when possible, and the
-unit grants `AmbientCapabilities=CAP_PERFMON`.
+poll when `intel-gpu-tools` is installed. That tool streams forever, so the
+collector kills it after `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` and parses the
+stdout captured before the kill (timeout is the normal success path, not a
+failure). Video engine % is the primary encode-load signal; Render/3D and
+VideoEnhance are also stored. If the tool is missing, lacks PMU permission,
+or the kernel uses `xe` without a working `intel_gpu_top`, those series stay
+empty (CPU/memory still collect). `setup.sh` installs `intel-gpu-tools`,
+`setcap`s `intel_gpu_top` when possible, and the unit grants
+`AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN`.
 
 ### Configuration
 
@@ -605,23 +608,36 @@ unit grants `AmbientCapabilities=CAP_PERFMON`.
 | Variable | Default | Purpose |
 |---|---|---|
 | `NEXVUE_MEDIAMTX_API_URL` | `https://127.0.0.1:9997` | Where to poll for bandwidth/viewers/streams/sessions |
-| `NEXVUE_STATUS_URL` | `https://127.0.0.1:9998` | Where to poll for input lock/format |
+| `NEXVUE_STATUS_URL` | *(unset)* → `http://` then `https://` on `:9998` | Where to poll for input lock/format. When unset, tries plain HTTP then HTTPS (status TLS is optional). Set explicitly to pin one scheme. |
 | `NEXVUE_METRICS_POLL_INTERVAL_S` | `15` | Seconds between polls |
 | `NEXVUE_METRICS_RETENTION_DAYS` | `30` | Samples/sessions older than this are pruned hourly |
 | `NEXVUE_METRICS_DB` | `/var/lib/nexvue/metrics.db` | SQLite file path (auto-created via `StateDirectory=`) |
 | `NEXVUE_INTEL_GPU_TOP` | `intel_gpu_top` | Binary path for iGPU sampling |
 | `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` | `2.5` | Subprocess timeout for one JSON sample |
 
-If either MediaMTX or the status daemon is still plain HTTP (TLS not yet
-configured — see the TLS section above), set the corresponding `_URL`
-variable to `http://` instead of the `https://` default.
+If MediaMTX is still plain HTTP (TLS not yet configured — see the TLS
+section above), set `NEXVUE_MEDIAMTX_API_URL` to `http://127.0.0.1:9997`.
+Status needs no override when TLS is off: the collector already tries HTTP
+first. To force HTTPS-only (or a non-loopback URL), set `NEXVUE_STATUS_URL`.
+
+**Live-host note:** if an older collector build is still defaulting to
+`https://127.0.0.1:9998` against a plain-HTTP status daemon, you will see
+`SSL: WRONG_VERSION_NUMBER` in the journal every poll. Until the updated
+collector is deployed, pin HTTP with a drop-in:
+
+```bash
+sudo systemctl edit nexvue-metrics
+# [Service]
+# Environment=NEXVUE_STATUS_URL=http://127.0.0.1:9998
+sudo systemctl restart nexvue-metrics
+```
 
 **PHP** (set via Apache vhost `SetEnv`, or edit the default in the script):
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `NEXVUE_METRICS_DB` | `/var/lib/nexvue/metrics.db` | Must match the collector's DB path |
-| `NEXVUE_METRICS_TZ` | PHP default / system TZ | Timezone for weekday-hour heatmap bucketing |
+| `NEXVUE_METRICS_TZ` | `America/New_York` | Timezone for heatmap bucketing and (via API) dashboard clock labels / custom From–To. Override only if this edge should report in another zone. |
 
 ### Viewer drill-down: how it works
 

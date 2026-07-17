@@ -297,12 +297,12 @@
   // ---- Long-running session resilience -------------------------------------------
   // For unattended multi-hour playback (wall monitors, 8-15h shifts): the
   // connection must recover itself from transient network blips without a
-  // human noticing a "failed" status text, and the display must not sleep.
+  // human noticing a stuck "failed" status, and the display must not sleep.
   let intentionalDisconnect = false;   // true only for user-initiated teardown
   let reconnectTimer = null;
   let reconnectAttempt = 0;
-  const RECONNECT_BASE_MS = 2000;      // first retry after 2s
-  const RECONNECT_MAX_MS = 30000;      // backoff caps at 30s between attempts
+  const RECONNECT_MS = 5000;           // steady retry while healing (wall monitors)
+  let preferFullscreen = false;        // re-enter FS after heal if user had it on
   let wakeLock = null;
 
   async function acquireWakeLock() {
@@ -331,23 +331,35 @@
     }
   });
 
-  function scheduleReconnect(base, rend) {
-    if (intentionalDisconnect || reconnectTimer) return;
+  function scheduleReconnect(base, rend, reason) {
+    if (intentionalDisconnect || reconnectTimer || !base) return;
     reconnectAttempt++;
-    const delay = Math.min(RECONNECT_BASE_MS * 2 ** (reconnectAttempt - 1), RECONNECT_MAX_MS);
-    setState(`reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempt})…`, "bad");
+    const hint = reason ? `${reason} — ` : "";
+    setState(`${hint}retry in ${RECONNECT_MS / 1000}s (attempt ${reconnectAttempt})…`, "bad");
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (intentionalDisconnect || !currentBase) return;
+      setState(`reconnecting… (attempt ${reconnectAttempt})`, "bad");
       openSession(pathFor(rend));
-    }, delay);
+    }, RECONNECT_MS);
   }
 
+  function restoreFullscreenIfNeeded() {
+    if (!preferFullscreen) return;
+    const wrap = document.querySelector(".videowrap");
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fsEl === wrap || !wrap) return;
+    try {
+      const req = wrap.requestFullscreen || wrap.webkitRequestFullscreen;
+      if (req) req.call(wrap).catch(() => { /* gesture policy — leave preferFullscreen set */ });
+    } catch (e) { /* unsupported */ }
+  }
 
   function closeSession() {
     if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
     if (apiTimer) { clearInterval(apiTimer); apiTimer = null; }
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    // Do not clear reconnectTimer here — catch/heal paths schedule after close.
+    // openSession / teardown clear it when starting a new attempt or stopping.
     if (pc) { pc.close(); pc = null; }
     video.srcObject = null;
     currentPath = null;
@@ -359,6 +371,7 @@
 
   function teardown() {
     intentionalDisconnect = true;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     closeSession();
     currentBase = null;
     loAvailable = false;
@@ -370,6 +383,7 @@
   }
 
   async function openSession(path) {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     closeSession();
     intentionalDisconnect = false;   // a new session is starting; arm auto-reconnect
     currentPath = path;
@@ -392,15 +406,16 @@
       if (!pc) return;
       if (pc.connectionState === "connected") {
         setState(`connected ${path}`, "ok");
-        reconnectAttempt = 0;               // link is good again — reset backoff
+        reconnectAttempt = 0;
         acquireWakeLock();
+        restoreFullscreenIfNeeded();
       } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         setState(pc.connectionState, "bad");
         // Only auto-recover from an UNEXPECTED drop — not a user-initiated
         // disconnect/channel-switch/quality-switch, which already have their
         // own deliberate teardown+reopen paths.
         if (!intentionalDisconnect && currentBase) {
-          scheduleReconnect(currentBase, rendition);
+          scheduleReconnect(currentBase, rendition, pc.connectionState);
         }
       }
     };
@@ -432,9 +447,13 @@
       apiTimer = setInterval(pollApiStats, 2000);
       pollApiStats();
     } catch (err) {
-      setState(`error: ${err.message}`, "bad");
+      const msg = err && err.message ? err.message : String(err);
+      setState(`error: ${msg}`, "bad");
       closeSession();
       updateQualityUI();
+      if (!intentionalDisconnect && currentBase) {
+        scheduleReconnect(currentBase, rendition, `error: ${msg}`);
+      }
     }
   }
 
@@ -688,9 +707,14 @@
     }
   });
   // Re-assert the transform on fullscreen enter/exit, belt-and-suspenders in
-  // case a browser resets inline styles across the transition.
+  // case a browser resets inline styles across the transition. Also remember
+  // preferFullscreen so heal can re-enter after a reconnect.
   for (const ev of ["fullscreenchange", "webkitfullscreenchange"]) {
-    document.addEventListener(ev, applyTransform);
+    document.addEventListener(ev, () => {
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      preferFullscreen = (fsEl === wrap);
+      applyTransform();
+    });
   }
 
   // ---- Chromecast (custom WHEP receiver) ---------------------------------------------

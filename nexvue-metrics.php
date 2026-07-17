@@ -61,15 +61,17 @@ function fail(int $status, string $message): never {
 }
 
 function metrics_timezone(): DateTimeZone {
+    // Reporting is Eastern Time. Override only if ops explicitly set
+    // NEXVUE_METRICS_TZ (e.g. for a non-NY edge); blank/unset → America/New_York.
     $tzName = getenv('NEXVUE_METRICS_TZ');
-    if (is_string($tzName) && $tzName !== '') {
-        try {
-            return new DateTimeZone($tzName);
-        } catch (Exception $e) {
-            fail(500, 'invalid NEXVUE_METRICS_TZ: ' . $tzName);
-        }
+    if (!is_string($tzName) || $tzName === '') {
+        $tzName = 'America/New_York';
     }
-    return new DateTimeZone(date_default_timezone_get());
+    try {
+        return new DateTimeZone($tzName);
+    } catch (Exception $e) {
+        fail(500, 'invalid NEXVUE_METRICS_TZ: ' . $tzName);
+    }
 }
 
 // ---- Parse & validate query params ---------------------------------------------
@@ -118,6 +120,7 @@ $windowMeta = [
     'range' => $rangeKey,
     'from' => $sinceTs,
     'to' => $untilTs,
+    'timezone' => metrics_timezone()->getName(),
 ];
 
 // ---- Open the database, READ-ONLY -------------------------------------------------
@@ -247,7 +250,7 @@ if ($view === 'weekday_hours') {
         $tsParams
     );
 
-    // Accumulate in PHP so weekday/hour use NEXVUE_METRICS_TZ (or PHP default),
+    // Accumulate in PHP so weekday/hour use America/New_York (or NEXVUE_METRICS_TZ),
     // not the SQLite connection's UTC assumption.
     $acc = [];
     foreach ($rows as $r) {

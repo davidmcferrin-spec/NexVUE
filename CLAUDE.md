@@ -61,6 +61,8 @@ specifically because this box can't get additional ports opened.
   CPU/memory + iGPU Video/Render %, `nexvue-metrics` + `nexvue-metrics.php`) landed
   ahead of schedule — separate from and not a
   substitute for the Phase 4 CheckMK health-monitoring plan below.
+  Metrics reporting timezone defaults to America/New_York (heatmap buckets,
+  chart labels, custom From/To); override with `NEXVUE_METRICS_TZ` only if needed.
   Remaining before Phase 1 is formally "done": burnt-in-clock latency
   measurement, flip the two Duo 2 connectors still set to Output back to
   Input (see README "DeckLink Duo 2 connector direction"), 72h soak.

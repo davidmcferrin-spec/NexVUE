@@ -22,10 +22,12 @@ Type=exec
 User=nexvue
 Group=nexvue
 
-# Poll targets — defaults assume TLS is enabled on both (see README's TLS
-# section). Set to http:// instead if either service is still plain HTTP.
+# Poll targets. MediaMTX defaults to https:// (TLS enabled in Phase 1).
+# Status daemon TLS is optional: when NEXVUE_STATUS_URL is unset the collector
+# tries http://127.0.0.1:9998 then https:// (same as nexvue-status.php).
+# Set NEXVUE_STATUS_URL to pin a single scheme if needed.
 #Environment=NEXVUE_MEDIAMTX_API_URL=https://127.0.0.1:9997
-#Environment=NEXVUE_STATUS_URL=https://127.0.0.1:9998
+#Environment=NEXVUE_STATUS_URL=http://127.0.0.1:9998
 
 # Collection tuning.
 #Environment=NEXVUE_METRICS_POLL_INTERVAL_S=15
@@ -47,12 +49,14 @@ ExecStart=/usr/bin/python3 /usr/local/bin/nexvue-metrics-server.py
 Restart=always
 RestartSec=2
 
-# CAP_PERFMON lets intel_gpu_top read i915 PMU as user nexvue. Ambient
-# capabilities are ignored when NoNewPrivileges=yes, so that knob is off
-# here; ProtectSystem/ProtectHome/PrivateTmp still apply. setup.sh also
-# setcap's /usr/bin/intel_gpu_top when possible.
-AmbientCapabilities=CAP_PERFMON
-CapabilityBoundingSet=CAP_PERFMON CAP_SETUID CAP_SETGID CAP_KILL
+# CAP_PERFMON lets intel_gpu_top read i915/xe PMU as user nexvue.
+# CAP_SYS_ADMIN is also required on some intel-gpu-tools builds (and is what
+# setup.sh setcap's onto the binary); without it in the bounding set, systemd
+# strips the file capability and samples come back empty. AmbientCapabilities
+# are ignored when NoNewPrivileges=yes, so that knob is off here;
+# ProtectSystem/ProtectHome/PrivateTmp still apply.
+AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN CAP_SETUID CAP_SETGID CAP_KILL
 NoNewPrivileges=no
 ProtectSystem=strict
 ProtectHome=yes

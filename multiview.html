@@ -198,8 +198,9 @@
   const grid = $("grid");
   const stateEl = $("state");
   const PANE_COUNT = 4;
-  const RECONNECT_BASE_MS = 2000;
-  const RECONNECT_MAX_MS = 30000;
+  const RECONNECT_MS = 5000;
+  let preferFullscreen = false;
+  let fsRestoreTimer = null;
 
   const PORT = { whep: 8889 };
   const PROTO = location.protocol === "https:" ? "https:" : "http:";
@@ -328,7 +329,9 @@
 
   function closePane(pane, intentional) {
     pane.intentionalClose = intentional;
-    if (pane.reconnectTimer) {
+    // Only clear reconnect when intentionally stopping; heal paths schedule
+    // after close. openPane clears the timer when starting a new attempt.
+    if (intentional && pane.reconnectTimer) {
       clearTimeout(pane.reconnectTimer);
       pane.reconnectTimer = null;
     }
@@ -341,23 +344,47 @@
     pane.video.muted = true;
   }
 
-  function scheduleReconnect(pane) {
+  function scheduleReconnect(pane, reason) {
     if (pane.intentionalClose || pane.reconnectTimer || !pane.base) return;
     pane.reconnectAttempt++;
-    const delay = Math.min(
-      RECONNECT_BASE_MS * 2 ** (pane.reconnectAttempt - 1),
-      RECONNECT_MAX_MS
+    const hint = reason ? `${reason} — ` : "";
+    setPaneStatus(
+      pane,
+      `${hint}retry in ${RECONNECT_MS / 1000}s…`,
+      "bad"
     );
-    setPaneStatus(pane, `retry ${Math.round(delay / 1000)}s…`, "bad");
     pane.reconnectTimer = setTimeout(() => {
       pane.reconnectTimer = null;
       if (pane.intentionalClose || !pane.base) return;
+      setPaneStatus(pane, `reconnecting…`, "bad");
       openPane(pane);
-    }, delay);
+    }, RECONNECT_MS);
+  }
+
+  function restoreFullscreenIfNeeded() {
+    if (!preferFullscreen) return;
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fsEl) return;
+    if (fsRestoreTimer) return;
+    fsRestoreTimer = setTimeout(() => {
+      fsRestoreTimer = null;
+      if (!preferFullscreen) return;
+      const still = document.fullscreenElement || document.webkitFullscreenElement;
+      if (still) return;
+      try {
+        const el = document.documentElement;
+        const req = el.requestFullscreen || el.webkitRequestFullscreen;
+        if (req) req.call(el).catch(() => { /* gesture policy */ });
+      } catch (e) { /* unsupported */ }
+    }, 100);
   }
 
   async function openPane(pane) {
     if (!pane.base) return;
+    if (pane.reconnectTimer) {
+      clearTimeout(pane.reconnectTimer);
+      pane.reconnectTimer = null;
+    }
     closePane(pane, false);
     pane.intentionalClose = false;
     const path = pathFor(pane.base);
@@ -381,10 +408,13 @@
       if (pc.connectionState === "connected") {
         setPaneStatus(pane, path, "ok");
         pane.reconnectAttempt = 0;
+        restoreFullscreenIfNeeded();
         updateGlobalState();
       } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         setPaneStatus(pane, pc.connectionState, "bad");
-        if (!pane.intentionalClose && pane.base) scheduleReconnect(pane);
+        if (!pane.intentionalClose && pane.base) {
+          scheduleReconnect(pane, pc.connectionState);
+        }
         updateGlobalState();
       }
     };
@@ -413,9 +443,10 @@
       if (!res.ok) throw new Error(`WHEP ${res.status}`);
       await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
     } catch (err) {
-      setPaneStatus(pane, `error: ${err.message}`, "bad");
+      const msg = err && err.message ? err.message : String(err);
+      setPaneStatus(pane, `error: ${msg}`, "bad");
       closePane(pane, false);
-      if (pane.base) scheduleReconnect(pane);
+      if (pane.base) scheduleReconnect(pane, `error: ${msg}`);
       updateGlobalState();
     }
   }
@@ -496,6 +527,12 @@
        document.documentElement.webkitRequestFullscreen).call(document.documentElement);
     }
   });
+  for (const ev of ["fullscreenchange", "webkitfullscreenchange"]) {
+    document.addEventListener(ev, () => {
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      preferFullscreen = !!fsEl;
+    });
+  }
 
   for (let i = 0; i < PANE_COUNT; i++) createPane(i);
   applyLayout("quad");
