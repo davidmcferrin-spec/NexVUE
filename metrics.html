@@ -154,6 +154,8 @@
   <div class="panel"><h2>Input lock status</h2><canvas id="c-inputs"></canvas></div>
   <div class="panel"><h2>Host CPU</h2><canvas id="c-cpu"></canvas></div>
   <div class="panel"><h2>Host memory</h2><canvas id="c-mem"></canvas></div>
+  <div class="panel"><h2>iGPU Video engine</h2><canvas id="c-gpu-video"></canvas></div>
+  <div class="panel"><h2>iGPU Render engine</h2><canvas id="c-gpu-render"></canvas></div>
 </div>
 
 <div class="panel">
@@ -451,6 +453,20 @@
         return { x: t.ts * 1000, y: total ? (100 * used / total) : 0 };
       }),
       borderColor: palette[5], backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, tension: 0.15
+    }], defaultYScale("%"));
+    makeChart("c-gpu-video", [{
+      label: "Video %",
+      data: rows.filter(t => t.gpu_video_pct != null).map(t => ({ x: t.ts * 1000, y: t.gpu_video_pct })),
+      borderColor: palette[6], backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, tension: 0.15
+    }, {
+      label: "VideoEnhance %",
+      data: rows.filter(t => t.gpu_video_enhance_pct != null).map(t => ({ x: t.ts * 1000, y: t.gpu_video_enhance_pct })),
+      borderColor: palette[3], backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, tension: 0.15
+    }], defaultYScale("%"));
+    makeChart("c-gpu-render", [{
+      label: "Render/3D %",
+      data: rows.filter(t => t.gpu_render_pct != null).map(t => ({ x: t.ts * 1000, y: t.gpu_render_pct })),
+      borderColor: palette[7], backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, tension: 0.15
     }], defaultYScale("%"));
   }
 

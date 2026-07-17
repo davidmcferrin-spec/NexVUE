@@ -86,6 +86,45 @@ class TestHostSampling(unittest.TestCase):
         self.assertAlmostEqual(nms._parse_loadavg("1.25 0.80 0.50 1/200 1234\n"), 1.25)
 
 
+class TestIntelGpuTopParse(unittest.TestCase):
+    SAMPLE = """
+{
+  "period": {"duration": 100.0, "unit": "ms"},
+  "frequency": {"requested": 1300.0, "actual": 1200.0},
+  "engines": {
+    "Render/3D/0": {"busy": 5.5, "sema": 0.0, "wait": 0.0},
+    "Blitter/0": {"busy": 0.0, "sema": 0.0, "wait": 0.0},
+    "Video/0": {"busy": 42.0, "sema": 0.0, "wait": 0.0},
+    "Video/1": {"busy": 18.0, "sema": 0.0, "wait": 0.0},
+    "VideoEnhance/0": {"busy": 7.25, "sema": 0.0, "wait": 0.0}
+  }
+}
+"""
+
+    def test_parse_engines_and_freq(self):
+        got = nms._parse_intel_gpu_top_json(self.SAMPLE)
+        self.assertAlmostEqual(got["gpu_video_pct"], 42.0)  # max of Video/0, Video/1
+        self.assertAlmostEqual(got["gpu_render_pct"], 5.5)
+        self.assertAlmostEqual(got["gpu_video_enhance_pct"], 7.25)
+        self.assertAlmostEqual(got["gpu_freq_mhz"], 1200.0)
+
+    def test_parse_ndjson_first_object(self):
+        nd = self.SAMPLE.strip() + "\n" + self.SAMPLE.strip()
+        got = nms._parse_intel_gpu_top_json(nd)
+        self.assertAlmostEqual(got["gpu_video_pct"], 42.0)
+
+    def test_parse_array_wrapper(self):
+        wrapped = "[" + self.SAMPLE.strip() + "]"
+        got = nms._parse_intel_gpu_top_json(wrapped)
+        self.assertAlmostEqual(got["gpu_render_pct"], 5.5)
+
+    def test_classify_engine(self):
+        self.assertEqual(nms._classify_gpu_engine("Video/0"), "video")
+        self.assertEqual(nms._classify_gpu_engine("VideoEnhance/0"), "enhance")
+        self.assertEqual(nms._classify_gpu_engine("Render/3D/0"), "render")
+        self.assertIsNone(nms._classify_gpu_engine("Blitter/0"))
+
+
 class TestSchemaAndRetention(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -98,7 +137,10 @@ class TestSchemaAndRetention(unittest.TestCase):
             cols = [r[1] for r in conn.execute("PRAGMA table_info(host_samples)")]
         self.assertEqual(
             cols,
-            ["ts", "cpu_pct", "mem_used_bytes", "mem_total_bytes", "load1"],
+            [
+                "ts", "cpu_pct", "mem_used_bytes", "mem_total_bytes", "load1",
+                "gpu_video_pct", "gpu_render_pct", "gpu_video_enhance_pct", "gpu_freq_mhz",
+            ],
         )
 
     def test_pruning_removes_old_host_samples(self):

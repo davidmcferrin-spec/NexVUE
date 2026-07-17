@@ -25,8 +25,9 @@ time-series samples in SQLite (stdlib `sqlite3` — no pip, no new dependency):
   - nexvue-status daemon   -> per-input signal lock, detected format,
                               reference lock/format
   - /proc/stat, meminfo, loadavg -> host CPU %, memory used/total, load1
-                              (capacity correlation for Metrics — not a
-                              CheckMK substitute)
+  - intel_gpu_top -J (optional) -> iGPU Video/Render/VideoEnhance busy %
+                              and frequency (capacity correlation for
+                              Metrics — not a CheckMK substitute)
 
 Old samples are pruned hourly (NEXVUE_METRICS_RETENTION_DAYS, default 30) so
 the SQLite file does not grow unbounded.
@@ -41,6 +42,7 @@ import os
 import socket
 import sqlite3
 import ssl
+import subprocess
 import threading
 import time
 import urllib.error
@@ -67,6 +69,11 @@ _db_lock = threading.Lock()
 _prev_bytes: dict = {}
 # Previous /proc/stat counters for CPU % between polls.
 _prev_cpu: tuple | None = None
+# Rate-limit intel_gpu_top failure logs (seconds between warnings).
+_gpu_warn_last = 0.0
+_GPU_WARN_EVERY_S = 300.0
+INTEL_GPU_TOP = os.environ.get("NEXVUE_INTEL_GPU_TOP", "intel_gpu_top")
+INTEL_GPU_TOP_TIMEOUT_S = float(os.environ.get("NEXVUE_INTEL_GPU_TOP_TIMEOUT_S", "2.5"))
 
 
 def _unverified_ssl_context() -> "ssl.SSLContext | None":
@@ -180,6 +187,134 @@ def sample_host() -> tuple[float | None, int, int, float]:
     return cpu_pct, mem_used, mem_total, load1
 
 
+def _classify_gpu_engine(name: str) -> str | None:
+    """Map an intel_gpu_top engine name to video | enhance | render."""
+    n = name.lower().replace(" ", "")
+    if "videoenhance" in n or "vebox" in n or n.startswith("vecs"):
+        return "enhance"
+    if n.startswith("video") or n.startswith("vcs") or "/vcs" in n:
+        return "video"
+    if "render" in n or n.startswith("rcs") or "3d" in n:
+        return "render"
+    return None
+
+
+def _parse_intel_gpu_top_json(text: str) -> dict:
+    """
+    Parse one sample from intel_gpu_top -J output.
+
+    Returns dict with keys gpu_video_pct, gpu_render_pct, gpu_video_enhance_pct,
+    gpu_freq_mhz (values may be None if absent). Raises ValueError if unusable.
+    """
+    raw = text.strip()
+    if not raw:
+        raise ValueError("empty intel_gpu_top output")
+    # Man page: wrap NDJSON in [] — also accept a single object or first object.
+    if raw.startswith("["):
+        arr = json.loads(raw)
+        if not arr:
+            raise ValueError("empty JSON array")
+        obj = arr[0]
+    else:
+        obj, _ = json.JSONDecoder().raw_decode(raw)
+
+    if not isinstance(obj, dict):
+        raise ValueError("sample is not an object")
+
+    engines = obj.get("engines")
+    video_vals: list[float] = []
+    render_vals: list[float] = []
+    enhance_vals: list[float] = []
+
+    if isinstance(engines, dict):
+        items = engines.items()
+    elif isinstance(engines, list):
+        items = []
+        for e in engines:
+            if isinstance(e, dict):
+                items.append((e.get("name") or e.get("engine") or "", e))
+    else:
+        items = []
+
+    for name, info in items:
+        if not isinstance(info, dict):
+            continue
+        busy = info.get("busy")
+        if busy is None:
+            continue
+        try:
+            pct = float(busy)
+        except (TypeError, ValueError):
+            continue
+        kind = _classify_gpu_engine(str(name))
+        if kind == "video":
+            video_vals.append(pct)
+        elif kind == "enhance":
+            enhance_vals.append(pct)
+        elif kind == "render":
+            render_vals.append(pct)
+
+    freq_mhz = None
+    freq = obj.get("frequency")
+    if isinstance(freq, dict):
+        for key in ("actual", "requested", "cur", "current"):
+            if freq.get(key) is not None:
+                try:
+                    freq_mhz = float(freq[key])
+                    break
+                except (TypeError, ValueError):
+                    pass
+    elif isinstance(obj.get("freq"), (int, float)):
+        freq_mhz = float(obj["freq"])
+
+    return {
+        "gpu_video_pct": max(video_vals) if video_vals else None,
+        "gpu_render_pct": max(render_vals) if render_vals else None,
+        "gpu_video_enhance_pct": max(enhance_vals) if enhance_vals else None,
+        "gpu_freq_mhz": freq_mhz,
+    }
+
+
+def sample_gpu() -> dict:
+    """
+    One-shot intel_gpu_top JSON sample. Returns empty-ish dict with None fields
+    on failure; rate-limits warning logs.
+    """
+    global _gpu_warn_last
+    empty = {
+        "gpu_video_pct": None,
+        "gpu_render_pct": None,
+        "gpu_video_enhance_pct": None,
+        "gpu_freq_mhz": None,
+    }
+    try:
+        # -s 100 ≈ one 100ms sample; -o - writes JSON to stdout (NDJSON stream).
+        proc = subprocess.run(
+            [INTEL_GPU_TOP, "-J", "-s", "100", "-o", "-"],
+            capture_output=True,
+            text=True,
+            timeout=INTEL_GPU_TOP_TIMEOUT_S,
+            check=False,
+        )
+        out = (proc.stdout or "").strip()
+        if not out:
+            err = (proc.stderr or "").strip() or f"exit {proc.returncode}"
+            raise RuntimeError(err)
+        return _parse_intel_gpu_top_json(out)
+    except FileNotFoundError:
+        now = time.time()
+        if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
+            log.warning("intel_gpu_top not found — install intel-gpu-tools for iGPU metrics")
+            _gpu_warn_last = now
+        return empty
+    except (subprocess.TimeoutExpired, RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
+        now = time.time()
+        if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
+            log.warning("intel GPU sample failed: %s", exc)
+            _gpu_warn_last = now
+        return empty
+
+
 # ---- Database --------------------------------------------------------------------
 
 def _ensure_db_readable() -> None:
@@ -258,25 +393,35 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_viewer_sessions_remote ON viewer_sessions(remote_addr);
             CREATE INDEX IF NOT EXISTS idx_viewer_sessions_last_seen ON viewer_sessions(last_seen);
 
-            -- Host capacity samples (CPU/memory/load) for Metrics correlation.
-            -- Not a health monitor — CheckMK remains Phase 4 for that.
+            -- Host capacity samples (CPU/memory/load + optional iGPU engines)
+            -- for Metrics correlation. Not a health monitor — CheckMK remains
+            -- Phase 4 for that. GPU columns filled when intel_gpu_top works.
             CREATE TABLE IF NOT EXISTS host_samples (
                 ts INTEGER NOT NULL PRIMARY KEY,
                 cpu_pct REAL,
                 mem_used_bytes INTEGER,
                 mem_total_bytes INTEGER,
-                load1 REAL
+                load1 REAL,
+                gpu_video_pct REAL,
+                gpu_render_pct REAL,
+                gpu_video_enhance_pct REAL,
+                gpu_freq_mhz REAL
             );
         """)
-        # Safe migration for databases created before the `user` column
-        # existed — ALTER TABLE ADD COLUMN has no "IF NOT EXISTS" in SQLite,
-        # so catch the duplicate-column error rather than require anyone to
-        # delete and lose their existing history.
-        try:
-            conn.execute("ALTER TABLE viewer_sessions ADD COLUMN user TEXT")
-        except sqlite3.OperationalError as exc:
-            if "duplicate column" not in str(exc).lower():
-                raise
+        # Safe migrations for databases created before later columns existed —
+        # ALTER TABLE ADD COLUMN has no "IF NOT EXISTS" in SQLite.
+        for ddl in (
+            "ALTER TABLE viewer_sessions ADD COLUMN user TEXT",
+            "ALTER TABLE host_samples ADD COLUMN gpu_video_pct REAL",
+            "ALTER TABLE host_samples ADD COLUMN gpu_render_pct REAL",
+            "ALTER TABLE host_samples ADD COLUMN gpu_video_enhance_pct REAL",
+            "ALTER TABLE host_samples ADD COLUMN gpu_freq_mhz REAL",
+        ):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
     log.info("database ready at %s", DB_PATH)
     _ensure_db_readable()
 
@@ -397,15 +542,22 @@ def poll_once() -> None:
     except (urllib.error.URLError, TimeoutError, socket.timeout, ValueError, OSError) as exc:
         log.warning("status daemon poll failed: %s", exc)
 
-    # --- Host CPU / memory / load (capacity analytics for Metrics) ---
+    # --- Host CPU / memory / load + optional iGPU engines ---
     cpu_pct, mem_used, mem_total, load1 = sample_host()
+    gpu = sample_gpu()
     if cpu_pct is not None:
         try:
             with _db_lock, sqlite3.connect(DB_PATH) as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO host_samples "
-                    "(ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1) VALUES (?,?,?,?,?)",
-                    (now, cpu_pct, mem_used, mem_total, load1),
+                    "(ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1, "
+                    " gpu_video_pct, gpu_render_pct, gpu_video_enhance_pct, gpu_freq_mhz) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (
+                        now, cpu_pct, mem_used, mem_total, load1,
+                        gpu.get("gpu_video_pct"), gpu.get("gpu_render_pct"),
+                        gpu.get("gpu_video_enhance_pct"), gpu.get("gpu_freq_mhz"),
+                    ),
                 )
                 conn.commit()
         except OSError as exc:

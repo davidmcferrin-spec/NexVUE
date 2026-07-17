@@ -81,10 +81,21 @@ apt-get install -y -qq \
   linux-generic-hwe-24.04 \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
-  intel-media-va-driver-non-free vainfo \
+  intel-media-va-driver-non-free vainfo intel-gpu-tools \
   build-essential curl ca-certificates jq \
   php-sqlite3
 ok "apt packages installed (python: stdlib only — no pip; php-sqlite3 for metrics.php)"
+
+# Allow the metrics collector (user nexvue) to read iGPU PMU without root.
+# AmbientCapabilities on the unit also requests CAP_PERFMON; setcap covers
+# the case where the binary is invoked directly during bring-up checks.
+if command -v setcap >/dev/null 2>&1 && [ -x /usr/bin/intel_gpu_top ]; then
+  setcap cap_perfmon,cap_sys_admin+ep /usr/bin/intel_gpu_top 2>/dev/null \
+    || setcap cap_sys_admin+ep /usr/bin/intel_gpu_top 2>/dev/null \
+    || warn "setcap on intel_gpu_top failed — iGPU metrics may need CAP_PERFMON on nexvue-metrics.service"
+else
+  warn "intel_gpu_top missing or setcap unavailable — iGPU Metrics charts stay empty until intel-gpu-tools is installed"
+fi
 
 step "2/5 MediaMTX"
 if command -v mediamtx >/dev/null || [ -x /usr/local/bin/mediamtx ]; then

@@ -304,7 +304,8 @@ if ($view === 'weekday_hours') {
 
 if ($view === 'host') {
     $stmt = $db->prepare(
-        'SELECT ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1
+        'SELECT ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1,
+                gpu_video_pct, gpu_render_pct, gpu_video_enhance_pct, gpu_freq_mhz
          FROM host_samples WHERE ts >= :since AND ts <= :until ORDER BY ts ASC'
     );
     if ($stmt === false) {

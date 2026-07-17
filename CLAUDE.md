@@ -19,9 +19,10 @@ media) — NexVUE mirrors that architecture, self-hosted.
 
 A `nexvue-metrics` component provides usage/analytics history (bandwidth,
 viewers, active streams, input lock/format, per-viewer IP/channel
-drill-down, Mon–Fri hour-of-day heatmap, host CPU/memory for capacity
-correlation) — explicitly NOT the health/uptime monitoring planned for
-CheckMK in Phase 4. Split deliberately across two pieces with no shared
+drill-down, Mon–Fri hour-of-day heatmap, host CPU/memory and Intel iGPU
+Video/Render engine busy % for capacity correlation) — explicitly NOT the
+health/uptime monitoring planned for CheckMK in Phase 4. Split deliberately
+across two pieces with no shared
 network surface: `nexvue-metrics-server.py` is a background collector with
 NO listening port at all (writes to SQLite only); `nexvue-metrics.php`
 (runs inside Apache) reads that SQLite file directly, read-only, and serves
@@ -57,7 +58,7 @@ specifically because this box can't get additional ports opened.
   all (collector writes SQLite, PHP-in-Apache reads it directly).
   Usage-metrics dashboard (bandwidth/viewers/streams/input-lock/per-viewer
   IP-channel drill-down, custom from/to ranges, weekday heatmap, host
-  CPU/memory, `nexvue-metrics` + `nexvue-metrics.php`) landed
+  CPU/memory + iGPU Video/Render %, `nexvue-metrics` + `nexvue-metrics.php`) landed
   ahead of schedule — separate from and not a
   substitute for the Phase 4 CheckMK health-monitoring plan below.
   Remaining before Phase 1 is formally "done": burnt-in-clock latency

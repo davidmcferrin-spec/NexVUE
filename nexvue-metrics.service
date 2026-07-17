@@ -1,13 +1,15 @@
 # /etc/systemd/system/nexvue-metrics.service
 #
 # NexVUE usage/analytics COLLECTOR — bandwidth, viewer counts, active
-# streams, input lock/format, per-viewer IP/channel drill-down. NOT
-# health/uptime monitoring (that's CheckMK's job per the project roadmap).
+# streams, input lock/format, per-viewer IP/channel drill-down, host
+# CPU/memory, and (when intel_gpu_top works) iGPU Video/Render busy %.
+# NOT health/uptime monitoring (that's CheckMK's job per the project roadmap).
 #
 # This process does not listen on any port — it only polls MediaMTX and
-# nexvue-status, and writes to SQLite. Reading the data back out is Apache +
-# PHP's job (nexvue-metrics.php), querying the same SQLite file directly.
-# There is nothing here to open a firewall rule for.
+# nexvue-status (and optionally intel_gpu_top), and writes to SQLite.
+# Reading the data back out is Apache + PHP's job (nexvue-metrics.php),
+# querying the same SQLite file directly. There is nothing here to open a
+# firewall rule for.
 
 [Unit]
 Description=NexVUE usage metrics collector (no network listener)
@@ -45,7 +47,13 @@ ExecStart=/usr/bin/python3 /usr/local/bin/nexvue-metrics-server.py
 Restart=always
 RestartSec=2
 
-NoNewPrivileges=yes
+# CAP_PERFMON lets intel_gpu_top read i915 PMU as user nexvue. Ambient
+# capabilities are ignored when NoNewPrivileges=yes, so that knob is off
+# here; ProtectSystem/ProtectHome/PrivateTmp still apply. setup.sh also
+# setcap's /usr/bin/intel_gpu_top when possible.
+AmbientCapabilities=CAP_PERFMON
+CapabilityBoundingSet=CAP_PERFMON CAP_SETUID CAP_SETGID CAP_KILL
+NoNewPrivileges=no
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

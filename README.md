@@ -574,7 +574,7 @@ Open `http://<edge-ip>/metrics.html` (top nav → Metrics).
 | `viewers` | Per-viewer session drill-down: IP, channel, user (blank until Phase 2 auth), first/last seen, duration, bytes served, live/ended. Add `&channel=chN` to filter to one channel. |
 | `inputs` | Per-DeckLink-input lock/format history as a time series. Powers the input-lock chart. |
 | `weekday_hours` | Mon–Fri × hour-of-day buckets (avg/peak bandwidth & viewers) for the heatmap. Timezone: `NEXVUE_METRICS_TZ` or PHP default. |
-| `host` | Host CPU %, memory used/total, load1 time series — capacity correlation on the Metrics page, **not** a CheckMK substitute. |
+| `host` | Host CPU %, memory used/total, load1, and (when available) iGPU Video/Render/VideoEnhance busy % + GPU freq — capacity correlation on the Metrics page, **not** a CheckMK substitute. Requires `intel-gpu-tools` / `intel_gpu_top` + CAP_PERFMON (see setup). |
 
 `range` accepts `15m`, `1h`, `6h`, `24h`, `7d`, `30d` — matching the
 dashboard's preset buttons. For a specific day or window, pass Unix epoch
@@ -588,7 +588,15 @@ channel 0 right now. Custom:
 `nexvue-metrics.php?view=totals&from=1710000000&to=1710086400`.
 
 After upgrading the collector, restart `nexvue-metrics` so it creates the
-`host_samples` table (`sudo systemctl restart nexvue-metrics`).
+`host_samples` table / new columns (`sudo systemctl restart nexvue-metrics`).
+
+**iGPU (Quick Sync) charts.** The collector samples `intel_gpu_top -J` each
+poll when `intel-gpu-tools` is installed. Video engine % is the primary
+encode-load signal; Render/3D and VideoEnhance are also stored. If the tool
+is missing, lacks PMU permission, or the kernel uses `xe` without a working
+`intel_gpu_top`, those series stay empty (CPU/memory still collect). `setup.sh`
+installs `intel-gpu-tools`, `setcap`s `intel_gpu_top` when possible, and the
+unit grants `AmbientCapabilities=CAP_PERFMON`.
 
 ### Configuration
 
@@ -601,6 +609,8 @@ After upgrading the collector, restart `nexvue-metrics` so it creates the
 | `NEXVUE_METRICS_POLL_INTERVAL_S` | `15` | Seconds between polls |
 | `NEXVUE_METRICS_RETENTION_DAYS` | `30` | Samples/sessions older than this are pruned hourly |
 | `NEXVUE_METRICS_DB` | `/var/lib/nexvue/metrics.db` | SQLite file path (auto-created via `StateDirectory=`) |
+| `NEXVUE_INTEL_GPU_TOP` | `intel_gpu_top` | Binary path for iGPU sampling |
+| `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` | `2.5` | Subprocess timeout for one JSON sample |
 
 If either MediaMTX or the status daemon is still plain HTTP (TLS not yet
 configured — see the TLS section above), set the corresponding `_URL`
