@@ -85,6 +85,7 @@
     display: flex; justify-content: flex-start; align-items: center;
   }
   .videowrap {
+    position: relative;
     width: 100%;
     max-height: 100%;
     aspect-ratio: 16 / 9;
@@ -93,6 +94,30 @@
     width: 100%; height: 100%; display: block; object-fit: contain;
     background: #000; border: 1px solid var(--edge); border-radius: 4px;
   }
+  #kicked-overlay {
+    position: absolute; inset: 0; z-index: 2;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px; padding: 24px; text-align: center;
+    background: rgba(20, 24, 29, .92); border: 1px solid var(--edge); border-radius: 4px;
+    color: var(--text); pointer-events: none;
+  }
+  #kicked-overlay[hidden] { display: none; }
+  #kicked-overlay .kicked-title { color: var(--bad); font-weight: 600; font-size: 16px; }
+  #kicked-overlay .kicked-reason { color: var(--dim); font-size: 13px; max-width: 36em; }
+  #kicked-overlay .kicked-hint { color: var(--dim); font-size: 12px; margin-top: 4px; }
+  #cc-overlay {
+    position: absolute; left: 6%; right: 6%; bottom: 8%; z-index: 1;
+    text-align: center; pointer-events: none;
+    font: 600 2.4vmin/1.35 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    color: #fff; text-shadow: 0 1px 2px #000, 0 0 6px #000;
+    white-space: pre-line;
+  }
+  #cc-overlay:not([hidden]) span, #cc-overlay {
+    background: rgba(0, 0, 0, .55);
+    padding: 0.2em 0.5em;
+    border-radius: 2px;
+  }
+  #cc-overlay[hidden] { display: none; }
   /* Mirror/flip transforms are applied inline via JS (not CSS classes) so they
      survive fullscreen — the browser's fullscreen styling can override a
      stylesheet `transform`, but not an inline one. Fullscreen targets the
@@ -120,9 +145,21 @@
     display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 8px; max-width: 1280px; margin: 0 auto;
   }
-  .stat { background: var(--bg); border: 1px solid var(--edge); border-radius: 4px; padding: 8px 10px; }
+  .stat {
+    background: var(--bg); border: 1px solid var(--edge); border-radius: 4px; padding: 8px 10px;
+    cursor: help;
+  }
+  .stat:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
   .stat .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
   .stat .v { font-size: 16px; margin-top: 2px; }
+  #stat-tip {
+    display: none; position: fixed; z-index: 60; max-width: 320px;
+    padding: 8px 10px; background: var(--panel); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 4px;
+    font: 12px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    box-shadow: 0 4px 16px rgba(0,0,0,.45); pointer-events: none;
+  }
+  #stat-tip.visible { display: block; }
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
     background: rgba(0,0,0,.6); align-items: center; justify-content: center; padding: 16px;
@@ -169,6 +206,7 @@
   <span style="border-left:1px solid var(--edge);height:20px"></span>
   <button id="mirror" class="tgl" title="Reflect left-right (confidence monitor)">Mirror ↔</button>
   <button id="flip" class="tgl" title="Reflect top-bottom (inverted mounts)">Flip ↕</button>
+  <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
   <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip)">⛶ Fullscreen</button>
   <button id="cast" class="tgl" disabled title="Cast to Chromecast / Cast device (requires Cast App ID — see README)">Cast</button>
 </div>
@@ -177,6 +215,12 @@
   <div class="videowrap">
     <video id="video" autoplay playsinline controls muted></video>
     <!-- muted: browsers block un-muted autoplay; unmute via controls once playing -->
+    <div id="cc-overlay" hidden aria-live="polite"></div>
+    <div id="kicked-overlay" hidden role="status" aria-live="polite">
+      <div class="kicked-title">Disconnected by an administrator</div>
+      <div class="kicked-reason" id="kicked-reason"></div>
+      <div class="kicked-hint">Select a channel to reconnect</div>
+    </div>
   </div>
 </div>
 </div>
@@ -187,22 +231,23 @@
   </button>
   <div class="stats-panel" id="stats-panel">
     <div id="stats">
-      <div class="stat"><div class="k">Rendition</div><div class="v" id="s-rend">—</div></div>
-      <div class="stat"><div class="k">Resolution / FPS</div><div class="v" id="s-res">—</div></div>
-      <div class="stat"><div class="k">My video bitrate</div><div class="v" id="s-vbr">—</div></div>
-      <div class="stat"><div class="k">RTT (ICE)</div><div class="v" id="s-rtt">—</div></div>
-      <div class="stat"><div class="k">Jitter buffer</div><div class="v" id="s-jb">—</div></div>
-      <div class="stat"><div class="k">Loss (1s)</div><div class="v" id="s-loss">—</div></div>
-      <div class="stat"><div class="k">Frames dropped</div><div class="v" id="s-drop">—</div></div>
-      <div class="stat"><div class="k">Viewers (path)</div><div class="v" id="s-viewers">—</div></div>
-      <div class="stat"><div class="k">Path egress</div><div class="v" id="s-chout">—</div></div>
-      <div class="stat"><div class="k">Edge egress (all)</div><div class="v" id="s-allout">—</div></div>
-      <div class="stat"><div class="k">SDI input</div><div class="v" id="s-input">—</div></div>
-      <div class="stat"><div class="k">Reference</div><div class="v" id="s-ref">—</div></div>
-      <div class="stat"><div class="k">Screen awake</div><div class="v" id="s-wake">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Which encode you're watching — HI (full) or LO (reduced). &quot;(auto)&quot; means the player switches based on packet loss."><div class="k">Rendition</div><div class="v" id="s-rend">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Frame size and frame rate of the video as decoded by this browser."><div class="k">Resolution / FPS</div><div class="v" id="s-res">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Video data rate this browser is currently receiving for its own session."><div class="k">My video bitrate</div><div class="v" id="s-vbr">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Network round-trip time between this browser and the edge server, measured on the WebRTC connection. Lower is better; LAN is typically under 5 ms."><div class="k">RTT (ICE)</div><div class="v" id="s-rtt">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Extra delay the browser adds to smooth out uneven packet arrival. This is added latency — near 0 ms is ideal on a LAN."><div class="k">Jitter buffer</div><div class="v" id="s-jb">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Percentage of video packets lost over the last second. Sustained loss above 3% triggers an automatic switch to the LO rendition."><div class="k">Loss (1s)</div><div class="v" id="s-loss">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Total video frames the browser discarded because they arrived too late to display."><div class="k">Frames dropped</div><div class="v" id="s-drop">—</div></div>
+      <div class="stat" tabindex="0" data-tip="How many viewers are currently connected to this stream on the edge server (all sessions, not just yours)."><div class="k">Viewers (path)</div><div class="v" id="s-viewers">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Total outbound bandwidth the edge server is sending for this channel, across all its viewers."><div class="k">Path egress</div><div class="v" id="s-chout">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Total outbound bandwidth from the edge server across every channel and viewer."><div class="k">Edge egress (all)</div><div class="v" id="s-allout">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Video format detected on the DeckLink SDI input for this channel, or NO SIGNAL if nothing is connected."><div class="k">SDI input</div><div class="v" id="s-input">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Genlock reference status on the capture card — locked to house sync, or free-running."><div class="k">Reference</div><div class="v" id="s-ref">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Whether the browser holds a screen wake lock so the display won't sleep during playback."><div class="k">Screen awake</div><div class="v" id="s-wake">—</div></div>
     </div>
   </div>
 </div>
+<div id="stat-tip" role="tooltip" aria-hidden="true"></div>
 
 <div id="qr-modal" class="qr-modal" role="dialog" aria-modal="true" aria-labelledby="qr-title" hidden>
   <div class="qr-panel">
@@ -217,6 +262,17 @@
 </div>
 
 <script src="nexvue-qr.js"></script>
+<script src="nexvue-captions.js"></script>
+<!-- Cast Web Sender requires __onGCastApiAvailable before cast_sender.js loads. -->
+<script>
+window.__onGCastApiAvailable = function (isAvailable) {
+  if (typeof window.__nexvueInitCast === "function") {
+    window.__nexvueInitCast(!!isAvailable);
+  } else {
+    window.__nexvueCastPending = !!isAvailable;
+  }
+};
+</script>
 <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 <script>
 "use strict";
@@ -227,6 +283,7 @@
   // Chromecast custom receiver App ID from Google Cast Developer Console.
   // Replace after registering https://<edge>/cast-receiver.html as the receiver URL.
   // Override at runtime: localStorage.setItem("nexvue-cast-app-id", "YOUR_APP_ID")
+  // then reload the player.
   const CAST_APP_ID_DEFAULT = "";
   const CAST_NS = "urn:x-cast:com.nexvue.whep";
 
@@ -234,6 +291,7 @@
   let pc = null, statsTimer = null, apiTimer = null;
   let currentBase = null;       // e.g. "ch3" (channel identity)
   let currentPath = null;       // e.g. "ch3" or "ch3lo" (stream being watched)
+  let currentSessionId = null;  // MediaMTX WebRTC UUID from WHEP Location header
   let qualityMode = "auto";     // "auto" | "manual"
   let rendition = "hi";         // "hi" | "lo" (current or desired)
   let loAvailable = false;      // does currentBase publish a lo path?
@@ -241,6 +299,21 @@
   let prevLost = 0, prevRecv = 0, haveLossBaseline = false;
   let badSeconds = 0, goodSeconds = 0, lastSwitchMs = 0;
   let prevApi = null;
+
+  // Closed captions — side channel (nexvue-captions.php), not burned into video.
+  const ccOverlay = $("cc-overlay");
+  const ccBtn = $("cc");
+  let captionsOn = NexVueCaptions.getPref();
+  let lastCue = { text: "", clear: true, seq: 0, service: "CC1" };
+  function paintCaptions() {
+    NexVueCaptions.renderOverlay(ccOverlay, lastCue, captionsOn);
+  }
+  const captionClient = NexVueCaptions.connect((cue) => {
+    lastCue = cue;
+    paintCaptions();
+  });
+  ccBtn.classList.toggle("active", captionsOn);
+  paintCaptions();
 
   // Auto-switch policy constants (mirror these in the Phase 2 portal player)
   const DOWN_LOSS = 0.03, DOWN_AFTER_S = 3;
@@ -331,6 +404,58 @@
     }
   });
 
+  function parseWhepSessionId(res) {
+    const loc = res.headers.get("Location") || res.headers.get("location") || "";
+    const m = String(loc).match(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+    );
+    return m ? m[0] : null;
+  }
+
+  function hideKickedOverlay() {
+    const el = $("kicked-overlay");
+    el.hidden = true;
+    $("kicked-reason").textContent = "";
+  }
+
+  function showKickedOverlay(reason) {
+    const el = $("kicked-overlay");
+    const reasonEl = $("kicked-reason");
+    // reason from kick_check may be HTML-escaped; textContent displays entities literally —
+    // decode a single pass of common entities so the admin message reads cleanly.
+    reasonEl.textContent = decodeKickReason(reason || "");
+    reasonEl.hidden = !reasonEl.textContent;
+    el.hidden = false;
+  }
+
+  function decodeKickReason(s) {
+    return String(s)
+      .replace(/&quot;/g, '"')
+      .replace(/&#039;/g, "'")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&");
+  }
+
+  async function checkKicked(sessionId) {
+    const q = new URLSearchParams({ action: "kick_check" });
+    if (sessionId) q.set("session_id", sessionId);
+    const res = await fetch(`nexvue-ops.php?${q}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return { kicked: !!data.kicked, reason: data.reason || "" };
+  }
+
+  function applyKicked(reason) {
+    intentionalDisconnect = true;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    closeSession();
+    currentSessionId = null;
+    showKickedOverlay(reason);
+    setState("disconnected by administrator", "bad");
+    updateQualityUI();
+  }
+
   function scheduleReconnect(base, rend, reason) {
     if (intentionalDisconnect || reconnectTimer || !base) return;
     reconnectAttempt++;
@@ -342,6 +467,21 @@
       setState(`reconnecting… (attempt ${reconnectAttempt})`, "bad");
       openSession(pathFor(rend));
     }, RECONNECT_MS);
+  }
+
+  // Ask ops whether this drop was an admin kick before self-healing.
+  // Fail open: registry/network errors still allow reconnect (wall monitors).
+  async function maybeReconnect(base, rend, reason) {
+    if (intentionalDisconnect || !base) return;
+    const sid = currentSessionId;
+    try {
+      const result = await checkKicked(sid);
+      if (result.kicked) {
+        applyKicked(result.reason);
+        return;
+      }
+    } catch (e) { /* heal as usual */ }
+    scheduleReconnect(base, rend, reason);
   }
 
   function restoreFullscreenIfNeeded() {
@@ -363,6 +503,7 @@
     if (pc) { pc.close(); pc = null; }
     video.srcObject = null;
     currentPath = null;
+    currentSessionId = null;
     prevBytes = 0; prevTs = 0;
     prevLost = 0; prevRecv = 0; haveLossBaseline = false;
     badSeconds = 0; goodSeconds = 0;
@@ -375,6 +516,8 @@
     closeSession();
     currentBase = null;
     loAvailable = false;
+    hideKickedOverlay();
+    captionClient.setChannel(null);
     if (wakeLock) { wakeLock.release(); wakeLock = null; }
     $("s-wake").textContent = "—"; $("s-wake").style.color = "";
     ["s-viewers", "s-chout", "s-allout"].forEach(id => $(id).textContent = "—");
@@ -386,6 +529,7 @@
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     closeSession();
     intentionalDisconnect = false;   // a new session is starting; arm auto-reconnect
+    hideKickedOverlay();
     currentPath = path;
     setState(`connecting ${path}…`);
     updateQualityUI();
@@ -413,9 +557,10 @@
         setState(pc.connectionState, "bad");
         // Only auto-recover from an UNEXPECTED drop — not a user-initiated
         // disconnect/channel-switch/quality-switch, which already have their
-        // own deliberate teardown+reopen paths.
+        // own deliberate teardown+reopen paths. Admin kicks are detected via
+        // kick_check before scheduleReconnect runs.
         if (!intentionalDisconnect && currentBase) {
-          scheduleReconnect(currentBase, rendition, pc.connectionState);
+          maybeReconnect(currentBase, rendition, pc.connectionState);
         }
       }
     };
@@ -441,6 +586,7 @@
         body: pc.localDescription.sdp
       });
       if (!res.ok) throw new Error(`WHEP endpoint returned ${res.status}`);
+      currentSessionId = parseWhepSessionId(res);
       await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
 
       statsTimer = setInterval(pollRtcStats, 1000);
@@ -448,11 +594,13 @@
       pollApiStats();
     } catch (err) {
       const msg = err && err.message ? err.message : String(err);
+      const sid = currentSessionId;
       setState(`error: ${msg}`, "bad");
       closeSession();
+      currentSessionId = sid; // preserve for kick_check during heal
       updateQualityUI();
       if (!intentionalDisconnect && currentBase) {
-        scheduleReconnect(currentBase, rendition, `error: ${msg}`);
+        maybeReconnect(currentBase, rendition, `error: ${msg}`);
       }
     }
   }
@@ -465,6 +613,7 @@
     // link can't carry it. Manual LO is honored if the path exists.
     if (qualityMode === "auto") rendition = "hi";
     if (rendition === "lo" && !loAvailable) rendition = "hi";
+    captionClient.setChannel(base);
     openSession(pathFor(rendition));
   }
 
@@ -695,6 +844,20 @@
     flp = !flp; $("flip").classList.toggle("active", flp); applyTransform();
   });
 
+  ccBtn.addEventListener("click", () => {
+    captionsOn = !captionsOn;
+    NexVueCaptions.setPref(captionsOn);
+    ccBtn.classList.toggle("active", captionsOn);
+    paintCaptions();
+    // Refresh Cast payload if a session is already up.
+    try {
+      if (castReady && cast.framework) {
+        const session = cast.framework.CastContext.getInstance().getCurrentSession();
+        if (session && currentBase) sendCastLaunch(session);
+      }
+    } catch { /* cast not ready */ }
+  });
+
   // Fullscreen the WRAPPER (not the video element), so the video's inline
   // transform is never overridden by the browser's fullscreen video styling.
   const wrap = document.querySelector(".videowrap");
@@ -720,8 +883,10 @@
   // ---- Chromecast (custom WHEP receiver) ---------------------------------------------
   // Cast cannot play video.srcObject (WebRTC). The STB loads cast-receiver.html
   // and opens its own WHEP session to the edge.
+  // Google requires window.__onGCastApiAvailable before cast_sender.js (see head).
   const castBtn = $("cast");
   let castReady = false;
+  let castInitStarted = false;
 
   function castAppId() {
     try {
@@ -731,12 +896,19 @@
     return CAST_APP_ID_DEFAULT;
   }
 
+  function castDisabledHint() {
+    return castAppId()
+      ? "cast: SDK unavailable (HTTPS / Chrome / gstatic)"
+      : "cast: set App ID — see README";
+  }
+
   function castPayload() {
     if (!currentBase) return null;
     return {
       whepBase: whepBase(),
       path: currentBase,
       rendition: rendition === "lo" && loAvailable ? "lo" : "hi",
+      captions: !!captionsOn,
     };
   }
 
@@ -745,9 +917,14 @@
     if (!castReady || !appId) {
       castBtn.disabled = true;
       castBtn.title = appId
-        ? "Cast SDK not available in this browser"
+        ? "Cast SDK not available (HTTPS Chrome with access to gstatic.com)"
         : "Set Cast App ID (localStorage nexvue-cast-app-id or CAST_APP_ID_DEFAULT) — see README";
       castBtn.classList.remove("active");
+      // Surface why Cast is gray when idle so the disabled button is not silent.
+      if (!currentBase) {
+        const cur = stateEl.textContent;
+        if (cur === "idle" || cur.startsWith("cast:")) setState(castDisabledHint());
+      }
       return;
     }
     const session = cast.framework.CastContext.getInstance().getCurrentSession();
@@ -756,6 +933,9 @@
     castBtn.title = session
       ? "Casting — click to send current channel again or stop from the Cast UI"
       : "Cast current channel to Chromecast / Cast device";
+    if (!currentBase && !session && stateEl.textContent.startsWith("cast:")) {
+      setState("idle");
+    }
   }
 
   async function sendCastLaunch(session) {
@@ -792,39 +972,58 @@
   }
 
   function initCastSender() {
+    if (castInitStarted || castReady) return;
     const appId = castAppId();
-    if (!appId || typeof cast === "undefined" || !cast.framework) {
+    if (!appId) {
       updateCastButton();
       return;
     }
-    const context = cast.framework.CastContext.getInstance();
-    context.setOptions({
-      receiverApplicationId: appId,
-      autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
-    });
-    context.addEventListener(
-      cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
-      async (event) => {
-        updateCastButton();
-        const session = context.getCurrentSession();
-        if (!session) return;
-        const st = event.sessionState;
-        if (st === cast.framework.SessionState.SESSION_STARTED ||
-            st === cast.framework.SessionState.SESSION_RESUMED) {
-          try { await sendCastLaunch(session); } catch (e) { /* may cast before channel */ }
+    if (typeof cast === "undefined" || !cast.framework) {
+      updateCastButton();
+      return;
+    }
+    castInitStarted = true;
+    try {
+      const context = cast.framework.CastContext.getInstance();
+      context.setOptions({
+        receiverApplicationId: appId,
+        autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
+      });
+      context.addEventListener(
+        cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
+        async (event) => {
+          updateCastButton();
+          const session = context.getCurrentSession();
+          if (!session) return;
+          const st = event.sessionState;
+          if (st === cast.framework.SessionState.SESSION_STARTED ||
+              st === cast.framework.SessionState.SESSION_RESUMED) {
+            try { await sendCastLaunch(session); } catch (e) { /* may cast before channel */ }
+          }
         }
-      }
-    );
-    castReady = true;
+      );
+      castReady = true;
+    } catch (err) {
+      castInitStarted = false;
+      castReady = false;
+      const msg = (err && err.message) ? String(err.message) : String(err);
+      setState(`cast: init failed — ${msg}`, "bad");
+    }
     updateCastButton();
   }
 
-  window.__onGCastApiAvailable = (isAvailable) => {
+  window.__nexvueInitCast = (isAvailable) => {
     if (isAvailable) initCastSender();
     else updateCastButton();
   };
-  if (window.chrome && chrome.cast && chrome.cast.isAvailable) {
+  if (typeof window.__nexvueCastPending === "boolean") {
+    const pending = window.__nexvueCastPending;
+    window.__nexvueCastPending = undefined;
+    window.__nexvueInitCast(pending);
+  } else if (window.chrome && chrome.cast && chrome.cast.isAvailable) {
     initCastSender();
+  } else {
+    updateCastButton();
   }
   castBtn.addEventListener("click", castCurrentChannel);
 
@@ -881,15 +1080,73 @@
   renderChannelButtons({}, {});
   pollInputStatus();
   loadChannelButtons().then(() => pollInputStatus());
-  $("disconnect").addEventListener("click", () => { teardown(); setState("idle"); });
+  $("disconnect").addEventListener("click", () => {
+    teardown();
+    setState("idle");
+    updateCastButton();
+  });
 
   // ---- Session metrics drawer -------------------------------------------------------
+  // Hover/focus explainers for metric tiles (2s delay; fixed so drawer overflow
+  // does not clip). Native title= cannot control delay or match the dark UI.
+  const TIP_DELAY_MS = 2000;
+  const tipEl = $("stat-tip");
+  let tipTimer = null;
+  let tipAnchor = null;
+
+  function hideStatTip() {
+    if (tipTimer) { clearTimeout(tipTimer); tipTimer = null; }
+    tipAnchor = null;
+    tipEl.classList.remove("visible");
+    tipEl.setAttribute("aria-hidden", "true");
+    tipEl.textContent = "";
+  }
+
+  function placeStatTip(el) {
+    const text = el.getAttribute("data-tip");
+    if (!text) return;
+    tipEl.textContent = text;
+    tipEl.classList.add("visible");
+    tipEl.setAttribute("aria-hidden", "false");
+    const r = el.getBoundingClientRect();
+    const pad = 8;
+    // Measure after visible so width/height are real.
+    const tw = tipEl.offsetWidth;
+    const th = tipEl.offsetHeight;
+    let left = r.left + (r.width - tw) / 2;
+    left = Math.max(pad, Math.min(left, window.innerWidth - tw - pad));
+    let top = r.top - th - 6;
+    if (top < pad) top = r.bottom + 6;
+    tipEl.style.left = `${Math.round(left)}px`;
+    tipEl.style.top = `${Math.round(top)}px`;
+  }
+
+  function scheduleStatTip(el) {
+    if (tipAnchor === el && tipEl.classList.contains("visible")) return;
+    hideStatTip();
+    tipAnchor = el;
+    tipTimer = setTimeout(() => {
+      tipTimer = null;
+      if (tipAnchor === el) placeStatTip(el);
+    }, TIP_DELAY_MS);
+  }
+
+  document.querySelectorAll("#stats .stat[data-tip]").forEach((el) => {
+    el.addEventListener("mouseenter", () => scheduleStatTip(el));
+    el.addEventListener("mouseleave", () => { if (tipAnchor === el) hideStatTip(); });
+    el.addEventListener("focus", () => scheduleStatTip(el));
+    el.addEventListener("blur", () => { if (tipAnchor === el) hideStatTip(); });
+  });
+  window.addEventListener("scroll", () => { if (tipEl.classList.contains("visible")) hideStatTip(); }, true);
+  window.addEventListener("resize", hideStatTip);
+
   const drawer = $("stats-drawer");
   const toggle = $("stats-toggle");
   function setDrawerOpen(open) {
     drawer.classList.toggle("open", open);
     toggle.setAttribute("aria-expanded", open ? "true" : "false");
     try { sessionStorage.setItem("nexvue-stats-drawer", open ? "1" : "0"); } catch { /* private mode */ }
+    if (!open) hideStatTip();
   }
   toggle.addEventListener("click", () => setDrawerOpen(!drawer.classList.contains("open")));
   try {

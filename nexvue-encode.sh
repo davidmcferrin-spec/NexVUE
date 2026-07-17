@@ -92,6 +92,15 @@ LO_PRESET="${LO_PRESET:-720p}"              # 720p|540p|480p|360p|240p|180p
 LO_FPS="${LO_FPS:-30000/1001}"              # 29.97p default: cellular-friendly
 LO_RTSP_URL="${LO_RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}lo}"
 
+# Caption side channel (CEA-608/CC1 → /run/nexvue/captions/<path>.json).
+# Not burned into video; not a second encode. Extract in-pipeline because
+# DeckLink sub-devices are exclusive-open.
+CAPTIONS_ENABLE="$(strip_inline "${CAPTIONS_ENABLE:-true}")"
+CAPTIONS_DIR="$(strip_inline "${CAPTIONS_DIR:-/run/nexvue/captions}")"
+CAPTIONS_DECODE_BIN="$(strip_inline "${CAPTIONS_DECODE_BIN:-/usr/local/bin/nexvue-captions-decode.py}")"
+# Assembly-test only: inject caption elements without FIFO/decoder (no mkfifo).
+CAPTIONS_PIPELINE_ONLY="$(strip_inline "${CAPTIONS_PIPELINE_ONLY:-false}")"
+
 # Preset -> 16:9 raster + default bitrate. Note: the "p" number is the HEIGHT
 # (480p = 854x480). All dimensions even, as H.264 requires. Explicit
 # LO_WIDTH/LO_HEIGHT/LO_BITRATE_KBPS below override the preset.
@@ -120,6 +129,9 @@ case "${ENABLE_AUDIO}" in true|false) ;; *)
 esac
 case "${LO_ENABLE}" in true|false) ;; *)
     log "ERROR: LO_ENABLE must be 'true' or 'false'"; exit 64 ;;
+esac
+case "${CAPTIONS_ENABLE}" in true|false) ;; *)
+    log "ERROR: CAPTIONS_ENABLE must be 'true' or 'false'"; exit 64 ;;
 esac
 case "${AUDIO_FRAME_MS}" in 2|5|10|20|40|60) ;; *)
     log "ERROR: AUDIO_FRAME_MS must be one of 2,5,10,20,40,60"; exit 64 ;;
@@ -162,9 +174,52 @@ case "${DEINT_FIELDS}" in
   top) OUTPUT_FPS="30000/1001" ;;
 esac
 
+# ---- Captions side channel (optional) ------------------------------------------
+CAPTIONS_ACTIVE=false
+CAPTIONS_PID=""
+CAPTIONS_FIFO=""
+cleanup_captions() {
+  if [ -n "${CAPTIONS_PID}" ] && kill -0 "${CAPTIONS_PID}" 2>/dev/null; then
+    kill "${CAPTIONS_PID}" 2>/dev/null || true
+    wait "${CAPTIONS_PID}" 2>/dev/null || true
+  fi
+  # Never rm /dev/null (CAPTIONS_PIPELINE_ONLY assembly tests).
+  if [ -n "${CAPTIONS_FIFO}" ] && [ "${CAPTIONS_FIFO}" != "/dev/null" ]; then
+    rm -f "${CAPTIONS_FIFO}"
+  fi
+}
+if [ "${CAPTIONS_ENABLE}" = "true" ]; then
+  if ! gst-inspect-1.0 ccextractor >/dev/null 2>&1 \
+     || ! gst-inspect-1.0 ccconverter >/dev/null 2>&1; then
+    log "WARN: CAPTIONS_ENABLE=true but ccextractor/ccconverter unavailable — captions off"
+  elif [ "${CAPTIONS_PIPELINE_ONLY}" = "true" ]; then
+    CAPTIONS_FIFO="/dev/null"
+    CAPTIONS_ACTIVE=true
+  elif [ -f "${CAPTIONS_DECODE_BIN}" ]; then
+    mkdir -p "${CAPTIONS_DIR}"
+    CAPTIONS_FIFO="${CAPTIONS_DIR}/${CHANNEL_PATH}.ccraw"
+    rm -f "${CAPTIONS_FIFO}"
+    if mkfifo "${CAPTIONS_FIFO}" 2>/dev/null; then
+      chmod 644 "${CAPTIONS_FIFO}" 2>/dev/null || true
+      python3 "${CAPTIONS_DECODE_BIN}" \
+        --channel "${CHANNEL_PATH}" \
+        --fifo "${CAPTIONS_FIFO}" \
+        --state-dir "${CAPTIONS_DIR}" &
+      CAPTIONS_PID=$!
+      trap cleanup_captions EXIT INT TERM
+      CAPTIONS_ACTIVE=true
+    else
+      log "WARN: could not create captions FIFO ${CAPTIONS_FIFO} — captions off"
+    fi
+  else
+    log "WARN: CAPTIONS_ENABLE=true but decode helper missing (${CAPTIONS_DECODE_BIN}) — captions off"
+  fi
+fi
+
 # ---- Assemble the pipeline -----------------------------------------------------
-# Video: capture -> watchdog -> deinterlace -> normalize to constant HI caps
+# Video: capture -> [ccextractor] -> watchdog -> deinterlace -> normalize
 #        -> tee -> HI encode -> sink   [-> LO scale/rate -> LO encode -> sinklo]
+# Captions (optional): ccextractor.caption -> ccconverter -> FIFO -> decode.py
 # Audio: capture -> Opus once -> tee -> both sinks (same encoded track).
 PIPELINE="rtspclientsink name=sink location=${RTSP_URL} protocols=tcp"
 
@@ -174,7 +229,15 @@ fi
 
 PIPELINE+=" decklinkvideosrc device-number=${DEVICE_NUMBER} mode=auto"
 PIPELINE+=" buffer-size=${DECKLINK_BUFFER_FRAMES} drop-no-signal-frames=false"
+if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
+  PIPELINE+=" output-cc=true"
+fi
 PIPELINE+=" ! queue max-size-buffers=4 leaky=downstream"
+if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
+  # Extract VANC captions before deinterlace/scale; video continues on cc.src.
+  PIPELINE+=" ! ccextractor name=cc"
+  PIPELINE+=" cc. ! queue max-size-buffers=4 leaky=downstream"
+fi
 PIPELINE+=" ! watchdog timeout=${WATCHDOG_MS}"
 PIPELINE+=" ! deinterlace fields=${DEINT_FIELDS} method=greedyh"
 PIPELINE+=" ! videorate ! videoscale ! videoconvert"
@@ -215,10 +278,23 @@ if [ "${ENABLE_AUDIO}" = "true" ]; then
   fi
 fi
 
-log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) audio=${ENABLE_AUDIO} enc=${VIDEO_ENCODER}"
+if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
+  # cc.caption is a separate pad; convert CDP/608 metas to raw CEA-608 pairs
+  # for nexvue-captions-decode.py. filesink to a FIFO (decoder already reading).
+  PIPELINE+=" cc.caption ! queue max-size-buffers=8 leaky=downstream"
+  PIPELINE+=" ! ccconverter"
+  PIPELINE+=" ! closedcaption/x-cea-608,format=raw"
+  PIPELINE+=" ! filesink location=${CAPTIONS_FIFO} sync=false append=false"
+fi
+
+log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) audio=${ENABLE_AUDIO} captions=${CAPTIONS_ACTIVE} enc=${VIDEO_ENCODER}"
 log "publishing HI to ${RTSP_URL}$([ "${LO_ENABLE}" = "true" ] && echo ", LO to ${LO_RTSP_URL}")"
 
 # Intentional word-splitting: PIPELINE is a gst-launch description whose
 # tokens never contain spaces (caps use commas), so this is safe.
+# Do not exec — a background captions decoder needs EXIT cleanup.
 # shellcheck disable=SC2086
-exec gst-launch-1.0 -e ${PIPELINE}
+gst-launch-1.0 -e ${PIPELINE}
+rc=$?
+cleanup_captions
+exit "${rc}"

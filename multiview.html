@@ -55,7 +55,7 @@
   }
   button { cursor: pointer; }
   button:disabled { opacity: .4; cursor: not-allowed; }
-  button.layout.active, button.q.active {
+  button.layout.active, button.q.active, button.tgl.active {
     background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
   }
   .qlabel { color: var(--dim); }
@@ -115,6 +115,24 @@
     justify-content: center; color: var(--dim); pointer-events: none;
   }
   .pane-empty.hidden { display: none; }
+  .pane-kicked {
+    position: absolute; inset: 0; z-index: 2;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; padding: 12px; text-align: center;
+    background: rgba(20, 24, 29, .92); color: var(--text); pointer-events: none;
+  }
+  .pane-kicked[hidden] { display: none; }
+  .pane-kicked .kicked-title { color: var(--bad); font-weight: 600; font-size: 13px; }
+  .pane-kicked .kicked-reason { color: var(--dim); font-size: 11px; max-width: 28em; }
+  .pane-cc {
+    position: absolute; left: 4%; right: 4%; bottom: 6%; z-index: 1;
+    text-align: center; pointer-events: none;
+    font: 600 1.8vmin/1.3 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    color: #fff; text-shadow: 0 1px 2px #000;
+    white-space: pre-line; background: rgba(0,0,0,.55);
+    padding: 0.15em 0.4em; border-radius: 2px;
+  }
+  .pane-cc[hidden] { display: none; }
   .audio-badge {
     position: absolute; top: 8px; right: 8px; font-size: 11px;
     padding: 3px 8px; border-radius: 3px; background: rgba(20, 24, 29, .85);
@@ -168,6 +186,7 @@
   <span class="qlabel">quality:</span>
   <button id="q-hi" class="q">HI</button>
   <button id="q-lo" class="q active">LO</button>
+  <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
   <button id="fs" title="Fullscreen multiview">⛶ Fullscreen</button>
   <span id="state">idle</span>
 </div>
@@ -191,6 +210,7 @@
 </div>
 
 <script src="nexvue-qr.js"></script>
+<script src="nexvue-captions.js"></script>
 <script>
 "use strict";
 (() => {
@@ -210,6 +230,21 @@
   let layout = "quad";   // "dual" | "quad"
   let rendition = "lo";  // "hi" | "lo" — LO default for multi-session load
   let audioPane = -1;    // index of unmuted pane, or -1
+  let captionsOn = NexVueCaptions.getPref();
+  const ccBtn = $("cc");
+  ccBtn.classList.toggle("active", captionsOn);
+  function paintAllCaptions() {
+    for (const p of panes) {
+      if (!p || !p.ccEl) continue;
+      NexVueCaptions.renderOverlay(p.ccEl, p.lastCue || { clear: true }, captionsOn);
+    }
+  }
+  ccBtn.addEventListener("click", () => {
+    captionsOn = !captionsOn;
+    NexVueCaptions.setPref(captionsOn);
+    ccBtn.classList.toggle("active", captionsOn);
+    paintAllCaptions();
+  });
 
   // ---- Screen wake lock ---------------------------------------------------------
   // This page is explicitly for wall monitors / confidence checks — exactly
@@ -272,13 +307,21 @@
       <div class="pane-video">
         <span class="audio-badge">AUDIO</span>
         <video autoplay playsinline muted></video>
+        <div class="pane-cc" hidden></div>
         <div class="pane-empty">no channel</div>
+        <div class="pane-kicked" hidden>
+          <div class="kicked-title">Kicked by administrator</div>
+          <div class="kicked-reason"></div>
+        </div>
       </div>`;
 
     const select = el.querySelector("select");
     const statusEl = el.querySelector(".pane-status");
     const video = el.querySelector("video");
     const empty = el.querySelector(".pane-empty");
+    const ccEl = el.querySelector(".pane-cc");
+    const kickedEl = el.querySelector(".pane-kicked");
+    const kickedReasonEl = kickedEl.querySelector(".kicked-reason");
 
     // Options filled after aliases load (fillChannelOptions).
     for (let i = 0; i < 8; i++) {
@@ -289,17 +332,25 @@
     }
 
     const pane = {
-      index, el, select, statusEl, video, empty,
-      base: null, path: null, pc: null,
+      index, el, select, statusEl, video, empty, ccEl, kickedEl, kickedReasonEl,
+      captionClient: null,
+      lastCue: { text: "", clear: true, seq: 0, service: "CC1" },
+      base: null, path: null, pc: null, sessionId: null,
       intentionalClose: false,
       reconnectTimer: null, reconnectAttempt: 0
     };
+    pane.captionClient = NexVueCaptions.connect((cue) => {
+      pane.lastCue = cue;
+      NexVueCaptions.renderOverlay(pane.ccEl, pane.lastCue, captionsOn);
+    });
 
     select.addEventListener("change", () => {
       const val = select.value;
+      hidePaneKicked(pane);
       if (!val) {
         closePane(pane, true);
         pane.base = null;
+        pane.captionClient.setChannel(null);
         setPaneStatus(pane, "idle");
         empty.classList.remove("hidden");
         if (audioPane === index) selectAudio(-1);
@@ -307,6 +358,7 @@
         return;
       }
       pane.base = val;
+      pane.captionClient.setChannel(val);
       empty.classList.add("hidden");
       acquireWakeLock();
       openPane(pane);
@@ -341,7 +393,58 @@
     }
     pane.video.srcObject = null;
     pane.path = null;
+    pane.sessionId = null;
     pane.video.muted = true;
+  }
+
+  function parseWhepSessionId(res) {
+    const loc = res.headers.get("Location") || res.headers.get("location") || "";
+    const m = String(loc).match(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+    );
+    return m ? m[0] : null;
+  }
+
+  function decodeKickReason(s) {
+    return String(s)
+      .replace(/&quot;/g, '"')
+      .replace(/&#039;/g, "'")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&");
+  }
+
+  function hidePaneKicked(pane) {
+    pane.kickedEl.hidden = true;
+    pane.kickedReasonEl.textContent = "";
+  }
+
+  function showPaneKicked(pane, reason) {
+    pane.kickedReasonEl.textContent = decodeKickReason(reason || "");
+    pane.kickedReasonEl.hidden = !pane.kickedReasonEl.textContent;
+    pane.kickedEl.hidden = false;
+    emptyHidden(pane, true);
+  }
+
+  async function checkKicked(sessionId) {
+    const q = new URLSearchParams({ action: "kick_check" });
+    if (sessionId) q.set("session_id", sessionId);
+    const res = await fetch(`nexvue-ops.php?${q}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return { kicked: !!data.kicked, reason: data.reason || "" };
+  }
+
+  function applyPaneKicked(pane, reason) {
+    pane.intentionalClose = true;
+    if (pane.reconnectTimer) {
+      clearTimeout(pane.reconnectTimer);
+      pane.reconnectTimer = null;
+    }
+    closePane(pane, true);
+    showPaneKicked(pane, reason);
+    setPaneStatus(pane, "kicked by administrator", "bad");
+    updateGlobalState();
   }
 
   function scheduleReconnect(pane, reason) {
@@ -359,6 +462,19 @@
       setPaneStatus(pane, `reconnecting…`, "bad");
       openPane(pane);
     }, RECONNECT_MS);
+  }
+
+  async function maybeReconnectPane(pane, reason) {
+    if (pane.intentionalClose || !pane.base) return;
+    const sid = pane.sessionId;
+    try {
+      const result = await checkKicked(sid);
+      if (result.kicked) {
+        applyPaneKicked(pane, result.reason);
+        return;
+      }
+    } catch (e) { /* heal as usual */ }
+    scheduleReconnect(pane, reason);
   }
 
   function restoreFullscreenIfNeeded() {
@@ -387,6 +503,7 @@
     }
     closePane(pane, false);
     pane.intentionalClose = false;
+    hidePaneKicked(pane);
     const path = pathFor(pane.base);
     pane.path = path;
     setPaneStatus(pane, `connecting…`);
@@ -413,7 +530,7 @@
       } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         setPaneStatus(pane, pc.connectionState, "bad");
         if (!pane.intentionalClose && pane.base) {
-          scheduleReconnect(pane, pc.connectionState);
+          maybeReconnectPane(pane, pc.connectionState);
         }
         updateGlobalState();
       }
@@ -441,12 +558,15 @@
         body: pc.localDescription.sdp
       });
       if (!res.ok) throw new Error(`WHEP ${res.status}`);
+      pane.sessionId = parseWhepSessionId(res);
       await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
     } catch (err) {
       const msg = err && err.message ? err.message : String(err);
       setPaneStatus(pane, `error: ${msg}`, "bad");
+      const sid = pane.sessionId;
       closePane(pane, false);
-      if (pane.base) scheduleReconnect(pane, `error: ${msg}`);
+      pane.sessionId = sid; // preserve for kick_check IP/session lookup on heal
+      if (pane.base) maybeReconnectPane(pane, `error: ${msg}`);
       updateGlobalState();
     }
   }
@@ -494,6 +614,7 @@
         // Tear down hidden panes so we don't keep unused WHEP sessions.
         closePane(p, true);
         p.base = null;
+        p.captionClient.setChannel(null);
         p.select.value = "";
         emptyHidden(p, false);
         setPaneStatus(p, "idle");

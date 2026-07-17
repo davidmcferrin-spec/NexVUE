@@ -45,6 +45,13 @@ specifically because this box can't get additional ports opened.
 - Latency target ~200ms glass-to-glass on LAN; ~120ms is the physics floor
   for 1080i sources. Receiver hints (jitterBufferTarget/playoutDelayHint=0)
   are mandatory in any player.
+- Closed captions are a **side channel**, not burn-in and not a second video
+  stream: extract CEA-608/CC1 in `nexvue-encode` (`output-cc` +
+  `ccextractor`/`ccconverter` → FIFO → `nexvue-captions-decode.py` →
+  `/run/nexvue/captions/<path>.json`), serve SSE via same-origin
+  `nexvue-captions.php`, overlay in Player / Multiview / Cast. MediaMTX stays
+  H.264+Opus only. Phase 1.5 supervisor must preserve extraction across
+  DeckLink/slate switches.
 
 ## Phase status
 
@@ -63,12 +70,28 @@ specifically because this box can't get additional ports opened.
   substitute for the Phase 4 CheckMK health-monitoring plan below.
   Metrics reporting timezone defaults to America/New_York (heatmap buckets,
   chart labels, custom From/To); override with `NEXVUE_METRICS_TZ` only if needed.
+  Metrics Kick writes a short-lived registry via `nexvue-ops.php`
+  (`kick_viewer` + `kick_check`); Player / Multiview / Cast suppress
+  self-healing and show an admin disconnect message. Not a rejoin ban —
+  Phase 2 auth owns enforcement.
+  Selectable CC overlay (CEA-608/CC1 side channel) landed —
+  `nexvue-captions-decode.py` + `nexvue-captions.php` + player **CC** toggle
+  (`localStorage.nexvue-captions-on`); Cast payload carries `captions`.
+  Probe feeds with `nexvue-captions-probe.sh` before assuming 608-in-708.
+  iGPU sampling reads a PERSISTENT `intel_gpu_top -J` child (background
+  reader thread keeps newest sample, 30s restart backoff, stderr tail
+  logged) — never a run-and-kill one-shot: the tool block-buffers stdout on
+  a pipe, so short runs died before their first flush and the iGPU charts
+  stayed empty on real hardware even though interactive `intel_gpu_top`
+  worked. `NEXVUE_INTEL_GPU_TOP_PERIOD_MS` (default 1000) replaced the old
+  `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` knob.
   Remaining before Phase 1 is formally "done": burnt-in-clock latency
   measurement, flip the two Duo 2 connectors still set to Output back to
   Input (see README "DeckLink Duo 2 connector direction"), 72h soak.
 - **Phase 1.5 (next): Python supervisor** — persistent RTSP session with
   DeckLink/slate input switching ("NO SIGNAL" burn-in) so no-signal-at-boot
   serves a slate instead of a restart loop. Spec review before code.
+  Must keep the caption extract branch (or clear cues) when leaving DeckLink.
 - **Phase 2: PHP portal** — channel catalog, local bcrypt + JWT issuance,
   MediaMTX JWKS auth. Open decision: publisher auth pattern (long-lived
   publish JWT vs authMethod:http with loopback exemption) — see mediamtx.yml.
@@ -118,8 +141,13 @@ specifically because this box can't get additional ports opened.
   Top-nav **NexVUE** brand opens a QR of the page URL; player session tiles
   live in a collapsed bottom drawer. Player **Cast** uses a custom WHEP
   receiver (`cast-receiver.html`) — Chromecast cannot cast WebRTC
-  `srcObject` directly.
+  `srcObject` directly. Cast stays disabled until a Google Cast Custom
+  Receiver App ID is set (`CAST_APP_ID_DEFAULT` or
+  `localStorage.nexvue-cast-app-id`) and the sender SDK loads on HTTPS
+  Chrome; idle status explains a gray button.
   Top nav: Player / Multiview / Metrics / Services / Channels.
+  Player/Multiview **CC** uses `nexvue-captions.js` + SSE (not WHEP text
+  tracks).
 - Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +
   allowlisted sudo wrappers. Phase 1 LAN-trust — not for DMZ without auth.
 - Production-ready code only: no placeholders, no TODOs. Unit tests for new

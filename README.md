@@ -125,6 +125,7 @@ sudo mkdir -p /etc/nexvue/channels
 sudo cp mediamtx.yml /etc/nexvue/
 sudo cp nexvue-encode.sh /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-encode.sh
 sudo cp nexvue-status-server.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-status-server.py
+sudo cp nexvue-captions-decode.py nexvue-captions-probe.sh /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-captions-decode.py /usr/local/bin/nexvue-captions-probe.sh
 sudo cp nexvue-metrics-server.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-metrics-server.py
 sudo cp mediamtx.service nexvue-encode@.service \
        nexvue-status.service nexvue-metrics.service /etc/systemd/system/
@@ -153,7 +154,8 @@ Drop the UI files into Apache's docroot (same place IT already serves on
 
 ```bash
 sudo cp index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php \
-        nexvue-status.php nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php /var/www/html/
+        nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js chart.umd.min.js \
+        services.html channels.html nexvue-ops.php /var/www/html/
 # if PHP isn't wired into Apache yet:
 #   sudo apt install -y libapache2-mod-php && sudo a2enmod php8.3
 sudo systemctl restart apache2
@@ -269,12 +271,16 @@ Then from a LAN machine:
 - **Test player with stats:** open `index.html` via Apache (top nav → Player),
   click a channel. Session tiles (resolution/fps, bitrate, RTT, loss, SDI
   input, …) live in a bottom drawer — click **Session metrics** to expand
-  (collapsed by default). Click the **NexVUE** brand for a QR code of the
-  page URL (phone scan). **Cast** sends the current channel to a Chromecast
+  (collapsed by default). Hover a tile title for ~2s for a short explainer.
+  Click the **NexVUE** brand for a QR code of the page URL (phone scan).
+  **Cast** sends the current channel to a Chromecast
   via a custom WHEP receiver (`cast-receiver.html`) — see "Chromecast" below.
+  **CC** toggles a selectable closed-caption overlay (CEA-608/CC1 side
+  channel — not burned into video; preference in `localStorage`).
 - **Multiviewer:** open `multiview.html` (top nav → Multiview). Dual or quad
   layout with a channel dropdown per pane; defaults to LO; click a pane for
-  audio (one pane unmuted at a time). Same NexVUE brand → QR share.
+  audio (one pane unmuted at a time). Same NexVUE brand → QR share. Global
+  **CC** toggle matches the player preference key.
 - **Usage metrics:** top nav → Metrics (`/metrics.html` + `nexvue-metrics.php`
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
@@ -290,6 +296,12 @@ player **Cast** button launches NexVUE's custom receiver
 (`cast-receiver.html`) on the STB; the receiver opens its own WHEP session
 to the edge (same H.264 + Opus path as the browser).
 
+The **Cast** button stays gray until a Cast App ID is configured and the
+Google Cast sender SDK initializes. While idle, the player status line
+explains why (`cast: set App ID — see README` or
+`cast: SDK unavailable (HTTPS / Chrome / gstatic)`). Hover the button for
+the same detail.
+
 1. In the [Google Cast Developer Console](https://cast.google.com/publish/),
    create a **Custom Receiver** application.
 2. Set the receiver URL to `https://<edge-fqdn>/cast-receiver.html`
@@ -299,12 +311,46 @@ to the edge (same H.264 + Opus path as the browser).
    - edit `CAST_APP_ID_DEFAULT` in `index.html`, or
    - in the browser console on the player page:
      `localStorage.setItem("nexvue-cast-app-id", "YOUR_APP_ID")`
-4. Ensure the Chromecast can reach WHEP on the LAN (`:8889`, same as a phone
+     then **reload** the player (App ID is read at init only).
+4. Open the player over **HTTPS** in Chrome (or another Cast-enabled
+   Chromium). The sender page must be a secure context; plain HTTP will
+   leave Cast gray with an SDK-unavailable status. The browser also needs
+   outbound access to `www.gstatic.com` for the Cast sender SDK.
+5. Ensure the Chromecast can reach WHEP on the LAN (`:8889`, same as a phone
    browser). Firewall rules that only allow your PC will block the STB.
-5. Select a channel on the player, click **Cast**, pick the device.
+6. Select a channel on the player, click **Cast**, pick the device.
 
 Direct receiver test (no Cast session): open
-`https://<edge>/cast-receiver.html?whepBase=https://<edge>:8889&path=ch0`.
+`https://<edge>/cast-receiver.html?whepBase=https://<edge>:8889&path=ch0`
+(add `&captions=1` to enable the CC overlay).
+
+### Closed captions (selectable overlay)
+
+Browsers do not render CEA-608/708 carried inside WHEP H.264, and MediaMTX
+does not convert captions to a text track. NexVUE therefore extracts captions
+inside the existing encode pipeline and delivers timed text over Apache:
+
+1. `decklinkvideosrc output-cc=true` → `ccextractor` → `ccconverter` → raw
+   CEA-608 pairs on a FIFO under `/run/nexvue/captions/`.
+2. `nexvue-captions-decode.py` (CC1) writes `<channel>.json` atomically.
+3. `nexvue-captions.php` streams cues as Server-Sent Events (same origin; no
+   new port). `?once=1` returns a JSON snapshot for debugging.
+4. Player / Multiview / Cast draw a CSS overlay; **CC** persists via
+   `localStorage.nexvue-captions-on`. Cast launch payload includes `captions`.
+
+Not burned into pixels; no parallel video streams. Disable per channel with
+`CAPTIONS_ENABLE=false` in the channel `.env`. Probe a live SDI feed (stop
+the encoder on that device first):
+
+```bash
+sudo systemctl stop nexvue-encode@0
+sudo -u nexvue nexvue-captions-probe.sh 0
+sudo systemctl start nexvue-encode@0
+```
+
+v1 decodes **CEA-608 / CC1** (including 608 compatibility bytes inside 708
+CDP). Native 708-only services/windows are out of scope until a decoder
+dependency is approved.
 
 Requires a Cast device that runs a Chromium-based receiver (Chromecast with
 Google TV / modern Cast hardware). Very old Cast firmware may lack WebRTC.
@@ -590,15 +636,20 @@ channel 0 right now. Custom:
 After upgrading the collector, restart `nexvue-metrics` so it creates the
 `host_samples` table / new columns (`sudo systemctl restart nexvue-metrics`).
 
-**iGPU (Quick Sync) charts.** The collector samples `intel_gpu_top -J` each
-poll when `intel-gpu-tools` is installed. That tool streams forever, so the
-collector kills it after `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` and parses the
-stdout captured before the kill (timeout is the normal success path, not a
-failure). Video engine % is the primary encode-load signal; Render/3D and
-VideoEnhance are also stored. If the tool is missing, lacks PMU permission,
-or the kernel uses `xe` without a working `intel_gpu_top`, those series stay
-empty (CPU/memory still collect). `setup.sh` installs `intel-gpu-tools`,
-`setcap`s `intel_gpu_top` when possible, and the unit grants
+**iGPU (Quick Sync) charts.** The collector keeps ONE persistent
+`intel_gpu_top -J -s 1000` child running and continuously reads its JSON
+stream on a background thread, storing the newest sample each poll. It is
+deliberately NOT a run-and-kill one-shot: `intel_gpu_top` block-buffers
+stdout when writing to a pipe, so a short-lived run is routinely killed
+before the first buffer flush — empty stdout and empty iGPU charts on real
+hardware, even though the same command shows live numbers interactively.
+The child is restarted automatically (30s backoff) if it exits, with its
+stderr tail logged for diagnosis. Video engine % is the primary encode-load
+signal; Render/3D and VideoEnhance are also stored. If the tool is missing,
+lacks PMU permission, or the kernel uses `xe` without a working
+`intel_gpu_top`, those series stay empty (CPU/memory still collect).
+`setup.sh` installs `intel-gpu-tools`, `setcap`s `intel_gpu_top` when
+possible, and the unit grants
 `AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN`.
 
 ### Configuration
@@ -613,7 +664,7 @@ empty (CPU/memory still collect). `setup.sh` installs `intel-gpu-tools`,
 | `NEXVUE_METRICS_RETENTION_DAYS` | `30` | Samples/sessions older than this are pruned hourly |
 | `NEXVUE_METRICS_DB` | `/var/lib/nexvue/metrics.db` | SQLite file path (auto-created via `StateDirectory=`) |
 | `NEXVUE_INTEL_GPU_TOP` | `intel_gpu_top` | Binary path for iGPU sampling |
-| `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` | `2.5` | Subprocess timeout for one JSON sample |
+| `NEXVUE_INTEL_GPU_TOP_PERIOD_MS` | `1000` | `-s` sample period (ms) for the persistent `intel_gpu_top -J` stream (replaces the old `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` one-shot timeout) |
 
 If MediaMTX is still plain HTTP (TLS not yet configured — see the TLS
 section above), set `NEXVUE_MEDIAMTX_API_URL` to `http://127.0.0.1:9997`.
@@ -660,10 +711,17 @@ seen within the PHP script's active-session window (45s — about 3 poll
 cycles); otherwise "ended."
 
 **Kick (live sessions only).** The Metrics viewer table has a Kick button on
-live rows. It POSTs `kick_viewer` to `nexvue-ops.php`, which calls MediaMTX
-`POST /v3/webrtcsessions/kick/{session_id}` on loopback — metrics PHP stays
-read-only. Phase 1 LAN-trust (same as Services/Channels); the client can
-reconnect unless Phase 2 auth later blocks them.
+live rows. It POSTs `kick_viewer` (optional `reason`) to `nexvue-ops.php`,
+which looks up the session on MediaMTX, calls
+`POST /v3/webrtcsessions/kick/{session_id}` on loopback, and records the
+session in a short-lived kick registry (temp JSON, ~10 min TTL). Metrics PHP
+stays read-only. Player / Multiview / Cast capture the WHEP `Location`
+session UUID and call `kick_check` before self-healing reconnect — kicked
+viewers see a disconnect message and stop auto-retry. Matching is by
+MediaMTX WebRTC session UUID only (safe when many viewers share a NAT IP
+or the same channel). Manual rejoin (pick a channel again) still works;
+real rejoin enforcement is Phase 2 auth. Phase 1 LAN-trust (same as
+Services/Channels).
 
 ### Notes
 
@@ -700,7 +758,8 @@ reconnect unless Phase 2 auth later blocks them.
   section above if that's not lining up. Top nav brand **NexVUE** (click for
   page-URL QR) /
   Player / Multiview / Metrics / Services / Channels. Player session metrics
-  sit in a collapsed bottom drawer (`Session metrics`).
+  sit in a collapsed bottom drawer (`Session metrics`); hover a tile ~2s for
+  an explainer.
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Player and Multiview show the alias when set;
   WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Channels page.
@@ -718,6 +777,11 @@ reconnect unless Phase 2 auth later blocks them.
   element itself — fullscreening the video directly (e.g. via its native
   player-bar control) lets the browser override the transform. Use the ⛶
   button, not the native control, if mirror/flip need to survive fullscreen.
+- **Closed captions are a side channel**, not MediaMTX tracks. Encode writes
+  `/run/nexvue/captions/<path>.json`; Apache serves SSE via
+  `nexvue-captions.php`. HI/LO reconnect keeps the same channel subscription.
+  Phase 1.5 supervisor must keep `output-cc` / `ccextractor` when switching
+  DeckLink ↔ slate.
 - **Input status & reference:** the `nexvue-status` daemon (port 9998) polls the
   DeckLink Status API via the `decklink-status` helper and serves JSON
   (per-input signal lock + detected format, genlock reference lock + mode).

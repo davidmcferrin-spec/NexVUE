@@ -51,9 +51,11 @@ REQUIRED_FILES=(
   nexvue-encode.sh nexvue-encode@.service
   nexvue-status-server.py nexvue-status.service
   nexvue-metrics-server.py nexvue-metrics.service
-  nexvue-metrics.php nexvue-status.php nexvue-qr.js chart.umd.min.js metrics.html index.html multiview.html
+  nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js
+  nexvue-qr.js chart.umd.min.js metrics.html index.html multiview.html
   cast-receiver.html
   nexvue-ops.php services.html channels.html
+  nexvue-captions-decode.py nexvue-captions-probe.sh
   nexvue-ops-env-update.py nexvue-ops.sudoers
   nexvue-ops-status.sh nexvue-ops-journal.sh
   nexvue-ops-env-read.sh nexvue-ops-env-write.sh nexvue-ops-restart.sh
@@ -133,12 +135,19 @@ fi
 install -m 755 "${REPO_DIR}/nexvue-encode.sh" /usr/local/bin/nexvue-encode.sh
 install -m 755 "${REPO_DIR}/nexvue-status-server.py" /usr/local/bin/nexvue-status-server.py
 install -m 755 "${REPO_DIR}/nexvue-metrics-server.py" /usr/local/bin/nexvue-metrics-server.py
+install -m 755 "${REPO_DIR}/nexvue-captions-decode.py" /usr/local/bin/nexvue-captions-decode.py
+install -m 755 "${REPO_DIR}/nexvue-captions-probe.sh" /usr/local/bin/nexvue-captions-probe.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-env-update.py" /usr/local/bin/nexvue-ops-env-update.py
 install -m 755 "${REPO_DIR}/nexvue-ops-status.sh" /usr/local/bin/nexvue-ops-status.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-journal.sh" /usr/local/bin/nexvue-ops-journal.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-env-read.sh" /usr/local/bin/nexvue-ops-env-read.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-env-write.sh" /usr/local/bin/nexvue-ops-env-write.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-restart.sh" /usr/local/bin/nexvue-ops-restart.sh
+# Caption JSON state (encode writes; Apache/www-data reads via nexvue-captions.php).
+install -d -m 755 -o nexvue -g nexvue /run/nexvue/captions 2>/dev/null \
+  || mkdir -p /run/nexvue/captions
+chown nexvue:nexvue /run/nexvue/captions 2>/dev/null || true
+chmod 755 /run/nexvue/captions 2>/dev/null || true
 install -m 644 "${REPO_DIR}/mediamtx.service" \
                "${REPO_DIR}/nexvue-encode@.service" \
                "${REPO_DIR}/nexvue-status.service" \
@@ -172,15 +181,17 @@ if [ -d "${WEBROOT}" ]; then
                  "${REPO_DIR}/cast-receiver.html" \
                  "${REPO_DIR}/nexvue-metrics.php" \
                  "${REPO_DIR}/nexvue-status.php" \
+                 "${REPO_DIR}/nexvue-captions.php" \
+                 "${REPO_DIR}/nexvue-captions.js" \
                  "${REPO_DIR}/nexvue-qr.js" \
                  "${REPO_DIR}/chart.umd.min.js" \
                  "${REPO_DIR}/services.html" \
                  "${REPO_DIR}/channels.html" \
                  "${REPO_DIR}/nexvue-ops.php" \
                  "${WEBROOT}/"
-  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / cast)"
+  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / cast / captions)"
 else
-  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php nexvue-status.php nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
+  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
 fi
 
 step "5/5 decklink-status helper"
@@ -216,17 +227,21 @@ else
 fi
 
 # GStreamer elements
-for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc rtspclientsink; do
+for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc rtspclientsink ccextractor ccconverter; do
   if gst-inspect-1.0 "$el" >/dev/null 2>&1; then
     ok "gstreamer element: $el"
   else
     case "$el" in
       decklinkvideosrc) warn "missing $el — install Blackmagic Desktop Video (deb) and reboot" ;;
       vah264enc)        warn "missing $el — VA driver issue (see vainfo above); x264enc fallback works for 1-2 channels only" ;;
+      ccextractor|ccconverter) warn "missing $el — caption side channel needs gstreamer1.0-plugins-bad" ;;
       *)                warn "missing $el — check gstreamer package install" ;;
     esac
   fi
 done
+[ -x /usr/local/bin/nexvue-captions-decode.py ] \
+  && ok "nexvue-captions-decode.py present" \
+  || warn "nexvue-captions-decode.py missing — CC side channel will stay off"
 
 # MediaMTX + units
 [ -x /usr/local/bin/mediamtx ] && ok "mediamtx binary present" || warn "mediamtx binary missing"
@@ -242,7 +257,7 @@ else
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 if [ -d "${WEBROOT}" ]; then
-  for f in index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php nexvue-status.php nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php; do
+  for f in index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
 else

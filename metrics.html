@@ -659,19 +659,31 @@
 
   async function kickViewer(sessionId, ip, channel) {
     const label = `${ip || "?"} / ${channel || "?"}`;
-    if (!confirm(`Kick viewer ${label}? They can reconnect unless auth blocks them.`)) return;
+    if (!confirm(
+      `Kick viewer ${label}?\n\n` +
+      `They will see a disconnect message and auto-reconnect will stop.\n` +
+      `(Manual rejoin is still possible until Phase 2 auth.)`
+    )) return;
+    // Optional reason; Cancel / empty = no message (kick still proceeds).
+    const reasonRaw = prompt("Optional message to show the viewer:", "");
+    const reason = reasonRaw === null ? "" : String(reasonRaw).trim().slice(0, 200);
     setState(`kicking ${label}…`);
     try {
+      const body = { action: "kick_viewer", session_id: sessionId };
+      if (reason) body.reason = reason;
       const res = await fetch("nexvue-ops.php", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "kick_viewer", session_id: sessionId }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
-      setState(`kicked ${label}`, "ok");
+      setState(
+        reason ? `kicked ${label} (viewer notified; auto-reconnect suppressed)` : `kicked ${label} (auto-reconnect suppressed)`,
+        "ok"
+      );
       load();
     } catch (e) {
       setState(`kick failed: ${e.message || e}`, "bad");

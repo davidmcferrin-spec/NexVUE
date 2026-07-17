@@ -129,12 +129,54 @@ class TestIntelGpuTopParse(unittest.TestCase):
         self.assertIsNone(nms._classify_gpu_engine("Blitter/0"))
 
 
-class TestSampleGpu(unittest.TestCase):
-    """sample_gpu must treat TimeoutExpired-with-stdout as success.
+class TestConsumeStreamObjects(unittest.TestCase):
+    """Incremental parser for the never-ending intel_gpu_top -J stream."""
 
-    intel_gpu_top -J never exits; subprocess.run always times out. The old
-    path discarded that stdout and left the iGPU charts empty forever.
-    """
+    OBJ = '{"engines": {"Video/0": {"busy": 10.0}}}'
+
+    def test_bare_concatenated_objects(self):
+        objs, rest = nms._consume_stream_objects(self.OBJ + "\n" + self.OBJ + "\n")
+        self.assertEqual(len(objs), 2)
+        self.assertEqual(rest, "")
+
+    def test_array_wrapped_stream_never_closes(self):
+        # Newer intel-gpu-tools emit "[\n{...},\n{...}" and never close the array.
+        objs, rest = nms._consume_stream_objects("[\n" + self.OBJ + ",\n" + self.OBJ)
+        self.assertEqual(len(objs), 2)
+        self.assertEqual(rest, "")
+
+    def test_partial_tail_is_preserved_for_next_read(self):
+        partial = '{"engines": {"Video/0": {"bu'
+        objs, rest = nms._consume_stream_objects(self.OBJ + "\n" + partial)
+        self.assertEqual(len(objs), 1)
+        self.assertEqual(rest, partial)
+        # ...and completing the tail on the next chunk yields the object.
+        objs2, rest2 = nms._consume_stream_objects(rest + 'sy": 5.0}}}')
+        self.assertEqual(len(objs2), 1)
+        self.assertEqual(rest2, "")
+
+    def test_empty_and_whitespace_only(self):
+        self.assertEqual(nms._consume_stream_objects(""), ([], ""))
+        self.assertEqual(nms._consume_stream_objects("[\n \n"), ([], ""))
+
+
+class _FakePopen:
+    """Stand-in for the intel_gpu_top child: canned stdout, empty stderr."""
+
+    def __init__(self, stdout_bytes: bytes, returncode=None):
+        import io
+        self.stdout = io.BytesIO(stdout_bytes)
+        self.stderr = io.BytesIO(b"")
+        self.returncode = returncode
+
+    def poll(self):
+        return self.returncode
+
+
+class TestGpuStream(unittest.TestCase):
+    """Persistent-stream sampling — the fix for intel_gpu_top's pipe
+    block-buffering, which made the old kill-after-timeout one-shot come
+    back with empty stdout (and empty iGPU charts) on real hardware."""
 
     def setUp(self):
         self._prev_warn = nms._gpu_warn_last
@@ -143,48 +185,67 @@ class TestSampleGpu(unittest.TestCase):
     def tearDown(self):
         nms._gpu_warn_last = self._prev_warn
 
-    def test_timeout_with_stdout_parses_sample(self):
-        sample = TestIntelGpuTopParse.SAMPLE.strip()
+    def _wait_for_sample(self, stream, timeout=2.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with stream._lock:
+                if stream._latest is not None:
+                    return
+            time.sleep(0.01)
 
-        def boom(*args, **kwargs):
-            raise subprocess.TimeoutExpired(
-                cmd=args[0] if args else "intel_gpu_top",
-                timeout=2.5,
-                output=sample,
-            )
-
-        with mock.patch.object(subprocess, "run", side_effect=boom):
-            got = nms.sample_gpu()
+    def test_latest_returns_newest_parsed_sample(self):
+        fake = _FakePopen(TestIntelGpuTopParse.SAMPLE.strip().encode())
+        stream = nms._GpuStream()
+        with mock.patch.object(subprocess, "Popen", return_value=fake):
+            got = stream.latest()  # spawns child + reader threads
+            self._wait_for_sample(stream)
+            got = stream.latest()
         self.assertAlmostEqual(got["gpu_video_pct"], 42.0)
         self.assertAlmostEqual(got["gpu_render_pct"], 5.5)
+        self.assertAlmostEqual(got["gpu_freq_mhz"], 1200.0)
 
-    def test_timeout_with_bytes_stdout_parses_sample(self):
-        sample = TestIntelGpuTopParse.SAMPLE.strip().encode()
+    def test_stale_sample_returns_none(self):
+        stream = nms._GpuStream()
+        sample = {"gpu_video_pct": 1.0, "gpu_render_pct": None,
+                  "gpu_video_enhance_pct": None, "gpu_freq_mhz": None}
+        with stream._lock:
+            stream._latest = (time.monotonic() - nms._GPU_STALE_AFTER_S - 1, sample)
+        with mock.patch.object(stream, "_ensure_running"):
+            self.assertIsNone(stream.latest())
 
-        def boom(*args, **kwargs):
-            raise subprocess.TimeoutExpired(
-                cmd=["intel_gpu_top"],
-                timeout=2.5,
-                output=sample,
-            )
-
-        with mock.patch.object(subprocess, "run", side_effect=boom):
-            got = nms.sample_gpu()
+    def test_metricless_objects_never_clobber_a_real_sample(self):
+        # A header/period-only record after a real sample must not wipe it.
+        real = TestIntelGpuTopParse.SAMPLE.strip()
+        header = '{"period": {"duration": 100.0, "unit": "ms"}}'
+        fake = _FakePopen((real + "\n" + header + "\n").encode())
+        stream = nms._GpuStream()
+        with mock.patch.object(subprocess, "Popen", return_value=fake):
+            stream.latest()
+            self._wait_for_sample(stream)
+            got = stream.latest()
         self.assertAlmostEqual(got["gpu_video_pct"], 42.0)
 
-    def test_timeout_empty_stdout_returns_none_fields(self):
-        def boom(*args, **kwargs):
-            raise subprocess.TimeoutExpired(
-                cmd=["intel_gpu_top"],
-                timeout=2.5,
-                output="",
-            )
+    def test_missing_binary_returns_none_and_backs_off(self):
+        stream = nms._GpuStream()
+        with mock.patch.object(subprocess, "Popen",
+                               side_effect=FileNotFoundError) as popen:
+            self.assertIsNone(stream.latest())
+            self.assertIsNone(stream.latest())  # inside backoff window
+        self.assertEqual(popen.call_count, 1, "restart backoff must apply")
 
-        with mock.patch.object(subprocess, "run", side_effect=boom):
+    def test_sample_gpu_empty_when_no_stream_data(self):
+        with mock.patch.object(nms._gpu_stream, "latest", return_value=None):
             got = nms.sample_gpu()
         self.assertIsNone(got["gpu_video_pct"])
         self.assertIsNone(got["gpu_render_pct"])
+        self.assertIsNone(got["gpu_video_enhance_pct"])
         self.assertIsNone(got["gpu_freq_mhz"])
+
+    def test_sample_gpu_passes_through_stream_sample(self):
+        sample = {"gpu_video_pct": 33.0, "gpu_render_pct": 2.0,
+                  "gpu_video_enhance_pct": 0.0, "gpu_freq_mhz": 900.0}
+        with mock.patch.object(nms._gpu_stream, "latest", return_value=sample):
+            self.assertEqual(nms.sample_gpu(), sample)
 
 
 class TestSchemaAndRetention(unittest.TestCase):

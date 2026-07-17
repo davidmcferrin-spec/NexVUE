@@ -114,4 +114,20 @@ out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true AUDIO_QUEUE_BUFFERS=75 ./n
 occurrences=$(grep -o "max-size-buffers=75 leaky=downstream" <<<"$out" | wc -l)
 [ "$occurrences" -ge 3 ] || fail "T17 audio queue depth should apply to capture queue + both tee branches (got $occurrences)"
 
+
+# T18: captions side channel injects extract/convert branch (no burn-in overlay)
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 CAPTIONS_ENABLE=true CAPTIONS_PIPELINE_ONLY=true run_encode)
+grep -q "output-cc=true" <<<"$out" || fail "T18 output-cc missing"
+grep -q "ccextractor name=cc" <<<"$out" || fail "T18 ccextractor missing"
+grep -q "cc.caption" <<<"$out" || fail "T18 caption pad branch missing"
+grep -q "ccconverter" <<<"$out" || fail "T18 ccconverter missing"
+grep -q "closedcaption/x-cea-608,format=raw" <<<"$out" || fail "T18 raw 608 caps missing"
+grep -qE "cc708overlay|cea708overlay|cea608overlay" <<<"$out" && fail "T18 must not burn-in overlays"
+
+# T19: CAPTIONS_ENABLE=false omits caption elements
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 CAPTIONS_ENABLE=false run_encode)
+grep -q "output-cc=true" <<<"$out" && fail "T19 output-cc should be absent"
+grep -q "ccextractor" <<<"$out" && fail "T19 ccextractor should be absent"
+DEVICE_NUMBER=0 CHANNEL_PATH=ch0 CAPTIONS_ENABLE=bogus expect_usage_64 "T19 accepted bogus CAPTIONS_ENABLE"
+
 echo "All pipeline assembly tests passed."

@@ -8,19 +8,24 @@
  *
  * Actions (GET or POST JSON body):
  *   services | journal | channels_list | channel_get | channel_put
- *   | channels_bulk | restart | aliases | kick_viewer
+ *   | channels_bulk | restart | aliases | kick_viewer | kick_check
  *
  * kick_viewer POSTs to MediaMTX /v3/webrtcsessions/kick/{id} on loopback
- * (no sudo). Used by Metrics → Viewer sessions. Phase 1 LAN-trust.
+ * (no sudo), then records the session in a short-lived kick registry so
+ * Player / Multiview / Cast can suppress self-healing reconnect. Used by
+ * Metrics → Viewer sessions. Phase 1 LAN-trust — not a rejoin ban (Phase 2 auth).
+ *
+ * CLI include: when PHP_SAPI is cli and NEXVUE_OPS_HTTP is unset, this file
+ * only defines helpers (for unit tests) and returns without dispatching.
  */
 
 declare(strict_types=1);
 
-header('Content-Type: application/json');
-header('Cache-Control: no-store');
-
 const CHANNELS_DIR = '/etc/nexvue/channels';
 const SUDO = '/usr/bin/sudo';
+/** Kick registry TTL — long enough for the 5s player reconnect window + retries. */
+const KICK_REGISTRY_TTL_S = 600;
+const KICK_REASON_MAX_LEN = 200;
 
 const EDITABLE_KEYS = [
     'CHANNEL_ALIAS', 'MAX_DEVICES', 'DEINT_FIELDS', 'BITRATE_KBPS', 'GOP_FRAMES',
@@ -30,10 +35,247 @@ const EDITABLE_KEYS = [
 ];
 
 function fail(int $status, string $message): never {
+    if (!headers_sent()) {
+        header('Content-Type: application/json');
+        header('Cache-Control: no-store');
+    }
     http_response_code($status);
     echo json_encode(['ok' => false, 'error' => $message]);
     exit;
 }
+
+function kick_is_uuid(string $id): bool {
+    return (bool)preg_match(
+        '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
+        $id
+    );
+}
+
+function kick_registry_path(): string {
+    $override = getenv('NEXVUE_KICK_REGISTRY');
+    if (is_string($override) && $override !== '') {
+        return $override;
+    }
+    return sys_get_temp_dir() . '/nexvue-kicked-sessions.json';
+}
+
+function kick_normalize_reason(mixed $reason): string {
+    if (!is_string($reason)) {
+        return '';
+    }
+    $reason = trim($reason);
+    $reason = preg_replace('/[\x00-\x1F\x7F]/u', '', $reason) ?? '';
+    if (strlen($reason) > KICK_REASON_MAX_LEN) {
+        $reason = substr($reason, 0, KICK_REASON_MAX_LEN);
+    }
+    return $reason;
+}
+
+/** Strip :port from MediaMTX remoteAddr (IPv4 host:port or [IPv6]:port). */
+function kick_strip_ip_port(string $addr): string {
+    $addr = trim($addr);
+    if ($addr === '') {
+        return '';
+    }
+    if (str_starts_with($addr, '[')) {
+        $end = strpos($addr, ']');
+        if ($end !== false) {
+            return substr($addr, 1, $end - 1);
+        }
+    }
+    if (substr_count($addr, ':') === 1) {
+        return explode(':', $addr, 2)[0];
+    }
+    return $addr;
+}
+
+function kick_registry_prune(array $entries): array {
+    $cut = time() - KICK_REGISTRY_TTL_S;
+    $out = [];
+    foreach ($entries as $e) {
+        if (!is_array($e)) {
+            continue;
+        }
+        $ts = (int)($e['ts'] ?? 0);
+        if ($ts >= $cut && is_string($e['session_id'] ?? null) && kick_is_uuid($e['session_id'])) {
+            $out[] = $e;
+        }
+    }
+    return $out;
+}
+
+/**
+ * Exclusive flock around read-modify-write of the kick registry JSON file.
+ * $fn receives pruned entries and returns ['entries' => array, 'return' => mixed]
+ * to persist, or any other value to leave the file rewritten with pruned entries only.
+ */
+function kick_registry_with_lock(callable $fn): mixed {
+    $path = kick_registry_path();
+    $fh = @fopen($path, 'c+');
+    if ($fh === false) {
+        throw new RuntimeException('cannot open kick registry');
+    }
+    try {
+        if (!flock($fh, LOCK_EX)) {
+            throw new RuntimeException('cannot lock kick registry');
+        }
+        rewind($fh);
+        $raw = stream_get_contents($fh);
+        $entries = [];
+        if (is_string($raw) && $raw !== '') {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                $entries = $decoded;
+            }
+        }
+        $entries = kick_registry_prune($entries);
+        $result = $fn($entries);
+        $toWrite = $entries;
+        $ret = $result;
+        if (is_array($result) && array_key_exists('entries', $result)) {
+            $toWrite = $result['entries'];
+            $ret = $result['return'] ?? null;
+        }
+        $json = json_encode(array_values($toWrite), JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            $json = '[]';
+        }
+        ftruncate($fh, 0);
+        rewind($fh);
+        fwrite($fh, $json);
+        fflush($fh);
+        return $ret;
+    } finally {
+        flock($fh, LOCK_UN);
+        fclose($fh);
+    }
+}
+
+function kick_registry_add(string $sessionId, string $ip, string $reason): void {
+    kick_registry_with_lock(static function (array $entries) use ($sessionId, $ip, $reason): array {
+        $kept = [];
+        foreach ($entries as $e) {
+            if (($e['session_id'] ?? '') !== $sessionId) {
+                $kept[] = $e;
+            }
+        }
+        $kept[] = [
+            'session_id' => $sessionId,
+            'ip' => $ip,
+            'reason' => $reason,
+            'ts' => time(),
+        ];
+        return ['entries' => $kept, 'return' => null];
+    });
+}
+
+function kick_registry_remove(string $sessionId): void {
+    kick_registry_with_lock(static function (array $entries) use ($sessionId): array {
+        $kept = [];
+        foreach ($entries as $e) {
+            if (($e['session_id'] ?? '') !== $sessionId) {
+                $kept[] = $e;
+            }
+        }
+        return ['entries' => $kept, 'return' => null];
+    });
+}
+
+/**
+ * Look up a kick by MediaMTX WebRTC session UUID only.
+ * Multiple viewers can share an IP (NAT) and even the same channel — each has
+ * a distinct session_id, so kicking one never matches the others. No IP
+ * fallback: a missing session_id fails open (self-heal) rather than
+ * suppressing every peer behind the same REMOTE_ADDR.
+ *
+ * @return array{kicked: bool, reason?: string}
+ */
+function kick_registry_check(?string $sessionId, ?string $clientIp = null): array {
+    return kick_registry_with_lock(static function (array $entries) use ($sessionId): array {
+        $match = null;
+        if (is_string($sessionId) && $sessionId !== '') {
+            foreach ($entries as $e) {
+                if (($e['session_id'] ?? '') === $sessionId) {
+                    $match = $e;
+                    break;
+                }
+            }
+        }
+        if ($match === null) {
+            return ['entries' => $entries, 'return' => ['kicked' => false]];
+        }
+        $reason = (string)($match['reason'] ?? '');
+        // Escape for safety if a client ever uses innerHTML; textContent is still preferred.
+        $reasonOut = htmlspecialchars($reason, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        return [
+            'entries' => $entries,
+            'return' => ['kicked' => true, 'reason' => $reasonOut],
+        ];
+    });
+}
+
+function mediamtx_api_base(): string {
+    $base = getenv('NEXVUE_MEDIAMTX_API_URL');
+    if (!is_string($base) || $base === '') {
+        $base = 'https://127.0.0.1:9997';
+    }
+    $base = rtrim($base, '/');
+    $host = parse_url($base, PHP_URL_HOST);
+    // Unverified TLS is only acceptable for loopback-to-self (same rule as
+    // nexvue-metrics-server.py). Reject anything else rather than phone home.
+    if (!is_string($host) || !in_array(strtolower($host), ['127.0.0.1', 'localhost', '::1'], true)) {
+        fail(500, 'NEXVUE_MEDIAMTX_API_URL must be loopback');
+    }
+    return $base;
+}
+
+/** @return array{status: int, body: string} */
+function mediamtx_http(string $method, string $urlPath): array {
+    $url = mediamtx_api_base() . $urlPath;
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => $method,
+            'timeout' => 5,
+            'ignore_errors' => true,
+            'header' => "Content-Length: 0\r\n",
+        ],
+        'ssl' => [
+            'verify_peer' => false,
+            'verify_peer_name' => false,
+        ],
+    ]);
+    $bodyOut = @file_get_contents($url, false, $ctx);
+    $status = 0;
+    if (isset($http_response_header[0])
+        && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
+        $status = (int)$m[1];
+    }
+    return ['status' => $status, 'body' => is_string($bodyOut) ? $bodyOut : ''];
+}
+
+function mediamtx_session_remote_ip(string $sessionId): string {
+    $r = mediamtx_http('GET', '/v3/webrtcsessions/get/' . rawurlencode($sessionId));
+    if ($r['status'] !== 200 || $r['body'] === '') {
+        return '';
+    }
+    $data = json_decode($r['body'], true);
+    if (!is_array($data)) {
+        return '';
+    }
+    $addr = $data['remoteAddr'] ?? ($data['remote_addr'] ?? '');
+    if (!is_string($addr)) {
+        return '';
+    }
+    return kick_strip_ip_port($addr);
+}
+
+// Library mode for unit tests (php -r 'include …' without NEXVUE_OPS_HTTP).
+if (PHP_SAPI === 'cli' && getenv('NEXVUE_OPS_HTTP') === false) {
+    return;
+}
+
+header('Content-Type: application/json');
+header('Cache-Control: no-store');
 
 function read_json_body(): array {
     $raw = file_get_contents('php://input');
@@ -355,45 +597,31 @@ if ($action === 'restart') {
 
 if ($action === 'kick_viewer') {
     $sessionId = $body['session_id'] ?? ($_GET['session_id'] ?? '');
-    if (!is_string($sessionId)
-        || !preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $sessionId)) {
+    if (!is_string($sessionId) || !kick_is_uuid($sessionId)) {
         fail(400, 'session_id must be a UUID');
     }
+    $reason = kick_normalize_reason($body['reason'] ?? ($_GET['reason'] ?? ''));
 
-    $base = getenv('NEXVUE_MEDIAMTX_API_URL');
-    if (!is_string($base) || $base === '') {
-        $base = 'https://127.0.0.1:9997';
-    }
-    $base = rtrim($base, '/');
-    $host = parse_url($base, PHP_URL_HOST);
-    // Unverified TLS is only acceptable for loopback-to-self (same rule as
-    // nexvue-metrics-server.py). Reject anything else rather than phone home.
-    if (!is_string($host) || !in_array(strtolower($host), ['127.0.0.1', 'localhost', '::1'], true)) {
-        fail(500, 'NEXVUE_MEDIAMTX_API_URL must be loopback');
+    // Capture remote IP, then record the kick BEFORE tearing down MediaMTX so
+    // the viewer's kick_check (fired on connection drop) cannot race an empty registry.
+    $remoteIp = mediamtx_session_remote_ip($sessionId);
+    try {
+        kick_registry_add($sessionId, $remoteIp, $reason);
+    } catch (RuntimeException $e) {
+        // Continue — MediaMTX kick still useful; viewer may self-heal without message.
     }
 
-    $url = $base . '/v3/webrtcsessions/kick/' . rawurlencode($sessionId);
-    $ctx = stream_context_create([
-        'http' => [
-            'method' => 'POST',
-            'timeout' => 5,
-            'ignore_errors' => true,
-            'header' => "Content-Length: 0\r\n",
-        ],
-        'ssl' => [
-            'verify_peer' => false,
-            'verify_peer_name' => false,
-        ],
-    ]);
-    $bodyOut = @file_get_contents($url, false, $ctx);
-    $status = 0;
-    if (isset($http_response_header[0])
-        && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
-        $status = (int)$m[1];
-    }
+    $r = mediamtx_http('POST', '/v3/webrtcsessions/kick/' . rawurlencode($sessionId));
+    $status = $r['status'];
     if ($status === 200) {
         echo json_encode(['ok' => true, 'session_id' => $sessionId]);
         exit;
+    }
+    // Roll back the registry entry so a failed kick does not suppress healing.
+    try {
+        kick_registry_remove($sessionId);
+    } catch (RuntimeException $e) {
+        // ignore
     }
     if ($status === 404) {
         fail(404, 'session not found');
@@ -401,11 +629,37 @@ if ($action === 'kick_viewer') {
     if ($status === 0) {
         fail(502, 'MediaMTX API unreachable');
     }
-    $snippet = is_string($bodyOut) ? trim($bodyOut) : '';
+    $snippet = trim($r['body']);
     if (strlen($snippet) > 200) {
         $snippet = substr($snippet, 0, 200);
     }
     fail(502, $snippet !== '' ? "MediaMTX kick failed ({$status}): {$snippet}" : "MediaMTX kick failed ({$status})");
+}
+
+// ---- kick_check (player self-healing gate) ------------------------------------
+
+if ($action === 'kick_check') {
+    $sessionId = $body['session_id'] ?? ($_GET['session_id'] ?? '');
+    if (!is_string($sessionId)) {
+        $sessionId = '';
+    }
+    if ($sessionId !== '' && !kick_is_uuid($sessionId)) {
+        fail(400, 'session_id must be a UUID');
+    }
+    // Session UUID only — no IP matching (shared NAT / same-channel peers).
+    try {
+        $result = kick_registry_check($sessionId !== '' ? $sessionId : null);
+    } catch (RuntimeException $e) {
+        // Fail open — do not block self-healing if the registry is unreadable.
+        echo json_encode(['ok' => true, 'kicked' => false]);
+        exit;
+    }
+    echo json_encode([
+        'ok' => true,
+        'kicked' => !empty($result['kicked']),
+        'reason' => (string)($result['reason'] ?? ''),
+    ]);
+    exit;
 }
 
 fail(400, 'unknown action');

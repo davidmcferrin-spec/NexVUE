@@ -27,7 +27,12 @@ time-series samples in SQLite (stdlib `sqlite3` — no pip, no new dependency):
   - /proc/stat, meminfo, loadavg -> host CPU %, memory used/total, load1
   - intel_gpu_top -J (optional) -> iGPU Video/Render/VideoEnhance busy %
                               and frequency (capacity correlation for
-                              Metrics — not a CheckMK substitute)
+                              Metrics — not a CheckMK substitute). Read from
+                              ONE persistent child process (see _GpuStream),
+                              never a kill-after-timeout one-shot: the tool
+                              block-buffers stdout on a pipe, so short runs
+                              died before their first flush and left the
+                              iGPU charts empty.
 
 Old samples are pruned hourly (NEXVUE_METRICS_RETENTION_DAYS, default 30) so
 the SQLite file does not grow unbounded.
@@ -75,7 +80,13 @@ _prev_cpu: tuple | None = None
 _gpu_warn_last = 0.0
 _GPU_WARN_EVERY_S = 300.0
 INTEL_GPU_TOP = os.environ.get("NEXVUE_INTEL_GPU_TOP", "intel_gpu_top")
-INTEL_GPU_TOP_TIMEOUT_S = float(os.environ.get("NEXVUE_INTEL_GPU_TOP_TIMEOUT_S", "2.5"))
+# One intel_gpu_top sample period in ms. The tool streams continuously; the
+# persistent reader thread (see _GpuStream) keeps only the newest sample.
+INTEL_GPU_TOP_PERIOD_MS = int(float(os.environ.get("NEXVUE_INTEL_GPU_TOP_PERIOD_MS", "1000")))
+# A sample older than this is treated as "no data" (tool died or stalled).
+# Generous relative to the poll interval because intel_gpu_top block-buffers
+# stdout when writing to a pipe — samples can arrive in multi-second bursts.
+_GPU_STALE_AFTER_S = max(30.0, INTEL_GPU_TOP_PERIOD_MS / 1000.0 * 10)
 
 
 def _unverified_ssl_context() -> "ssl.SSLContext | None":
@@ -226,7 +237,7 @@ def _classify_gpu_engine(name: str) -> str | None:
 
 def _parse_intel_gpu_top_json(text: str) -> dict:
     """
-    Parse one sample from intel_gpu_top -J output.
+    Parse one sample from intel_gpu_top -J output text.
 
     Returns dict with keys gpu_video_pct, gpu_render_pct, gpu_video_enhance_pct,
     gpu_freq_mhz (values may be None if absent). Raises ValueError if unusable.
@@ -245,7 +256,11 @@ def _parse_intel_gpu_top_json(text: str) -> dict:
 
     if not isinstance(obj, dict):
         raise ValueError("sample is not an object")
+    return _extract_gpu_sample(obj)
 
+
+def _extract_gpu_sample(obj: dict) -> dict:
+    """Pull the four stored metrics out of one parsed intel_gpu_top JSON object."""
     engines = obj.get("engines")
     video_vals: list[float] = []
     render_vals: list[float] = []
@@ -300,77 +315,186 @@ def _parse_intel_gpu_top_json(text: str) -> dict:
     }
 
 
+def _consume_stream_objects(buf: str) -> "tuple[list[dict], str]":
+    """
+    Extract every complete JSON object from an intel_gpu_top -J stream buffer.
+
+    Handles both output shapes seen across intel-gpu-tools versions: bare
+    concatenated pretty-printed objects (older builds) and a never-closing
+    array — "[\\n{...},\\n{...}" — (newer builds). Returns (objects, remainder)
+    where remainder is the unconsumed tail (usually a partial object still
+    being written).
+    """
+    objs: list[dict] = []
+    dec = json.JSONDecoder()
+    i, n = 0, len(buf)
+    while True:
+        while i < n and buf[i] in " \t\r\n,[]":
+            i += 1
+        if i >= n:
+            return objs, ""
+        try:
+            obj, end = dec.raw_decode(buf, i)
+        except json.JSONDecodeError:
+            return objs, buf[i:]
+        if isinstance(obj, dict):
+            objs.append(obj)
+        i = end
+
+
+class _GpuStream:
+    """
+    Persistent intel_gpu_top -J reader.
+
+    Why persistent: the previous design forked intel_gpu_top on every poll,
+    killed it after a short timeout, and parsed whatever stdout the kill left
+    behind. When stdout is a pipe (not a TTY), intel_gpu_top block-buffers
+    its output, so a short-lived run is routinely killed before the first
+    buffer flush — empty stdout, empty iGPU charts — even though the very
+    same command shows live numbers when run interactively. Keeping ONE
+    long-lived child and reading its stream continuously makes buffering
+    irrelevant (every flush eventually arrives and we always serve the
+    newest sample), and costs one PMU client instead of a fork per poll.
+
+    A daemon thread drains stdout and keeps only the latest parsed sample;
+    a second daemon thread drains stderr (bounded) so the child can never
+    block on a full pipe and we have diagnostics if it exits. sample_gpu()
+    pulls the newest sample and transparently restarts the child (with
+    backoff) if it died.
+    """
+
+    _RESTART_BACKOFF_S = 30.0
+    _MAX_BUFFER_CHARS = 1_000_000  # garbage guard — a sample is ~1 KB
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._proc: "subprocess.Popen | None" = None
+        self._latest: "tuple[float, dict] | None" = None  # (monotonic ts, sample)
+        self._next_start = 0.0  # monotonic time before which restarts are suppressed
+        self._stderr_tail = ""
+
+    # -- public ---------------------------------------------------------------
+
+    def latest(self) -> "dict | None":
+        """Newest parsed sample, or None if the child is dead/silent/stale."""
+        self._ensure_running()
+        with self._lock:
+            if self._latest is None:
+                return None
+            ts, sample = self._latest
+            if time.monotonic() - ts > _GPU_STALE_AFTER_S:
+                return None
+            return dict(sample)
+
+    # -- internals ------------------------------------------------------------
+
+    def _ensure_running(self) -> None:
+        global _gpu_warn_last
+        with self._lock:
+            if self._proc is not None and self._proc.poll() is None:
+                return
+            now_mono = time.monotonic()
+            if now_mono < self._next_start:
+                return
+            self._next_start = now_mono + self._RESTART_BACKOFF_S
+            died = self._proc
+            self._proc = None
+
+        if died is not None:
+            now = time.time()
+            if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
+                tail = self._stderr_tail.strip()
+                log.warning(
+                    "intel_gpu_top exited (rc=%s)%s — restarting",
+                    died.returncode,
+                    f": {tail}" if tail else "",
+                )
+                _gpu_warn_last = now
+
+        try:
+            proc = subprocess.Popen(
+                [INTEL_GPU_TOP, "-J", "-s", str(INTEL_GPU_TOP_PERIOD_MS), "-o", "-"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            now = time.time()
+            if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
+                log.warning("intel_gpu_top not found — install intel-gpu-tools for iGPU metrics")
+                _gpu_warn_last = now
+            return
+        except OSError as exc:
+            now = time.time()
+            if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
+                log.warning("intel_gpu_top start failed: %s", exc)
+                _gpu_warn_last = now
+            return
+
+        with self._lock:
+            self._proc = proc
+            self._stderr_tail = ""
+        threading.Thread(target=self._read_stdout, args=(proc,), daemon=True).start()
+        threading.Thread(target=self._read_stderr, args=(proc,), daemon=True).start()
+
+    def _read_stdout(self, proc: "subprocess.Popen") -> None:
+        buf = ""
+        stdout = proc.stdout
+        assert stdout is not None
+        while True:
+            try:
+                chunk = stdout.read1(65536)
+            except (OSError, ValueError):
+                break
+            if not chunk:
+                break
+            buf += chunk.decode("utf-8", errors="replace")
+            objs, buf = _consume_stream_objects(buf)
+            if len(buf) > self._MAX_BUFFER_CHARS:
+                buf = ""
+            for obj in objs:
+                sample = _extract_gpu_sample(obj)
+                # Skip objects with no usable metric (e.g. header/period-only
+                # records) so they never clobber a real sample.
+                if all(v is None for v in sample.values()):
+                    continue
+                with self._lock:
+                    self._latest = (time.monotonic(), sample)
+
+    def _read_stderr(self, proc: "subprocess.Popen") -> None:
+        stderr = proc.stderr
+        assert stderr is not None
+        while True:
+            try:
+                chunk = stderr.read1(4096)
+            except (OSError, ValueError):
+                break
+            if not chunk:
+                break
+            with self._lock:
+                self._stderr_tail = (self._stderr_tail
+                                     + chunk.decode("utf-8", errors="replace"))[-2048:]
+
+
+_gpu_stream = _GpuStream()
+
+
 def sample_gpu() -> dict:
     """
-    One-shot intel_gpu_top JSON sample. Returns empty-ish dict with None fields
-    on failure; rate-limits warning logs.
-
-    intel_gpu_top -J streams NDJSON forever and never exits on its own, so we
-    always kill it via timeout after enough wall time for at least one -s
-    period. TimeoutExpired is therefore the *normal* success path — parse
-    whatever landed on stdout before the kill.
+    Newest iGPU engine sample from the persistent intel_gpu_top stream.
+    Returns a dict with all-None fields when no fresh sample is available
+    (tool missing, no permission, child restarting, first period not yet
+    elapsed) — host CPU/memory collection is unaffected either way.
     """
-    global _gpu_warn_last
-    empty = {
+    got = _gpu_stream.latest()
+    if got is not None:
+        return got
+    return {
         "gpu_video_pct": None,
         "gpu_render_pct": None,
         "gpu_video_enhance_pct": None,
         "gpu_freq_mhz": None,
     }
-    out = ""
-    try:
-        # -s 100 ≈ one 100ms sample period; -o - writes JSON to stdout.
-        proc = subprocess.run(
-            [INTEL_GPU_TOP, "-J", "-s", "100", "-o", "-"],
-            capture_output=True,
-            text=True,
-            timeout=INTEL_GPU_TOP_TIMEOUT_S,
-            check=False,
-        )
-        out = (proc.stdout or "").strip()
-        if not out:
-            err = (proc.stderr or "").strip() or f"exit {proc.returncode}"
-            raise RuntimeError(err)
-    except subprocess.TimeoutExpired as exc:
-        # Expected: tool is a continuous stream. Prefer captured stdout.
-        raw = exc.stdout
-        if isinstance(raw, bytes):
-            out = raw.decode(errors="replace").strip()
-        else:
-            out = (raw or "").strip()
-        if not out:
-            now = time.time()
-            if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
-                err = exc.stderr
-                if isinstance(err, bytes):
-                    err = err.decode(errors="replace")
-                log.warning(
-                    "intel GPU sample timed out with empty stdout (%s)",
-                    (err or "").strip() or f"timeout {INTEL_GPU_TOP_TIMEOUT_S}s",
-                )
-                _gpu_warn_last = now
-            return empty
-    except FileNotFoundError:
-        now = time.time()
-        if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
-            log.warning("intel_gpu_top not found — install intel-gpu-tools for iGPU metrics")
-            _gpu_warn_last = now
-        return empty
-    except (RuntimeError, OSError) as exc:
-        now = time.time()
-        if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
-            log.warning("intel GPU sample failed: %s", exc)
-            _gpu_warn_last = now
-        return empty
-
-    try:
-        return _parse_intel_gpu_top_json(out)
-    except (ValueError, json.JSONDecodeError) as exc:
-        now = time.time()
-        if now - _gpu_warn_last >= _GPU_WARN_EVERY_S:
-            log.warning("intel GPU sample failed: %s", exc)
-            _gpu_warn_last = now
-        return empty
 
 
 # ---- Database --------------------------------------------------------------------

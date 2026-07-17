@@ -45,12 +45,16 @@ RestartSec=3
 # an unattended edge node must recover without hands. Rate-limited so the
 # journal stays readable.
 
+# Caption side channel state (CEA-608 decode → JSON for Apache/PHP).
+RuntimeDirectory=nexvue
+RuntimeDirectoryMode=0755
 # Hardening — encoder needs devices and loopback network, nothing else.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadOnlyPaths=/etc/nexvue
+ReadWritePaths=/run/nexvue
 
 [Install]
 WantedBy=multi-user.target

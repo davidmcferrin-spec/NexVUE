@@ -10,12 +10,14 @@
   cannot cast a browser MediaStream, so the STB connects itself.
 
   Launch data (custom namespace urn:x-cast:com.nexvue.whep):
-    { "whepBase": "https://edge:8889", "path": "ch0", "rendition": "hi"|"lo" }
+    { "whepBase": "https://edge:8889", "path": "ch0", "rendition": "hi"|"lo",
+      "captions": true|false }
 
   Direct test (no Cast session): open with query params, e.g.
-    cast-receiver.html?whepBase=https://10.0.0.5:8889&path=ch0
+    cast-receiver.html?whepBase=https://10.0.0.5:8889&path=ch0&captions=1
 -->
 <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script src="nexvue-captions.js"></script>
 <style>
   :root {
     --bg: #000; --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
@@ -31,10 +33,19 @@
   #hud .title { color: var(--acc); font-weight: 600; font-size: 16px; }
   #hud .state.ok { color: var(--ok); }
   #hud .state.bad { color: var(--bad); }
-  #stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  #stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
   video {
     width: 100%; height: 100%; object-fit: contain; background: #000; display: block;
   }
+  #cc-overlay {
+    position: absolute; left: 8%; right: 8%; bottom: 10%; z-index: 1;
+    text-align: center; pointer-events: none;
+    font: 600 3.2vmin/1.35 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    color: #fff; text-shadow: 0 1px 2px #000, 0 0 6px #000;
+    white-space: pre-line; background: rgba(0,0,0,.55);
+    padding: 0.2em 0.55em; border-radius: 2px;
+  }
+  #cc-overlay[hidden] { display: none; }
   #tap {
     display: none; position: absolute; inset: 0; z-index: 3;
     background: rgba(0,0,0,.55); color: var(--text); border: 0; cursor: pointer;
@@ -51,6 +62,7 @@
 </div>
 <div id="stage">
   <video id="video" autoplay playsinline></video>
+  <div id="cc-overlay" hidden aria-live="polite"></div>
 </div>
 <button type="button" id="tap" class="show">Tap for audio</button>
 
@@ -67,7 +79,18 @@
   let intentional = false;
   let reconnectTimer = null;
   let reconnectAttempt = 0;
-  let current = { whepBase: "", path: "", rendition: "hi" };
+  let currentSessionId = null;
+  let current = { whepBase: "", path: "", rendition: "hi", captions: false };
+  const ccOverlay = document.getElementById("cc-overlay");
+  let captionsOn = false;
+  let lastCue = { text: "", clear: true, seq: 0, service: "CC1" };
+  function paintCaptions() {
+    NexVueCaptions.renderOverlay(ccOverlay, lastCue, captionsOn);
+  }
+  const captionClient = NexVueCaptions.connect((cue) => {
+    lastCue = cue;
+    paintCaptions();
+  });
 
   const RECONNECT_BASE_MS = 2000;
   const RECONNECT_MAX_MS = 30000;
@@ -81,11 +104,58 @@
     return rend === "lo" ? `${base}lo` : base;
   }
 
+  function parseWhepSessionId(res) {
+    const loc = res.headers.get("Location") || res.headers.get("location") || "";
+    const m = String(loc).match(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+    );
+    return m ? m[0] : null;
+  }
+
+  function decodeKickReason(s) {
+    return String(s)
+      .replace(/&quot;/g, '"')
+      .replace(/&#039;/g, "'")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&");
+  }
+
+  async function checkKicked(sessionId) {
+    const q = new URLSearchParams({ action: "kick_check" });
+    if (sessionId) q.set("session_id", sessionId);
+    const res = await fetch(`nexvue-ops.php?${q}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return { kicked: !!data.kicked, reason: data.reason || "" };
+  }
+
+  function applyKicked(reason) {
+    intentional = true;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (pc) { pc.close(); pc = null; }
+    video.srcObject = null;
+    currentSessionId = null;
+    const msg = decodeKickReason(reason || "");
+    setState(msg ? `removed by administrator — ${msg}` : "removed by administrator", "bad");
+  }
+
   function closeSession() {
     intentional = true;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (pc) { pc.close(); pc = null; }
     video.srcObject = null;
+    currentSessionId = null;
+  }
+
+  function setCaptionsEnabled(on, channelBase) {
+    captionsOn = !!on;
+    if (captionsOn && channelBase) {
+      captionClient.setChannel(channelBase);
+    } else {
+      captionClient.setChannel(null);
+    }
+    paintCaptions();
   }
 
   function scheduleReconnect() {
@@ -98,6 +168,19 @@
       if (intentional) return;
       openSession(current.whepBase, pathFor(current.path, current.rendition));
     }, delay);
+  }
+
+  async function maybeReconnect() {
+    if (intentional || !current.whepBase || !current.path) return;
+    const sid = currentSessionId;
+    try {
+      const result = await checkKicked(sid);
+      if (result.kicked) {
+        applyKicked(result.reason);
+        return;
+      }
+    } catch (e) { /* heal as usual */ }
+    scheduleReconnect();
   }
 
   async function openSession(whepBase, path) {
@@ -124,7 +207,7 @@
         reconnectAttempt = 0;
       } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         setState(pc.connectionState, "bad");
-        if (!intentional) scheduleReconnect();
+        if (!intentional) maybeReconnect();
       }
     };
 
@@ -149,11 +232,15 @@
         body: pc.localDescription.sdp,
       });
       if (!res.ok) throw new Error(`WHEP HTTP ${res.status}`);
+      currentSessionId = parseWhepSessionId(res);
       await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
     } catch (err) {
+      const sid = currentSessionId;
       setState(`error: ${err.message}`, "bad");
       closeSession();
-      if (!intentional) scheduleReconnect();
+      currentSessionId = sid;
+      intentional = false;
+      if (!intentional) maybeReconnect();
     }
   }
 
@@ -162,6 +249,8 @@
     const whepBase = data.whepBase || data.whep_base || "";
     let path = data.path || "";
     const rendition = data.rendition === "lo" ? "lo" : "hi";
+    const captions = data.captions === true || data.captions === 1
+      || data.captions === "1" || data.captions === "true";
     if (!path && data.channel) path = String(data.channel);
     if (path.endsWith("lo") && rendition === "hi") {
       // allow explicit full path
@@ -180,6 +269,8 @@
     }
     current.whepBase = whepBase.replace(/\/+$/, "");
     current.path = channelBase.replace(/^\/+/, "");
+    current.captions = captions;
+    setCaptionsEnabled(captions, current.path);
     openSession(current.whepBase, pathFor(current.path, current.rendition));
   }
 
@@ -195,6 +286,7 @@
       whepBase: qs.get("whepBase"),
       path: qs.get("path"),
       rendition: qs.get("rendition") || "hi",
+      captions: qs.get("captions") || "0",
     });
   }
 
