@@ -52,6 +52,7 @@ REQUIRED_FILES=(
   nexvue-status-server.py nexvue-status.service
   nexvue-metrics-server.py nexvue-metrics.service
   nexvue-metrics.php nexvue-status.php nexvue-qr.js metrics.html index.html multiview.html
+  cast-receiver.html
   nexvue-ops.php services.html channels.html
   nexvue-ops-env-update.py nexvue-ops.sudoers
   nexvue-ops-status.sh nexvue-ops-journal.sh
@@ -157,6 +158,7 @@ if [ -d "${WEBROOT}" ]; then
   install -m 644 "${REPO_DIR}/index.html" \
                  "${REPO_DIR}/multiview.html" \
                  "${REPO_DIR}/metrics.html" \
+                 "${REPO_DIR}/cast-receiver.html" \
                  "${REPO_DIR}/nexvue-metrics.php" \
                  "${REPO_DIR}/nexvue-status.php" \
                  "${REPO_DIR}/nexvue-qr.js" \
@@ -164,9 +166,9 @@ if [ -d "${WEBROOT}" ]; then
                  "${REPO_DIR}/channels.html" \
                  "${REPO_DIR}/nexvue-ops.php" \
                  "${WEBROOT}/"
-  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels)"
+  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / cast)"
 else
-  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-qr.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
+  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php nexvue-status.php nexvue-qr.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
 fi
 
 step "5/5 decklink-status helper"
@@ -228,7 +230,7 @@ else
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 if [ -d "${WEBROOT}" ]; then
-  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-qr.js services.html channels.html nexvue-ops.php; do
+  for f in index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php nexvue-status.php nexvue-qr.js services.html channels.html nexvue-ops.php; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
 else

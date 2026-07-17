@@ -55,7 +55,6 @@
     border-radius: 4px; padding: 7px 10px; font: inherit;
   }
   input:focus, button:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
-  input#host { width: 260px; }
   button { cursor: pointer; }
   button:disabled { opacity: .4; cursor: not-allowed; }
   button.ch.active, button.tgl.active, button.q.active {
@@ -151,7 +150,6 @@
 </nav>
 
 <div class="bar">
-  <input id="host" placeholder="(auto)" aria-label="Edge WHEP base URL — leave blank to use this page's host" title="Leave blank to auto-use the address you loaded this page from. Override to point at a different edge, e.g. http://10.0.0.5:8889">
   <span id="channels"></span>
   <button id="disconnect">Disconnect</button>
   <span id="state">idle</span>
@@ -166,6 +164,7 @@
   <button id="mirror" class="tgl" title="Reflect left-right (confidence monitor)">Mirror ↔</button>
   <button id="flip" class="tgl" title="Reflect top-bottom (inverted mounts)">Flip ↕</button>
   <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip)">⛶ Fullscreen</button>
+  <button id="cast" class="tgl" disabled title="Cast to Chromecast / Cast device (requires Cast App ID — see README)">Cast</button>
 </div>
 
 <div class="stage">
@@ -211,11 +210,18 @@
 </div>
 
 <script src="nexvue-qr.js"></script>
+<script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 <script>
 "use strict";
 (() => {
   const $ = id => document.getElementById(id);
   const video = $("video"), stateEl = $("state");
+
+  // Chromecast custom receiver App ID from Google Cast Developer Console.
+  // Replace after registering https://<edge>/cast-receiver.html as the receiver URL.
+  // Override at runtime: localStorage.setItem("nexvue-cast-app-id", "YOUR_APP_ID")
+  const CAST_APP_ID_DEFAULT = "";
+  const CAST_NS = "urn:x-cast:com.nexvue.whep";
 
   // ---- Session / quality state -------------------------------------------------
   let pc = null, statsTimer = null, apiTimer = null;
@@ -254,34 +260,18 @@
     return `${PROTO}//${EDGE_HOST}:${PORT[service]}`;
   }
 
-  // Show the auto-discovered WHEP URL as the host-field placeholder so the
-  // user can see exactly what "auto" resolves to (and that it followed the
-  // address they loaded the page from).
-  document.addEventListener("DOMContentLoaded", () => {
-    const h = $("host");
-    if (h) h.placeholder = edgeUrl("whep");
-  });
-
   function setState(text, cls) {
     stateEl.textContent = text;
     stateEl.className = cls || "";
   }
 
-  // Base for WHEP requests — the host field allows a manual override (e.g.
-  // pointing the page at a different edge), otherwise the discovered host.
+  // WHEP / API / status all use the host that served this page.
   function whepBase() {
-    const override = $("host").value.trim().replace(/\/+$/, "");
-    return override || edgeUrl("whep");
+    return edgeUrl("whep");
   }
 
-  // API and status live on the SAME host as WHEP but different ports. Derive
-  // them from whatever host WHEP is currently using, so a manual override in
-  // the host field propagates to all three services in lockstep.
   function serviceBase(service) {
-    try {
-      const host = new URL(whepBase()).hostname;
-      return `${PROTO}//${host}:${PORT[service]}`;
-    } catch { return edgeUrl(service); }
+    return edgeUrl(service);
   }
 
   function pathFor(rend) {
@@ -560,19 +550,8 @@
 
   // ---- DeckLink input/reference status — runs continuously -------------------------
   // Prefer same-origin nexvue-status.php (Apache → loopback :9998) so HTTPS
-  // pages are not blocked by mixed content or a second untrusted cert on
-  // :9998. Fall back to direct :9998 only when the host field points at a
-  // different edge hostname.
+  // pages are not blocked by mixed content or a second untrusted cert on :9998.
   function statusPollUrl() {
-    try {
-      const override = $("host").value.trim().replace(/\/+$/, "");
-      if (override) {
-        const host = new URL(override).hostname;
-        if (host && host !== EDGE_HOST) {
-          return serviceBase("status") + "/status";
-        }
-      }
-    } catch { /* ignore bad override; use proxy */ }
     return "nexvue-status.php";
   }
 
@@ -707,6 +686,129 @@
     document.addEventListener(ev, applyTransform);
   }
 
+  // ---- Chromecast (custom WHEP receiver) ---------------------------------------------
+  // Cast cannot play video.srcObject (WebRTC). The STB loads cast-receiver.html
+  // and opens its own WHEP session to the edge.
+  const castBtn = $("cast");
+  let castReady = false;
+
+  function castAppId() {
+    try {
+      const stored = localStorage.getItem("nexvue-cast-app-id");
+      if (stored && stored.trim()) return stored.trim();
+    } catch { /* private mode */ }
+    return CAST_APP_ID_DEFAULT;
+  }
+
+  function castPayload() {
+    if (!currentBase) return null;
+    return {
+      whepBase: whepBase(),
+      path: currentBase,
+      rendition: rendition === "lo" && loAvailable ? "lo" : "hi",
+    };
+  }
+
+  function updateCastButton() {
+    const appId = castAppId();
+    if (!castReady || !appId) {
+      castBtn.disabled = true;
+      castBtn.title = appId
+        ? "Cast SDK not available in this browser"
+        : "Set Cast App ID (localStorage nexvue-cast-app-id or CAST_APP_ID_DEFAULT) — see README";
+      castBtn.classList.remove("active");
+      return;
+    }
+    const session = cast.framework.CastContext.getInstance().getCurrentSession();
+    castBtn.disabled = false;
+    castBtn.classList.toggle("active", !!session);
+    castBtn.title = session
+      ? "Casting — click to send current channel again or stop from the Cast UI"
+      : "Cast current channel to Chromecast / Cast device";
+  }
+
+  async function sendCastLaunch(session) {
+    const payload = castPayload();
+    if (!payload) {
+      setState("select a channel before casting", "bad");
+      return;
+    }
+    await session.sendMessage(CAST_NS, payload);
+    setState(`cast → ${payload.path} (${payload.rendition})`, "ok");
+  }
+
+  async function castCurrentChannel() {
+    if (!castReady || !castAppId()) return;
+    if (!currentBase) {
+      setState("select a channel before casting", "bad");
+      return;
+    }
+    const context = cast.framework.CastContext.getInstance();
+    let session = context.getCurrentSession();
+    try {
+      if (!session) {
+        await context.requestSession();
+        session = context.getCurrentSession();
+      }
+      if (!session) return;
+      await sendCastLaunch(session);
+      updateCastButton();
+    } catch (err) {
+      const msg = (err && err.message) ? String(err.message) : String(err);
+      if (msg.toLowerCase().includes("cancel")) return;
+      setState(`cast error: ${msg}`, "bad");
+    }
+  }
+
+  function initCastSender() {
+    const appId = castAppId();
+    if (!appId || typeof cast === "undefined" || !cast.framework) {
+      updateCastButton();
+      return;
+    }
+    const context = cast.framework.CastContext.getInstance();
+    context.setOptions({
+      receiverApplicationId: appId,
+      autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
+    });
+    context.addEventListener(
+      cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
+      async (event) => {
+        updateCastButton();
+        const session = context.getCurrentSession();
+        if (!session) return;
+        const st = event.sessionState;
+        if (st === cast.framework.SessionState.SESSION_STARTED ||
+            st === cast.framework.SessionState.SESSION_RESUMED) {
+          try { await sendCastLaunch(session); } catch (e) { /* may cast before channel */ }
+        }
+      }
+    );
+    castReady = true;
+    updateCastButton();
+  }
+
+  window.__onGCastApiAvailable = (isAvailable) => {
+    if (isAvailable) initCastSender();
+    else updateCastButton();
+  };
+  if (window.chrome && chrome.cast && chrome.cast.isAvailable) {
+    initCastSender();
+  }
+  castBtn.addEventListener("click", castCurrentChannel);
+
+  const _openSession = openSession;
+  openSession = async function (path) {
+    await _openSession(path);
+    const session = castReady && typeof cast !== "undefined" && cast.framework
+      ? cast.framework.CastContext.getInstance().getCurrentSession()
+      : null;
+    if (session && currentBase) {
+      try { await sendCastLaunch(session); } catch (e) { /* ignore */ }
+    }
+    updateCastButton();
+  };
+
   // ---- Channel buttons ------------------------------------------------------------------
   // Labels use CHANNEL_ALIAS from ops API when available; WHEP path stays chN.
   // data-device maps DeckLink device-number for status dots (may differ from
@@ -767,15 +869,6 @@
   function sharePageUrl() {
     const path = location.pathname || "/index.html";
     const search = location.search || "";
-    try {
-      const override = $("host").value.trim().replace(/\/+$/, "");
-      if (override) {
-        const u = new URL(override);
-        if (u.hostname && u.hostname !== EDGE_HOST) {
-          return `${u.protocol}//${u.host}${path}${search}`;
-        }
-      }
-    } catch { /* ignore bad override */ }
     return `${location.origin}${path}${search}`;
   }
 

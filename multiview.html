@@ -52,7 +52,6 @@
   input:focus, button:focus-visible, select:focus-visible {
     outline: 2px solid var(--acc); outline-offset: 1px;
   }
-  input#host { width: 260px; }
   button { cursor: pointer; }
   button:disabled { opacity: .4; cursor: not-allowed; }
   button.layout.active, button.q.active {
@@ -160,7 +159,6 @@
 </nav>
 
 <div class="bar">
-  <input id="host" placeholder="(auto)" aria-label="Edge WHEP base URL — leave blank to use this page's host" title="Leave blank to auto-use the address you loaded this page from. Override to point at a different edge, e.g. http://10.0.0.5:8889">
   <span class="qlabel">layout:</span>
   <button id="layout-dual" class="layout">Dual</button>
   <button id="layout-quad" class="layout active">Quad</button>
@@ -241,14 +239,8 @@
     }
   });
 
-  document.addEventListener("DOMContentLoaded", () => {
-    const h = $("host");
-    if (h) h.placeholder = `${PROTO}//${EDGE_HOST}:${PORT.whep}`;
-  });
-
   function whepBase() {
-    const override = $("host").value.trim().replace(/\/+$/, "");
-    return override || `${PROTO}//${EDGE_HOST}:${PORT.whep}`;
+    return `${PROTO}//${EDGE_HOST}:${PORT.whep}`;
   }
 
   function pathFor(base) {
@@ -492,7 +484,6 @@
   $("layout-quad").addEventListener("click", () => applyLayout("quad"));
   $("q-hi").addEventListener("click", () => setRendition("hi"));
   $("q-lo").addEventListener("click", () => setRendition("lo"));
-  $("host").addEventListener("change", reconnectAllActive);
 
   $("fs").addEventListener("click", () => {
     const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
@@ -522,18 +513,10 @@
       });
     } catch { /* optional */ }
   })();
-function sharePageUrl() {
+
+  function sharePageUrl() {
     const path = location.pathname || "/multiview.html";
     const search = location.search || "";
-    try {
-      const override = $("host").value.trim().replace(/\/+$/, "");
-      if (override) {
-        const u = new URL(override);
-        if (u.hostname && u.hostname !== EDGE_HOST) {
-          return `${u.protocol}//${u.host}${path}${search}`;
-        }
-      }
-    } catch { /* ignore */ }
     return `${location.origin}${path}${search}`;
   }
   const qrModal = $("qr-modal");

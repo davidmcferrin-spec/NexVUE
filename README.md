@@ -152,7 +152,7 @@ Drop the UI files into Apache's docroot (same place IT already serves on
 `fetch()` paths resolve:
 
 ```bash
-sudo cp index.html multiview.html metrics.html nexvue-metrics.php \
+sudo cp index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php \
         nexvue-status.php nexvue-qr.js services.html channels.html nexvue-ops.php /var/www/html/
 # if PHP isn't wired into Apache yet:
 #   sudo apt install -y libapache2-mod-php && sudo a2enmod php8.3
@@ -270,7 +270,8 @@ Then from a LAN machine:
   click a channel. Session tiles (resolution/fps, bitrate, RTT, loss, SDI
   input, …) live in a bottom drawer — click **Session metrics** to expand
   (collapsed by default). Click the **NexVUE** brand for a QR code of the
-  page URL (phone scan).
+  page URL (phone scan). **Cast** sends the current channel to a Chromecast
+  via a custom WHEP receiver (`cast-receiver.html`) — see "Chromecast" below.
 - **Multiviewer:** open `multiview.html` (top nav → Multiview). Dual or quad
   layout with a channel dropdown per pane; defaults to LO; click a pane for
   audio (one pane unmuted at a time). Same NexVUE brand → QR share.
@@ -281,6 +282,32 @@ Then from a LAN machine:
 - **Channels:** top nav → Channels — edit `/etc/nexvue/channels/<N>.env`
   (single or bulk). Optional `CHANNEL_ALIAS` for friendly labels; path stays
   `chN`. Save asks before restarting encoders.
+
+### Chromecast / Cast (custom WHEP receiver)
+
+Chromecast cannot play the player's live WebRTC `MediaStream`. Instead the
+player **Cast** button launches NexVUE's custom receiver
+(`cast-receiver.html`) on the STB; the receiver opens its own WHEP session
+to the edge (same H.264 + Opus path as the browser).
+
+1. In the [Google Cast Developer Console](https://cast.google.com/publish/),
+   create a **Custom Receiver** application.
+2. Set the receiver URL to `https://<edge-fqdn>/cast-receiver.html`
+   (HTTPS is required; self-signed certs are often rejected by Cast — prefer
+   a real cert or an already-trusted enterprise CA).
+3. Copy the issued **App ID** into the player, either:
+   - edit `CAST_APP_ID_DEFAULT` in `index.html`, or
+   - in the browser console on the player page:
+     `localStorage.setItem("nexvue-cast-app-id", "YOUR_APP_ID")`
+4. Ensure the Chromecast can reach WHEP on the LAN (`:8889`, same as a phone
+   browser). Firewall rules that only allow your PC will block the STB.
+5. Select a channel on the player, click **Cast**, pick the device.
+
+Direct receiver test (no Cast session): open
+`https://<edge>/cast-receiver.html?whepBase=https://<edge>:8889&path=ch0`.
+
+Requires a Cast device that runs a Chromium-based receiver (Chromecast with
+Google TV / modern Cast hardware). Very old Cast firmware may lack WebRTC.
 
 ### Latency measurement (do this properly once)
 
@@ -405,11 +432,12 @@ dots stay gray and **SDI input** shows `status unreachable`, check that
    an edit really landed, since a repo-file edit alone changes nothing until
    copied to `/etc/systemd/system/` and reloaded.
 5. **Deploy the current web UI to Apache's docroot** (`index.html`,
-   `multiview.html`, `metrics.html`, `nexvue-metrics.php`, `nexvue-status.php`,
-   `services.html`, `channels.html`, `nexvue-ops.php`) — player pages
-   auto-detect `https:`/`http:` from `location.protocol`. Input-status dots
-   use `nexvue-status.php` (same-origin). Ops pages need the sudoers drop-in
-   from `setup.sh` as well.
+   `multiview.html`, `metrics.html`, `cast-receiver.html`, `nexvue-metrics.php`,
+   `nexvue-status.php`, `nexvue-qr.js`, `services.html`, `channels.html`,
+   `nexvue-ops.php`) — player pages auto-detect `https:`/`http:` from
+   `location.protocol`. Input-status dots use `nexvue-status.php`
+   (same-origin). Cast needs `cast-receiver.html` on HTTPS. Ops pages need
+   the sudoers drop-in from `setup.sh` as well.
 6. **Self-signed cert (e.g. Ubuntu's `ssl-cert-snakeoil`, or any cert issued
    for a hostname while you're testing via bare IP): trust it on each port
    individually**, once per browser — visiting `https://<ip>/` does NOT
@@ -627,10 +655,10 @@ cycles); otherwise "ended."
   safe even if the script is ever invoked outside the unit.
 - **`index.html` / `multiview.html` auto-discover the edge host** from
   `location.hostname` — load them via Apache at any address and WHEP/API/status
-  all target that same host on their fixed ports (8889/9997/9998). The host
-  field is an optional override, not a requirement. Protocol (`http:`/`https:`)
-  is also auto-detected from the page's own scheme — see the TLS section above
-  if that's not lining up. Top nav brand **NexVUE** (click for page-URL QR) /
+  all target that same host on their fixed ports (8889/9997/9998). Protocol
+  (`http:`/`https:`) is auto-detected from the page's own scheme — see the TLS
+  section above if that's not lining up. Top nav brand **NexVUE** (click for
+  page-URL QR) /
   Player / Multiview / Metrics / Services / Channels. Player session metrics
   sit in a collapsed bottom drawer (`Session metrics`).
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
