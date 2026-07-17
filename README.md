@@ -49,6 +49,14 @@ stay comfortably inside it.
 
 ## Install
 
+**Preferred:** from the repo root as root, `sudo ./setup.sh` installs packages,
+MediaMTX, systemd units (encode / status / metrics collector), and — when
+`/var/www/html` exists — the Apache web UI (`index.html`, `multiview.html`,
+`metrics.html`, `nexvue-metrics.php`). Use `sudo ./setup.sh --check` after a
+reboot; `sudo ./setup.sh --firewall` for Phase 1 ufw rules.
+
+Manual steps below match what `setup.sh` does if you prefer to run them by hand.
+
 ### 1. OS packages
 
 **Arrow Lake (Core Ultra 200S) requires the HWE kernel** — the 24.04 GA
@@ -66,8 +74,12 @@ sudo apt update
 sudo apt install -y \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
-  intel-media-va-driver-non-free vainfo
+  intel-media-va-driver-non-free vainfo \
+  php-sqlite3
 ```
+
+(`php-sqlite3` is required for `nexvue-metrics.php`. If Apache is not yet
+serving PHP, also install `libapache2-mod-php` and enable the module.)
 
 Verify Quick Sync is visible (expect H264 encode entrypoints under iHD driver):
 
@@ -103,7 +115,7 @@ Grab the latest linux_amd64 release from
 sudo tar -C /usr/local/bin -xzf mediamtx_*_linux_amd64.tar.gz mediamtx
 ```
 
-### 4. This package
+### 4. This package (encoder + status + metrics collector)
 
 ```bash
 sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin nexvue
@@ -111,7 +123,10 @@ sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin nexvue
 sudo mkdir -p /etc/nexvue/channels
 sudo cp mediamtx.yml /etc/nexvue/
 sudo cp nexvue-encode.sh /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-encode.sh
-sudo cp mediamtx.service nexvue-encode@.service /etc/systemd/system/
+sudo cp nexvue-status-server.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-status-server.py
+sudo cp nexvue-metrics-server.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-metrics-server.py
+sudo cp mediamtx.service nexvue-encode@.service \
+       nexvue-status.service nexvue-metrics.service /etc/systemd/system/
 
 # One env file per channel you want live (see channels-example.env):
 sudo cp channels-example.env /etc/nexvue/channels/0.env
@@ -121,12 +136,31 @@ sudo nano /etc/nexvue/channels/0.env
                                        # (Duo 2: also set MAX_DEVICES=4)
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now mediamtx nexvue-encode@0
+sudo systemctl enable --now mediamtx nexvue-status nexvue-metrics nexvue-encode@0
 ```
 
 Add channels by creating `1.env` .. `7.env` and enabling `nexvue-encode@1` .. `@7`.
 
-### 5. Input status daemon (signal/reference display in the player)
+The metrics **collector** has no listening port — it only writes SQLite.
+Reading it back is Apache + PHP (next step). See "Usage Metrics Dashboard".
+
+### 5. Apache web UI (player / multiviewer / metrics)
+
+Drop the four files into Apache's docroot (same place IT already serves on
+80/443). They must sit together so `metrics.html` can `fetch()` 
+`nexvue-metrics.php` with a relative path:
+
+```bash
+sudo cp index.html multiview.html metrics.html nexvue-metrics.php /var/www/html/
+# if PHP isn't wired into Apache yet:
+#   sudo apt install -y libapache2-mod-php && sudo a2enmod php8.3
+sudo systemctl restart apache2
+```
+
+Then open `http://<edge-ip>/index.html` (top nav → Player / Multiview /
+Metrics). No reverse proxy and no extra firewall port for metrics.
+
+### 6. Input status helper (signal/reference display in the player)
 
 Requires the Blackmagic **DeckLink SDK** (separate download from Desktop
 Video — "Desktop Video SDK" on the same support page). Use the **same major
@@ -137,17 +171,13 @@ is current and preferred on the HWE kernel). Then:
 make DECKLINK_SDK=/path/to/Blackmagic_DeckLink_SDK_16.x
 sudo make install                       # -> /usr/local/bin/decklink-status
 /usr/local/bin/decklink-status          # sanity: JSON with your 8 inputs
-
-sudo cp nexvue-status-server.py /usr/local/bin/ \
-  && sudo chmod 755 /usr/local/bin/nexvue-status-server.py
-sudo cp nexvue-status.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now nexvue-status
-curl -s http://127.0.0.1:9998/status   # sanity: same JSON via HTTP
 ```
 
+(`setup.sh` builds this automatically when the SDK is at `/opt/decklink-sdk`.
+The status **daemon** unit itself is already installed in step 4.)
+
 Optional but recommended — the player degrades gracefully (dots grey,
-"n/a" tiles) if this isn't running.
+"n/a" tiles) if the status daemon isn't running.
 
 ## Firewall (ufw)
 
@@ -160,7 +190,7 @@ opened explicitly. Port/protocol map:
 | 8189      | UDP + TCP | viewers      | WebRTC media (UDP) + ICE-TCP fallback     |
 | 9997      | TCP       | LAN mgmt     | MediaMTX API (viewer counts, egress)      |
 | 9998      | TCP       | LAN mgmt     | Status daemon (input/reference JSON)      |
-| 9999      | —         | **loopback** | Metrics dashboard — reached via Apache proxy on 443 (default); see Usage Metrics section for the direct-access alternative |
+| —         | —         | (none)       | Metrics dashboard has NO port at all — the collector doesn't listen on anything; PHP reads its SQLite file directly and Apache serves it on 443. See Usage Metrics Dashboard section. |
 | 80 / 443  | TCP       | viewers      | Apache serving the player page            |
 | 8554      | —         | **loopback** | RTSP ingest — do NOT open (127.0.0.1 only)|
 
@@ -179,9 +209,9 @@ sudo ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)'
 sudo ufw allow 9997/tcp comment 'NexVUE MediaMTX API'
 sudo ufw allow 9998/tcp comment 'NexVUE status daemon'
 sudo ufw enable
-# 9999 (metrics) is intentionally NOT opened — it's loopback-only by default
-# and reached via the Apache proxy on 443. See "Usage Metrics Dashboard" for
-# the direct-access alternative if you'd rather open the port instead.
+# Metrics has no port to open at all — the collector doesn't listen on
+# anything; PHP reads its SQLite file directly, served by Apache on 443
+# alongside everything else. See "Usage Metrics Dashboard".
 sudo ufw status verbose
 ```
 
@@ -193,7 +223,7 @@ media port needs.)
 The API (9997) and status daemon (9998) expose viewer/session data and, in
 the case of the MediaMTX API, session-kick and config endpoints — no auth in
 Phase 1. Limit them to the engineering subnet rather than the whole LAN
-(metrics/9999 isn't listed here — it's loopback-only by default, see above):
+(metrics has no port at all, so it isn't listed here):
 
 ```bash
 sudo ufw allow from 10.200.0.0/16 to any port 9997 proto tcp comment 'NexVUE API (ops only)'
@@ -210,7 +240,7 @@ heartbeat). Open only what viewers need, and 443 replaces 8889 once TLS is on:
 sudo ufw allow 443/tcp comment 'NexVUE WHEP signaling (TLS)'
 sudo ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)'
 # 9997/9998 intentionally NOT opened — loopback only in DMZ
-# 9999 (metrics) is loopback-only by default already, nothing changes here
+# metrics has no port at all — nothing changes here regardless of DMZ vs LAN
 ```
 
 ## Verify
@@ -223,8 +253,13 @@ journalctl -fu nexvue-encode@0
 Then from a LAN machine:
 
 - **Built-in player:** `http://<edge-ip>:8889/ch0`
-- **Test player with stats:** open `test-player.html`, set the edge URL,
+- **Test player with stats:** open `index.html` via Apache (top nav → Player),
   click a channel. Gives resolution/fps, bitrate, RTT, jitter buffer, loss.
+- **Multiviewer:** open `multiview.html` (top nav → Multiview). Dual or quad
+  layout with a channel dropdown per pane; defaults to LO; click a pane for
+  audio (one pane unmuted at a time).
+- **Usage metrics:** top nav → Metrics (`/metrics.html` + `nexvue-metrics.php`
+  in Apache docroot — no separate port).
 
 ### Latency measurement (do this properly once)
 
@@ -277,7 +312,7 @@ journalctl -u 'nexvue-encode@*' --since -72h | grep -ci restart   # want 0
 Watch for iGPU thermal throttling (`intel_gpu_top`) with all channels hot
 (8 on Quad 2, 4 on Duo 2).
 
-## TLS / HTTPS (all-or-nothing across all four ports)
+## TLS / HTTPS (WHEP / API / status — metrics rides on Apache)
 
 If Apache serving the player page is put behind TLS (including by IT-security
 mandate), **every service the page talks to must also be TLS**, or the
@@ -286,7 +321,7 @@ HTTPS — browsers refuse ALL plain-HTTP fetches from an HTTPS page (mixed
 content), and separately, each `scheme://host:port` is checked independently,
 so getting one port wrong throws a different, confusing error than the others.
 
-There are effectively FOUR independent TLS switches to flip — a common
+There are effectively THREE independent TLS switches to flip — a common
 mistake is enabling some and assuming the rest inherited it. They did not:
 
 | Service | Port | Config key(s) | Symptom if forgotten |
@@ -294,7 +329,7 @@ mistake is enabling some and assuming the rest inherited it. They did not:
 | MediaMTX WHEP (viewers)   | 8889 | `webrtcEncryption`, `webrtcServerKey/Cert` | Mixed-content block (if page is HTTPS) |
 | MediaMTX Control API      | 9997 | `apiEncryption`, `apiServerKey/Cert` — **separate from webrtcEncryption above, does NOT inherit it** | `ERR_SSL_PROTOCOL_ERROR` |
 | NexVUE status daemon      | 9998 | `NEXVUE_STATUS_TLS_CERT`/`_KEY` env vars on the systemd unit | `ERR_SSL_PROTOCOL_ERROR` |
-| NexVUE metrics dashboard  | 9999 | Only relevant if you opt into direct access (`NEXVUE_METRICS_BIND=0.0.0.0`) — default is loopback-only, reached via the Apache proxy instead, no TLS needed for that hop | `ERR_SSL_PROTOCOL_ERROR` if half-configured (direct-access mode only) |
+| NexVUE metrics dashboard  | —    | N/A — no port, no TLS needed for this piece at all. The collector has no listener; PHP reads SQLite directly and Apache (already TLS) serves the result. | N/A |
 
 `ERR_SSL_PROTOCOL_ERROR` specifically means the browser tried a TLS
 handshake against a server that's still answering plain HTTP — i.e. that
@@ -339,10 +374,11 @@ all.
    `systemctl cat nexvue-status` shows what's actually LIVE — use it to verify
    an edit really landed, since a repo-file edit alone changes nothing until
    copied to `/etc/systemd/system/` and reloaded.
-5. **Deploy the current `test-player.html`** to Apache's docroot — it
-   auto-detects `https:`/`http:` from `location.protocol`, so it must be the
-   current version or it will keep requesting `http://` regardless of what
-   you fixed server-side.
+5. **Deploy the current `index.html`, `multiview.html`, `metrics.html`, and
+   `nexvue-metrics.php` to Apache's docroot** — the player pages auto-detect
+   `https:`/`http:` from `location.protocol`, so they must be the current
+   versions or they will keep requesting `http://` regardless of what you
+   fixed server-side. Top-nav Metrics points at `/metrics.html`.
 6. **Self-signed cert (e.g. Ubuntu's `ssl-cert-snakeoil`, or any cert issued
    for a hostname while you're testing via bare IP): trust it on each port
    individually**, once per browser — visiting `https://<ip>/` does NOT
@@ -351,9 +387,9 @@ all.
    https://<edge-ip>:8889/
    https://<edge-ip>:9997/v3/paths/list
    https://<edge-ip>:9998/status
-   https://<edge-ip>:9999/           (only in direct-access mode with TLS enabled;
-                                       default loopback-only setup doesn't need this)
    ```
+   (metrics has no port of its own to trust at all — it rides entirely on
+   Apache's existing cert)
    Click through "Advanced -> Proceed" on each. Skipping this step causes
    silent failures that look identical to a misconfiguration.
 
@@ -401,86 +437,114 @@ Status API does not report lock on an idle, unenabled input by default).
 ## Usage Metrics Dashboard
 
 **This is usage/analytics history, not health/uptime monitoring** — it
-answers "how much bandwidth did we serve last week," "was this input locked
-all night," and "which IP was watching channel 2 at 3am," not "is the
-service up right now." Health/alerting is CheckMK's job, planned for
+answers "how much bandwidth did channel 2 use in the last hour," "which IP
+was watching what, when," and "was this input locked all night," not "is
+the service up right now." Health/alerting is CheckMK's job, planned for
 Phase 4 (see roadmap below) — this dashboard is separate and needs no
 CheckMK dependency.
 
-`nexvue-metrics-server.py` polls the MediaMTX API and the `nexvue-status`
-daemon every 15s (configurable), stores time-series samples in SQLite
-(stdlib `sqlite3` — no pip), and serves a small Chart.js + table dashboard:
+### Architecture: collector writes, PHP reads, nothing new to open
 
-- **Total bandwidth** — sum of egress across all published paths (Mbps)
-- **Viewers connected** — sum of readers across all paths
-- **Active streams** — count of paths currently `ready` (publishing)
-- **Input lock status** — one line per DeckLink input, stepped 0/1
-  (locked/unlocked), with detected format in the tooltip
-- **Viewer sessions table** — one row per viewer, sortable: IP address,
-  channel, first/last seen, duration, data served, user agent, live/ended
-  status. This is the IP + channel drill-down.
+Two independent pieces, split deliberately so the read side needs **no
+firewall rule, no reverse proxy, no WebSocket, no new port of any kind**:
 
-### Access: Apache reverse proxy (default — no new firewall port)
-
-`nexvue-metrics-server.py` binds to **127.0.0.1 only by default** — it is
-not reachable from outside the box at all, so it needs **no firewall rule**.
-Apache (already open on 443, already trusted by IT) proxies to it over
-loopback instead:
-
-```bash
-sudo a2enmod proxy proxy_http
+```
+nexvue-metrics-server.py  --writes-->  SQLite  <--reads--  nexvue-metrics.php
+   (background collector,                              (runs inside Apache,
+    no network listener,                                 already-open 443,
+    polls MediaMTX + status)                             already trusted)
 ```
 
-Add to the existing HTTPS vhost (`/etc/apache2/sites-enabled/000-default-ssl.conf`
-or wherever your `<VirtualHost *:443>` block lives):
-
-```apache
-ProxyPass /metrics/ http://127.0.0.1:9999/
-ProxyPassReverse /metrics/ http://127.0.0.1:9999/
-```
-
-```bash
-sudo systemctl restart apache2
-```
-
-Then open `https://<your-apache-host>/metrics/` — same TLS cert, same
-already-open port, same firewall posture as everything else on that site.
-The dashboard's own fetch calls use relative paths specifically so this
-works regardless of the proxy prefix you choose.
-
-This also means the metrics daemon's own TLS support (below) is unnecessary
-in this setup — the Apache-to-backend hop never leaves the machine.
-
-### Access: direct port (alternative, needs a firewall rule)
-
-If you'd rather not proxy through Apache — e.g. a trusted internal LAN,
-or testing before Apache is set up — bind externally instead:
-
-```bash
-sudo systemctl edit --full nexvue-metrics
-# add: Environment=NEXVUE_METRICS_BIND=0.0.0.0
-sudo systemctl daemon-reload && sudo systemctl restart nexvue-metrics
-sudo ufw allow 9999/tcp comment 'NexVUE metrics dashboard'
-```
-
-Then `http://<edge-ip>:9999/` (or `https://` with `NEXVUE_METRICS_TLS_CERT`/
-`_KEY` set — see the Configuration table below).
+- **`nexvue-metrics-server.py`** polls the MediaMTX API and the
+  `nexvue-status` daemon every 15s (configurable) and writes time-series
+  samples into SQLite (stdlib `sqlite3` — no pip). It does not listen on any
+  port, does not serve HTTP, does not need a firewall rule of any kind —
+  there's genuinely nothing on this side for a security review to look at.
+- **`nexvue-metrics.php`** opens that same SQLite file **read-only**
+  (`SQLITE3_OPEN_READONLY` — verified: even a deliberate write attempt is
+  rejected at the SQLite engine level, not just by convention) and serves
+  JSON. Apache runs it like any other PHP script on the site you already
+  have open — no `mod_proxy`, no new listener, nothing to add to a firewall
+  rule anywhere.
+- **`metrics.html`** (top nav → Metrics) fetches from `nexvue-metrics.php`
+  sitting next to it. Plain `fetch()`, never a WebSocket. Paths are relative
+  to wherever the files load from.
 
 ### Install
 
-Already covered by `sudo ./setup.sh`. Manually:
+Already covered by `sudo ./setup.sh` (collector unit + `php-sqlite3` + copy
+into `/var/www/html` when that directory exists). Manually:
 
+**1. Collector** (background poller, no networking):
 ```bash
 sudo install -m 755 nexvue-metrics-server.py /usr/local/bin/
-sudo install -m 644 nexvue-metrics-dashboard.html /usr/local/bin/
 sudo install -m 644 nexvue-metrics.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now nexvue-metrics
 ```
 
-Time-range buttons (1h/6h/24h/7d/30d) query `/api/history` and `/api/viewers`;
-the page auto-refreshes every 30s. Click a viewer-table column header to sort
-by it (click again to reverse).
+**2. PHP + dashboard** (drop into Apache's docroot, or wherever the player
+page already lives):
+```bash
+sudo apt install -y php-sqlite3   # if PHP itself isn't already installed:
+                                  #   sudo apt install -y libapache2-mod-php
+sudo a2enmod php8.3               # (module name matches your PHP version)
+sudo cp nexvue-metrics.php metrics.html index.html multiview.html /var/www/html/
+sudo systemctl restart apache2
+```
+
+**3. Permissions — the one real setup step.** The collector runs as the
+`nexvue` user; PHP runs as Apache's user (commonly `www-data`). PHP needs to
+*read* the SQLite file the collector writes. Rather than fuss with group
+membership, the collector unit sets `StateDirectoryMode=0755` and the
+script itself `chmod`s the database (and its WAL-mode sidecar files) to
+`0644` after every write cycle — so any user on the box can read it, which
+is fine since this data (bandwidth, viewer IPs/channels) is explicitly meant
+to be served publicly via Apache anyway. Nothing to configure here as long
+as both pieces are running with their shipped units/script — just know
+*why* it works if you're auditing permissions later.
+
+Open `http://<edge-ip>/metrics.html` (top nav → Metrics).
+
+### Views (`nexvue-metrics.php?view=...&range=...`)
+
+| `view` | Returns |
+|---|---|
+| `totals` | System-wide time series: bandwidth, viewer count, active-stream count — one row per poll cycle. Powers the three top-line charts. |
+| `channels` | **Per-channel breakdown**, aggregated over the range: avg/peak bandwidth, avg/peak viewers, % of the window the channel was `ready`. "How much bandwidth did ch0 use in the last hour" as one row. |
+| `viewers` | Per-viewer session drill-down: IP, channel, user (blank until Phase 2 auth), first/last seen, duration, bytes served, live/ended. Add `&channel=chN` to filter to one channel. |
+| `inputs` | Per-DeckLink-input lock/format history as a time series. Powers the input-lock chart. |
+
+`range` accepts `15m`, `1h`, `6h`, `24h`, `7d`, `30d` — matching the
+dashboard's buttons, including the quarter-hour granularity for "what's
+happening right now" checks.
+
+Example: `nexvue-metrics.php?view=channels&range=24h` — bandwidth/viewer
+breakdown per channel over the last day, system-wide (omit `channel=`) or
+`nexvue-metrics.php?view=viewers&range=15m&channel=ch0` for who's watching
+channel 0 right now.
+
+### Configuration
+
+**Collector** (systemd `Environment=` lines on `nexvue-metrics.service`, all optional):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NEXVUE_MEDIAMTX_API_URL` | `https://127.0.0.1:9997` | Where to poll for bandwidth/viewers/streams/sessions |
+| `NEXVUE_STATUS_URL` | `https://127.0.0.1:9998` | Where to poll for input lock/format |
+| `NEXVUE_METRICS_POLL_INTERVAL_S` | `15` | Seconds between polls |
+| `NEXVUE_METRICS_RETENTION_DAYS` | `30` | Samples/sessions older than this are pruned hourly |
+| `NEXVUE_METRICS_DB` | `/var/lib/nexvue/metrics.db` | SQLite file path (auto-created via `StateDirectory=`) |
+
+If either MediaMTX or the status daemon is still plain HTTP (TLS not yet
+configured — see the TLS section above), set the corresponding `_URL`
+variable to `http://` instead of the `https://` default.
+
+**PHP** (set via Apache vhost `SetEnv`, or edit the default in the script):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NEXVUE_METRICS_DB` | `/var/lib/nexvue/metrics.db` | Must match the collector's DB path |
 
 ### Viewer drill-down: how it works
 
@@ -490,31 +554,17 @@ live on a separate MediaMTX endpoint, `/v3/webrtcsessions/list`, which the
 collector also polls each cycle. Each WebRTC session there is tagged
 `state: "read"` (a viewer) or `state: "publish"` (one of *our own* encoders
 publishing into MediaMTX) — only `"read"` sessions are stored, so an
-encoder's own connection never shows up in the viewer table.
+encoder's own connection never shows up in the viewer table (verified: a
+mock session with `state: "publish"` is confirmed excluded from the stored
+rows).
 
 Sessions are stored as one row per `session_id`, upserted each poll:
-`first_seen` is set once and never overwritten; `last_seen` and bytes served
-advance every cycle the session is still active. That gives a clean
-per-viewer lifecycle record — IP, channel, when they joined, when they were
-last seen, how long, how much data — without one row per poll cycle per
-viewer bloating the table. A session is shown as "live" if it was seen within
-the last 3 poll intervals; otherwise "ended."
-
-### Configuration (systemd `Environment=` lines, all optional)
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `NEXVUE_MEDIAMTX_API_URL` | `https://127.0.0.1:9997` | Where to poll for bandwidth/viewers/streams/sessions |
-| `NEXVUE_STATUS_URL` | `https://127.0.0.1:9998` | Where to poll for input lock/format |
-| `NEXVUE_METRICS_POLL_INTERVAL_S` | `15` | Seconds between polls |
-| `NEXVUE_METRICS_RETENTION_DAYS` | `30` | Samples/sessions older than this are pruned hourly |
-| `NEXVUE_METRICS_DB` | `/var/lib/nexvue/metrics.db` | SQLite file path (auto-created via `StateDirectory=`) |
-| `NEXVUE_METRICS_BIND` | `127.0.0.1` | Set to `0.0.0.0` for direct external access (see above) |
-| `NEXVUE_METRICS_TLS_CERT`/`_KEY` | unset | TLS on :9999 — only relevant in direct-access mode |
-
-If either MediaMTX or the status daemon is still plain HTTP (TLS not yet
-configured — see the TLS section above), set the corresponding `_URL`
-variable to `http://` instead of the `https://` default.
+`first_seen` is set once and never overwritten; `last_seen`, bytes served,
+and `user` (once Phase 2 auth issues one) advance every cycle the session is
+still active. That gives a clean per-viewer lifecycle record without one row
+per poll cycle per viewer bloating the table. A session reads as "live" if
+seen within the PHP script's active-session window (45s — about 3 poll
+cycles); otherwise "ended."
 
 ### Notes
 
@@ -522,14 +572,15 @@ variable to `http://` instead of the `https://` default.
   verification disabled — safe specifically because that traffic never
   leaves 127.0.0.1; see the comment on `_unverified_ssl_context()` in the
   script if extending this pattern elsewhere.
-- Per-channel samples are stored (not just totals) for future per-channel
-  breakdowns, even though the current dashboard only charts totals — the
-  `channel` column in the `samples` table is there if you want to add that
-  later without a schema change.
+- `nexvue-metrics.php` rejects the `channel` query parameter outright
+  (alphanumeric-only) rather than escaping it — there's no legitimate reason
+  for a channel name to contain anything else, and this keeps the SQL
+  trivially safe from injection without relying on remembering to escape
+  correctly everywhere.
 - 30 days of 15-second samples across a handful of channels is a few tens of
   thousands of rows — trivial for SQLite; no performance tuning needed at
   this scale.
-- `remoteAddr` includes the port (e.g. `203.0.113.7:54321`); the dashboard
+- `remote_addr` includes the port (e.g. `203.0.113.7:54321`); the dashboard
   table strips it for readability, but it's stored as-is in `viewer_sessions`
   if you need it for something else (e.g. correlating with firewall logs).
 
@@ -543,12 +594,17 @@ variable to `http://` instead of the `https://` default.
   as part of the value and break arithmetic checks. `nexvue-encode.sh` also
   defensively strips inline comments itself (`strip_inline()`), so this is
   safe even if the script is ever invoked outside the unit.
-- **`test-player.html` auto-discovers the edge host** from `location.hostname`
-  — load it via Apache at any address and WHEP/API/status all target that
-  same host on their fixed ports (8889/9997/9998). The host field is an
-  optional override, not a requirement. Protocol (`http:`/`https:`) is also
-  auto-detected from the page's own scheme — see the TLS section above if
-  that's not lining up.
+- **`index.html` / `multiview.html` auto-discover the edge host** from
+  `location.hostname` — load them via Apache at any address and WHEP/API/status
+  all target that same host on their fixed ports (8889/9997/9998). The host
+  field is an optional override, not a requirement. Protocol (`http:`/`https:`)
+  is also auto-detected from the page's own scheme — see the TLS section above
+  if that's not lining up. Top nav links Player / Multiview / Metrics
+  (`/metrics.html`).
+- **Multiviewer defaults to LO** with a global HI/LO toggle (quad = up to four
+  simultaneous WHEP sessions). Only one pane is unmuted at a time — click a
+  pane to select audio. Switching Dual↔Quad tears down hidden panes so unused
+  sessions do not linger.
 - **Mirror/flip persist through fullscreen.** Applied as an inline
   `transform` on the video (not a CSS class), and the dedicated "⛶
   Fullscreen" button fullscreens the wrapper `<div>`, not the `<video>`

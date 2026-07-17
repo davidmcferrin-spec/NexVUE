@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NexVUE — Usage Metrics</title>
+<!--
+  Usage/analytics dashboard — bandwidth, viewer counts, active streams,
+  input lock/format history, and per-channel + per-viewer drill-down. NOT
+  health/uptime monitoring (see CheckMK for that, per the project roadmap).
+
+  Data source: nexvue-metrics.php, sitting next to this file, reading the
+  NexVUE metrics SQLite database directly. Plain HTTP fetch() to a PHP
+  script Apache serves natively — no WebSocket, no reverse proxy, no new
+  port. If this file has been renamed (e.g. to metrics.html), that's fine;
+  everything below uses paths relative to wherever this file itself loads
+  from, so it keeps working regardless of the filename or directory.
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
+    --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  .topnav {
+    display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+    margin: -16px -16px 16px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--edge);
+  }
+  .topnav a {
+    color: var(--dim); text-decoration: none; padding: 6px 12px;
+    border-radius: 4px; border: 1px solid transparent;
+  }
+  .topnav a:hover { color: var(--text); border-color: var(--edge); }
+  .topnav a.active {
+    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--acc); }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+  button, select {
+    background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 7px 12px; font: inherit; cursor: pointer;
+  }
+  button.active { background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600; }
+  #state { color: var(--dim); margin-left: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 12px; margin-top: 16px; }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--dim); margin: 0 0 8px; font-weight: 600;
+  }
+  canvas { max-height: 260px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--edge); }
+  th { color: var(--dim); text-transform: uppercase; font-size: 11px; letter-spacing: .04em;
+       cursor: pointer; user-select: none; }
+  th:hover { color: var(--text); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .dot.live { background: var(--ok); }
+  .dot.ended { background: var(--dim); }
+  td.ua { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th.num { text-align: right; }
+</style>
+</head>
+<body>
+<nav class="topnav" aria-label="NexVUE">
+  <a href="/index.html">Player</a>
+  <a href="/multiview.html">Multiview</a>
+  <a href="/metrics.html" class="active">Metrics</a>
+</nav>
+<h1>NexVUE — Usage Metrics</h1>
+
+<div class="bar">
+  <span style="color:var(--dim)">range:</span>
+  <button class="range" data-range="15m">15m</button>
+  <button class="range" data-range="1h">1h</button>
+  <button class="range" data-range="6h">6h</button>
+  <button class="range active" data-range="24h">24h</button>
+  <button class="range" data-range="7d">7d</button>
+  <button class="range" data-range="30d">30d</button>
+  <span id="state">loading…</span>
+</div>
+
+<div class="grid">
+  <div class="panel"><h2>Total bandwidth</h2><canvas id="c-bw"></canvas></div>
+  <div class="panel"><h2>Viewers connected</h2><canvas id="c-viewers"></canvas></div>
+  <div class="panel"><h2>Active streams</h2><canvas id="c-streams"></canvas></div>
+  <div class="panel"><h2>Input lock status</h2><canvas id="c-inputs"></canvas></div>
+</div>
+
+<div class="panel">
+  <h2>Per-channel breakdown — this range</h2>
+  <table id="channel-table">
+    <thead>
+      <tr>
+        <th>Channel</th><th class="num">Avg bandwidth</th><th class="num">Peak bandwidth</th>
+        <th class="num">Avg viewers</th><th class="num">Peak viewers</th><th class="num">Time ready</th>
+      </tr>
+    </thead>
+    <tbody id="channel-tbody"></tbody>
+  </table>
+  <div id="channel-empty" style="display:none; color:var(--dim); padding:12px 0;">No data in this range.</div>
+</div>
+
+<div class="panel">
+  <h2>Viewer sessions — drill down by IP / channel</h2>
+  <div class="bar" style="margin-bottom:12px">
+    <span style="color:var(--dim)">channel:</span>
+    <select id="channel-filter"><option value="">all channels</option></select>
+  </div>
+  <table id="viewer-table">
+    <thead>
+      <tr>
+        <th>Status</th><th>IP address</th><th>Channel</th><th>User</th>
+        <th>First seen</th><th>Last seen</th><th>Duration</th>
+        <th class="num">Data served</th><th>Client</th>
+      </tr>
+    </thead>
+    <tbody id="viewer-tbody"></tbody>
+  </table>
+  <div id="viewer-empty" style="display:none; color:var(--dim); padding:12px 0;">
+    No viewer sessions in this time range.
+  </div>
+</div>
+
+<script>
+"use strict";
+(() => {
+  const stateEl = document.getElementById("state");
+  let range = "24h";
+  const charts = {};
+  const palette = ["#56c4f5", "#4cc38a", "#e5484d", "#f5a623", "#b56cf5", "#f56ca0", "#6ce0f5", "#c3e54c"];
+
+  function fmtTime(ms) {
+    const d = new Date(ms);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    return sameDay
+      ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
+        d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function fmtBps(bps) {
+    if (bps == null) return "—";
+    return bps >= 1e6 ? `${(bps / 1e6).toFixed(2)} Mbps` : `${(bps / 1e3).toFixed(0)} kbps`;
+  }
+
+  function fmtDuration(s) {
+    if (s >= 3600) return `${(s / 3600).toFixed(1)}h`;
+    if (s >= 60) return `${Math.round(s / 60)}m`;
+    return `${Math.round(s)}s`;
+  }
+
+  // ---- Chart helpers --------------------------------------------------------------
+
+  function xScaleConfig() {
+    return {
+      type: "linear",
+      ticks: { color: "#7d8a99", callback: v => fmtTime(v), maxRotation: 0, autoSkip: true },
+      grid: { color: "#2c3542" }
+    };
+  }
+  function defaultYScale(label) {
+    return {
+      title: { display: true, text: label, color: "#7d8a99" },
+      ticks: { color: "#7d8a99" }, grid: { color: "#2c3542" }, beginAtZero: true
+    };
+  }
+  function tooltipLabel(item) {
+    const pt = item.raw;
+    if (pt && pt.mode !== undefined) {
+      const state = pt.y === 1 ? "locked" : "unlocked";
+      return `${item.dataset.label}: ${state}${pt.mode ? " (" + pt.mode + ")" : ""}`;
+    }
+    return `${item.dataset.label}: ${item.formattedValue}`;
+  }
+  function chartOptions(yScaleConfig) {
+    return {
+      responsive: true, animation: false, interaction: { mode: "nearest", intersect: false },
+      scales: { x: xScaleConfig(), y: yScaleConfig },
+      plugins: {
+        legend: { labels: { color: "#d6dde6", boxWidth: 12, font: { size: 11 } } },
+        tooltip: { callbacks: { title: items => items.length ? fmtTime(items[0].parsed.x) : "", label: tooltipLabel } }
+      }
+    };
+  }
+  function makeChart(canvasId, datasets, yScaleConfig) {
+    const ctx = document.getElementById(canvasId).getContext("2d");
+    if (charts[canvasId]) charts[canvasId].destroy();
+    charts[canvasId] = new Chart(ctx, { type: "line", data: { datasets }, options: chartOptions(yScaleConfig) });
+  }
+
+  // ---- Data loading -----------------------------------------------------------------
+  // Relative paths — resolve correctly regardless of what this file (or
+  // nexvue-metrics.php) is named or which directory Apache serves them
+  // from, as long as they sit next to each other.
+
+  async function fetchView(view, extra) {
+    const params = new URLSearchParams({ view, range, ...extra });
+    const res = await fetch(`nexvue-metrics.php?${params}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `${view} HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
+  let knownChannels = [];
+
+  async function load() {
+    stateEl.textContent = "loading…";
+    try {
+      const [totals, channels, inputs, viewers] = await Promise.all([
+        fetchView("totals"), fetchView("channels"), fetchView("inputs"),
+        fetchView("viewers", channelFilterEl.value ? { channel: channelFilterEl.value } : {})
+      ]);
+      renderTotals(totals.totals);
+      renderChannels(channels.channels);
+      renderInputs(inputs.inputs);
+      renderViewers(viewers.sessions);
+      stateEl.textContent = `updated ${new Date().toLocaleTimeString()}`;
+    } catch (err) {
+      stateEl.textContent = `error: ${err.message}`;
+    }
+  }
+
+  // ---- Renderers --------------------------------------------------------------------
+
+  function renderTotals(rows) {
+    makeChart("c-bw", [{
+      label: "Total (Mbps)", data: rows.map(t => ({ x: t.ts * 1000, y: (t.total_bandwidth_bps || 0) / 1e6 })),
+      borderColor: palette[0], backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, tension: 0.15
+    }], defaultYScale("Mbps"));
+    makeChart("c-viewers", [{
+      label: "Viewers", data: rows.map(t => ({ x: t.ts * 1000, y: t.total_readers || 0 })),
+      borderColor: palette[1], backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, stepped: true
+    }], defaultYScale("count"));
+    makeChart("c-streams", [{
+      label: "Active streams", data: rows.map(t => ({ x: t.ts * 1000, y: t.active_streams || 0 })),
+      borderColor: palette[2], backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, stepped: true
+    }], defaultYScale("count"));
+  }
+
+  function renderInputs(rows) {
+    const byDevice = {};
+    for (const r of rows) {
+      (byDevice[r.device_index] ||= []).push({ x: r.ts * 1000, y: r.input_locked, mode: r.input_mode });
+    }
+    const keys = Object.keys(byDevice).sort((a, b) => a - b);
+    const datasets = keys.map((idx, i) => ({
+      label: `Input ${idx}`, data: byDevice[idx], borderColor: palette[i % palette.length],
+      backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, stepped: true
+    }));
+    makeChart("c-inputs", datasets, {
+      min: -0.1, max: 1.1,
+      ticks: { color: "#7d8a99", stepSize: 1, callback: v => (v === 1 ? "locked" : v === 0 ? "unlocked" : "") },
+      grid: { color: "#2c3542" }
+    });
+  }
+
+  function renderChannels(rows) {
+    const tbody = document.getElementById("channel-tbody");
+    const empty = document.getElementById("channel-empty");
+    knownChannels = rows.map(r => r.channel);
+    syncChannelFilterOptions();
+
+    if (rows.length === 0) { tbody.innerHTML = ""; empty.style.display = "block"; return; }
+    empty.style.display = "none";
+    tbody.innerHTML = rows.map(r => `<tr>
+      <td>${r.channel}</td>
+      <td class="num">${fmtBps(r.avg_bandwidth_bps)}</td>
+      <td class="num">${fmtBps(r.peak_bandwidth_bps)}</td>
+      <td class="num">${Number(r.avg_readers).toFixed(1)}</td>
+      <td class="num">${r.peak_readers}</td>
+      <td class="num">${r.ready_pct}%</td>
+    </tr>`).join("");
+  }
+
+  function syncChannelFilterOptions() {
+    const current = channelFilterEl.value;
+    const existing = new Set([...channelFilterEl.options].map(o => o.value));
+    for (const ch of knownChannels) {
+      if (!existing.has(ch)) {
+        const opt = document.createElement("option");
+        opt.value = ch; opt.textContent = ch;
+        channelFilterEl.appendChild(opt);
+      }
+    }
+    channelFilterEl.value = current;  // preserve selection across refreshes
+  }
+
+  let viewerSort = { col: "last_seen", dir: -1 };
+  let lastViewerRows = [];
+
+  function renderViewers(sessions) {
+    lastViewerRows = sessions || [];
+    drawViewerTable();
+  }
+
+  function drawViewerTable() {
+    const tbody = document.getElementById("viewer-tbody");
+    const empty = document.getElementById("viewer-empty");
+    const rows = [...lastViewerRows].sort((a, b) => {
+      const av = a[viewerSort.col], bv = b[viewerSort.col];
+      return av < bv ? -viewerSort.dir : av > bv ? viewerSort.dir : 0;
+    });
+
+    if (rows.length === 0) { tbody.innerHTML = ""; empty.style.display = "block"; return; }
+    empty.style.display = "none";
+
+    tbody.innerHTML = rows.map(r => {
+      const ip = (r.remote_addr || "").split(":")[0];
+      const mb = ((r.bytes_sent || 0) / 1e6).toFixed(1);
+      const dotClass = r.active ? "live" : "ended";
+      return `<tr>
+        <td><span class="dot ${dotClass}"></span>${r.active ? "live" : "ended"}</td>
+        <td>${ip}</td>
+        <td>${r.channel}</td>
+        <td>${r.user || "—"}</td>
+        <td>${fmtTime(r.first_seen * 1000)}</td>
+        <td>${fmtTime(r.last_seen * 1000)}</td>
+        <td>${fmtDuration(r.duration_s)}</td>
+        <td class="num">${mb} MB</td>
+        <td class="ua" title="${(r.user_agent || "").replace(/"/g, '&quot;')}">${r.user_agent || ""}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  document.querySelectorAll("#viewer-table th").forEach((th, i) => {
+    const cols = ["active", "remote_addr", "channel", "user", "first_seen", "last_seen", "duration_s", "bytes_sent", "user_agent"];
+    th.addEventListener("click", () => {
+      const col = cols[i];
+      viewerSort = viewerSort.col === col ? { col, dir: -viewerSort.dir } : { col, dir: 1 };
+      drawViewerTable();
+    });
+  });
+
+  // ---- Controls -----------------------------------------------------------------------
+
+  document.querySelectorAll("button.range").forEach(b => {
+    b.addEventListener("click", () => {
+      document.querySelectorAll("button.range").forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
+      range = b.dataset.range;
+      load();
+    });
+  });
+
+  const channelFilterEl = document.getElementById("channel-filter");
+  channelFilterEl.addEventListener("change", load);
+
+  load();
+  setInterval(load, 30000);
+})();
+</script>
+</body>
+</html>

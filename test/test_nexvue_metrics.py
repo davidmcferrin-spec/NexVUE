@@ -89,7 +89,10 @@ class TestSchemaAndRetention(unittest.TestCase):
         self.assertEqual(sample_rows[0][0], now)
         self.assertEqual(len(status_rows), 0, "old input_status row should be pruned")
 
-    def test_query_history_filters_by_since(self):
+    def test_totals_table_supports_since_filtering(self):
+        # query_history() itself moved to PHP (nexvue-metrics.php) since PHP
+        # now reads this DB directly — this test just confirms the schema
+        # still supports the same since-filter query PHP performs.
         now = int(time.time())
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -101,10 +104,26 @@ class TestSchemaAndRetention(unittest.TestCase):
                 "VALUES (?, 2, 3, 5000000)", (now,)
             )
             conn.commit()
+            rows = list(conn.execute("SELECT ts FROM totals WHERE ts >= ?", (now - 10,)))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], now)
 
-        result = nms.query_history(now - 10)  # should only catch the second row
-        self.assertEqual(len(result["totals"]), 1)
-        self.assertEqual(result["totals"][0]["ts"], now)
+    def test_user_column_exists_after_init(self):
+        # Added via the safe ALTER TABLE migration in init_db() — confirm it
+        # exists and is queryable, not just that init_db() didn't crash.
+        with sqlite3.connect(self.db_path) as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(viewer_sessions)")]
+        self.assertIn("user", cols)
+
+    def test_init_db_migration_idempotent_on_existing_user_column(self):
+        # Simulates re-running init_db() against a database that ALREADY has
+        # the `user` column (e.g. daemon restart after the migration already
+        # applied once) — the ALTER TABLE must not raise on the second run.
+        nms.init_db()
+        nms.init_db()
+        with sqlite3.connect(self.db_path) as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(viewer_sessions)")]
+        self.assertEqual(cols.count("user"), 1, "column should not be duplicated")
 
 
 class TestViewerSessions(unittest.TestCase):
@@ -151,20 +170,53 @@ class TestViewerSessions(unittest.TestCase):
             count = conn.execute("SELECT COUNT(*) FROM viewer_sessions").fetchone()[0]
         self.assertEqual(count, 2)
 
-    def test_query_viewer_sessions_computes_duration_and_active(self):
+    def test_user_field_captured_and_updated_on_upsert(self):
+        # Matches the real upsert in poll_once(), which includes `user` (from
+        # MediaMTX's WebRTCSession.user — blank until Phase 2 auth exists,
+        # but the column and upsert path need to work correctly regardless).
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO viewer_sessions "
+                "(session_id, remote_addr, channel, user_agent, first_seen, last_seen, bytes_sent, user) "
+                "VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(session_id) DO UPDATE SET "
+                "last_seen=excluded.last_seen, bytes_sent=excluded.bytes_sent, user=excluded.user",
+                ("sess-auth", "10.0.0.9:1", "ch0", "ua", 1000, 1000, 100, ""),
+            )
+            # Simulate a later poll where the viewer has since authenticated —
+            # user should update just like last_seen/bytes_sent do.
+            conn.execute(
+                "INSERT INTO viewer_sessions "
+                "(session_id, remote_addr, channel, user_agent, first_seen, last_seen, bytes_sent, user) "
+                "VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(session_id) DO UPDATE SET "
+                "last_seen=excluded.last_seen, bytes_sent=excluded.bytes_sent, user=excluded.user",
+                ("sess-auth", "10.0.0.9:1", "ch0", "ua", 1010, 1010, 200, "jsmith"),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT first_seen, user FROM viewer_sessions WHERE session_id='sess-auth'"
+            ).fetchone()
+        self.assertEqual(row[0], 1000, "first_seen still preserved with user column present")
+        self.assertEqual(row[1], "jsmith", "user should update like any other mutable field")
+
+    def test_upserted_timestamps_support_the_active_session_query(self):
+        # duration_s / active flag computation now lives in nexvue-metrics.php
+        # (tested there directly against a real SQLite file) since PHP reads
+        # this DB now, not Python. This test just confirms the underlying
+        # first_seen/last_seen data the PHP query depends on is correct.
         now = int(time.time())
-        # Simulate real polling: an early poll establishes first_seen, a
-        # later poll (or the same poll) updates last_seen — two sequential
-        # upserts, same as poll_once would do across two cycles.
         self._upsert("sess-old", "10.0.0.5:1", "ch0", "ua", now - 300, 1000)  # never polled again, now stale
         self._upsert("sess-recent", "10.0.0.6:2", "ch1", "ua", now - 60, 4000)
         self._upsert("sess-recent", "10.0.0.6:2", "ch1", "ua", now - 1, 5000)   # polled again just now
 
-        results = nms.query_viewer_sessions(now - 3600)
-        by_id = {r["session_id"]: r for r in results}
-        self.assertEqual(by_id["sess-recent"]["duration_s"], 59.0)
-        self.assertTrue(by_id["sess-recent"]["active"], "recently-seen session should be marked active")
-        self.assertFalse(by_id["sess-old"]["active"], "stale session should NOT be marked active")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = {r["session_id"]: dict(r) for r in conn.execute(
+                "SELECT session_id, first_seen, last_seen FROM viewer_sessions"
+            )}
+        self.assertEqual(rows["sess-recent"]["last_seen"] - rows["sess-recent"]["first_seen"], 59)
+        self.assertEqual(rows["sess-old"]["first_seen"], rows["sess-old"]["last_seen"], "never re-polled")
 
     def test_pruning_removes_stale_viewer_sessions(self):
         now = int(time.time())

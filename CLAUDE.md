@@ -17,10 +17,15 @@ Packet analysis of a real CuePoint confirmed it is standard WebRTC
 (ICE/STUN -> DTLS-SRTP, single muxed UDP port, cloud signaling + local
 media) — NexVUE mirrors that architecture, self-hosted.
 
-A `nexvue-metrics` component (port 9999) provides usage/analytics history
-(bandwidth, viewers, active streams, input lock/format over time) — this is
-explicitly NOT the health/uptime monitoring planned for CheckMK in Phase 4;
-it's a separate, simpler concern (SQLite + Chart.js, no CheckMK dependency).
+A `nexvue-metrics` component provides usage/analytics history (bandwidth,
+viewers, active streams, input lock/format, per-viewer IP/channel
+drill-down) — explicitly NOT the health/uptime monitoring planned for
+CheckMK in Phase 4. Split deliberately across two pieces with no shared
+network surface: `nexvue-metrics-server.py` is a background collector with
+NO listening port at all (writes to SQLite only); `nexvue-metrics.php`
+(runs inside Apache) reads that SQLite file directly, read-only, and serves
+JSON. No reverse proxy, no WebSocket, no new firewall rule — chosen
+specifically because this box can't get additional ports opened.
 
 ## Architecture (agreed, do not relitigate casually)
 
@@ -45,10 +50,13 @@ it's a separate, simpler concern (SQLite + Chart.js, no CheckMK dependency).
   latency measurement still pending.** Confirmed working end-to-end: SDK 16
   compile, active input detection (decklink-status), Quick Sync H.264 encode
   on Arrow Lake, full SDI -> encode -> MediaMTX -> WHEP -> browser chain with
-  real video on device-number 2. TLS enabled across all four ports (WHEP,
-  API, status, metrics) to satisfy an IT-mandated HTTPS-only Apache front end.
-  Usage-metrics dashboard (bandwidth/viewers/streams/input-lock history,
-  `nexvue-metrics`) landed ahead of schedule — separate from and not a
+  real video on device-number 2. TLS enabled across WHEP/API/status (three
+  ports) to satisfy an IT-mandated HTTPS-only Apache front end; the metrics
+  component needed no such change since it was redesigned to have no port at
+  all (collector writes SQLite, PHP-in-Apache reads it directly).
+  Usage-metrics dashboard (bandwidth/viewers/streams/input-lock/per-viewer
+  IP-channel drill-down, `nexvue-metrics` + `nexvue-metrics.php`) landed
+  ahead of schedule — separate from and not a
   substitute for the Phase 4 CheckMK health-monitoring plan below.
   Remaining before Phase 1 is formally "done": burnt-in-clock latency
   measurement, flip the two Duo 2 connectors still set to Output back to
@@ -84,7 +92,7 @@ it's a separate, simpler concern (SQLite + Chart.js, no CheckMK dependency).
   property.
 - MediaMTX API (:9997) and status daemon (:9998) are LAN-trust in Phase 1
   config; MUST be loopback-bound before DMZ exposure (Phase 3).
-- Auto-switch thresholds in test-player.html are conservative first guesses;
+- Auto-switch thresholds in `index.html` are conservative first guesses;
   tune from field data.
 
 ## Conventions (owner: David McFerrin, davidmcferrin-spec)
@@ -95,8 +103,9 @@ it's a separate, simpler concern (SQLite + Chart.js, no CheckMK dependency).
   necessary, it comes from apt (`python3-<package>`), never pip.
 - `setup.sh` is the canonical installer — keep it in sync with any new
   package, file, or unit added to the project.
-- Dark monospace UI aesthetic (see test-player.html palette) — consistent
-  across the tool family.
+- Dark monospace UI aesthetic (see `index.html` palette) — consistent
+  across the tool family (player, multiviewer, metrics). Top nav links
+  Player / Multiview / Metrics (`/metrics.html`).
 - Production-ready code only: no placeholders, no TODOs. Unit tests for new
   or changed logic (`test/`). Complete file rewrites over accumulated diffs.
 - Architecture decisions confirmed with the owner before code.

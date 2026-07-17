@@ -50,7 +50,8 @@ REQUIRED_FILES=(
   mediamtx.yml mediamtx.service
   nexvue-encode.sh nexvue-encode@.service
   nexvue-status-server.py nexvue-status.service
-  nexvue-metrics-server.py nexvue-metrics-dashboard.html nexvue-metrics.service
+  nexvue-metrics-server.py nexvue-metrics.service
+  nexvue-metrics.php metrics.html index.html multiview.html
   channels-example.env
 )
 if ! $CHECK_ONLY; then
@@ -76,8 +77,9 @@ apt-get install -y -qq \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
   intel-media-va-driver-non-free vainfo \
-  build-essential curl ca-certificates jq
-ok "apt packages installed (python: stdlib only — no pip used anywhere)"
+  build-essential curl ca-certificates jq \
+  php-sqlite3
+ok "apt packages installed (python: stdlib only — no pip; php-sqlite3 for metrics.php)"
 
 step "2/5 MediaMTX"
 if command -v mediamtx >/dev/null || [ -x /usr/local/bin/mediamtx ]; then
@@ -115,13 +117,26 @@ fi
 install -m 755 "${REPO_DIR}/nexvue-encode.sh" /usr/local/bin/nexvue-encode.sh
 install -m 755 "${REPO_DIR}/nexvue-status-server.py" /usr/local/bin/nexvue-status-server.py
 install -m 755 "${REPO_DIR}/nexvue-metrics-server.py" /usr/local/bin/nexvue-metrics-server.py
-install -m 644 "${REPO_DIR}/nexvue-metrics-dashboard.html" /usr/local/bin/nexvue-metrics-dashboard.html
 install -m 644 "${REPO_DIR}/mediamtx.service" \
                "${REPO_DIR}/nexvue-encode@.service" \
                "${REPO_DIR}/nexvue-status.service" \
                "${REPO_DIR}/nexvue-metrics.service" /etc/systemd/system/
 systemctl daemon-reload
 ok "scripts + units installed, systemd reloaded"
+
+# Apache docroot: player, multiviewer, metrics dashboard + PHP reader.
+# Override with NEXVUE_WEBROOT if the site isn't under /var/www/html.
+WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
+if [ -d "${WEBROOT}" ]; then
+  install -m 644 "${REPO_DIR}/index.html" \
+                 "${REPO_DIR}/multiview.html" \
+                 "${REPO_DIR}/metrics.html" \
+                 "${REPO_DIR}/nexvue-metrics.php" \
+                 "${WEBROOT}/"
+  ok "web UI installed to ${WEBROOT} (index / multiview / metrics + nexvue-metrics.php)"
+else
+  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php ${WEBROOT}/"
+fi
 
 step "5/5 decklink-status helper"
 if [ -x /usr/local/bin/decklink-status ]; then
@@ -174,6 +189,21 @@ for u in mediamtx.service nexvue-encode@.service nexvue-status.service nexvue-me
   [ -f "/etc/systemd/system/$u" ] && ok "unit installed: $u" || warn "unit missing: $u"
 done
 
+# Metrics PHP reader (SQLite) + web UI
+if command -v php >/dev/null 2>&1 && php -m 2>/dev/null | grep -qi sqlite3; then
+  ok "php sqlite3 extension present (nexvue-metrics.php)"
+else
+  warn "php sqlite3 missing — apt install php-sqlite3 (and libapache2-mod-php if Apache has no PHP yet)"
+fi
+WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
+if [ -d "${WEBROOT}" ]; then
+  for f in index.html multiview.html metrics.html nexvue-metrics.php; do
+    [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
+  done
+else
+  warn "Apache docroot ${WEBROOT} not present — web UI not deployed yet"
+fi
+
 # decklink-status
 [ -x /usr/local/bin/decklink-status ] && ok "decklink-status helper present" \
   || warn "decklink-status helper not installed (optional; see step 5)"
@@ -193,11 +223,9 @@ if $APPLY_FIREWALL; then
     ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)' >/dev/null
     ufw allow 9997/tcp comment 'NexVUE MediaMTX API' >/dev/null
     ufw allow 9998/tcp comment 'NexVUE status daemon' >/dev/null
-    # 9999 (metrics) is NOT opened here — it binds loopback-only by default
-    # and is meant to be reached via an Apache proxy on 443 instead. See
-    # README "Usage Metrics Dashboard" for that setup, or for the
-    # NEXVUE_METRICS_BIND=0.0.0.0 direct-access alternative if you'd rather
-    # open this port too.
+    # Metrics has NO port at all — the collector doesn't listen on anything;
+    # PHP reads its SQLite file directly and Apache serves the result on 443.
+    # See README "Usage Metrics Dashboard" for that install.
     ok "NexVUE ports opened (80,8889,8189/udp+tcp,9997,9998)"
     if ! ufw status | grep -q "Status: active"; then
       warn "ufw is NOT active — rules staged but not enforced. Ensure 22/ssh is allowed, then: sudo ufw enable"
@@ -230,5 +258,11 @@ Next steps:
   5. Firewall (if ufw is in use): open ports with
        sudo ./setup.sh --firewall     (then: sudo ufw enable, once 22/ssh is allowed)
      or apply the rules manually — see the Firewall section in README.md
-  6. Verify:  http://<edge-ip>:8889/ch0  and test-player.html
+  6. Apache + PHP (if not already serving pages):
+       sudo apt install -y libapache2-mod-php   # if PHP module not enabled yet
+       sudo a2enmod php8.3                      # adjust version; then: sudo systemctl restart apache2
+       # setup.sh copies index.html / multiview.html / metrics.html / nexvue-metrics.php
+       # into /var/www/html when that directory exists (override with NEXVUE_WEBROOT=).
+  7. Verify:  http://<edge-ip>:8889/ch0
+              http://<edge-ip>/index.html  (Player) /multiview.html /metrics.html
 NEXT

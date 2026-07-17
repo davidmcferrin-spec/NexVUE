@@ -25,6 +25,19 @@
     margin: 0; padding: 16px; background: var(--bg); color: var(--text);
     font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
   }
+  .topnav {
+    display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+    margin: -16px -16px 16px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--edge);
+  }
+  .topnav a {
+    color: var(--dim); text-decoration: none; padding: 6px 12px;
+    border-radius: 4px; border: 1px solid transparent;
+  }
+  .topnav a:hover { color: var(--text); border-color: var(--edge); }
+  .topnav a.active {
+    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+  }
   h1 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--acc); }
   .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
   input, button {
@@ -73,6 +86,11 @@
 </style>
 </head>
 <body>
+<nav class="topnav" aria-label="NexVUE">
+  <a href="/index.html" class="active">Player</a>
+  <a href="/multiview.html">Multiview</a>
+  <a href="/metrics.html">Metrics</a>
+</nav>
 <h1>NexVUE — WHEP Test Player</h1>
 
 <div class="bar">

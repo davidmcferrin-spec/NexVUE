@@ -1,13 +1,16 @@
 # /etc/systemd/system/nexvue-metrics.service
 #
-# NexVUE usage/analytics metrics collector + dashboard — bandwidth, viewer
-# counts, active streams, input lock/format history. NOT health/uptime
-# monitoring (that's CheckMK's job per the project roadmap). Polls the
-# MediaMTX API and nexvue-status daemon every N seconds, stores time-series
-# in SQLite, serves a Chart.js dashboard on :9999.
+# NexVUE usage/analytics COLLECTOR — bandwidth, viewer counts, active
+# streams, input lock/format, per-viewer IP/channel drill-down. NOT
+# health/uptime monitoring (that's CheckMK's job per the project roadmap).
+#
+# This process does not listen on any port — it only polls MediaMTX and
+# nexvue-status, and writes to SQLite. Reading the data back out is Apache +
+# PHP's job (nexvue-metrics.php), querying the same SQLite file directly.
+# There is nothing here to open a firewall rule for.
 
 [Unit]
-Description=NexVUE usage metrics collector and dashboard
+Description=NexVUE usage metrics collector (no network listener)
 After=network-online.target mediamtx.service nexvue-status.service
 Wants=mediamtx.service nexvue-status.service
 StartLimitIntervalSec=0
@@ -26,15 +29,15 @@ Group=nexvue
 #Environment=NEXVUE_METRICS_POLL_INTERVAL_S=15
 #Environment=NEXVUE_METRICS_RETENTION_DAYS=30
 
-# TLS for THIS service's own :9999 API/dashboard (optional) — same cert as
-# the other two services, set both or neither.
-#Environment=NEXVUE_METRICS_TLS_CERT=/etc/nexvue/tls/fullchain.pem
-#Environment=NEXVUE_METRICS_TLS_KEY=/etc/nexvue/tls/privkey.pem
-
-# StateDirectory creates /var/lib/nexvue (owned by User/Group above) and
-# implicitly permits read-write there under ProtectSystem=strict below — the
-# SQLite database lives at /var/lib/nexvue/metrics.db by default.
+# StateDirectoryMode=0755 (rather than systemd's tighter default) so the web
+# server's user (commonly www-data, NOT this service's `nexvue` user) can
+# traverse the directory to reach the database file. The collector itself
+# additionally chmods the db file (and its WAL-mode sidecars) to 0644 after
+# every write cycle — see _ensure_db_readable() in the script. This data
+# (bandwidth, viewer IPs/channels) is meant to be served publicly via Apache
+# anyway, so world-readable here isn't a meaningful exposure.
 StateDirectory=nexvue
+StateDirectoryMode=0755
 Environment=NEXVUE_METRICS_DB=/var/lib/nexvue/metrics.db
 
 ExecStart=/usr/bin/python3 /usr/local/bin/nexvue-metrics-server.py

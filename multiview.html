@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NexVUE — Multiviewer</title>
+<!--
+  Dual / quad WHEP multiviewer for wall monitors and confidence checks.
+  Defaults to LO (kinder when 2–4 sessions are open) with a global HI/LO
+  toggle. Only one pane is unmuted at a time — click a pane to hear it.
+  Reuses the same WHEP + latency-hint pattern as index.html.
+-->
+<style>
+  :root {
+    --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
+    --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    display: flex; flex-direction: column; min-height: 100vh;
+  }
+  .topnav {
+    display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+    margin: -16px -16px 16px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--edge);
+    flex-shrink: 0;
+  }
+  .topnav a {
+    color: var(--dim); text-decoration: none; padding: 6px 12px;
+    border-radius: 4px; border: 1px solid transparent;
+  }
+  .topnav a:hover { color: var(--text); border-color: var(--edge); }
+  .topnav a.active {
+    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--acc); flex-shrink: 0; }
+  .bar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-bottom: 12px; flex-shrink: 0;
+  }
+  input, button, select {
+    background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 7px 10px; font: inherit;
+  }
+  input:focus, button:focus-visible, select:focus-visible {
+    outline: 2px solid var(--acc); outline-offset: 1px;
+  }
+  input#host { width: 260px; }
+  button { cursor: pointer; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.layout.active, button.q.active {
+    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+  }
+  .qlabel { color: var(--dim); }
+  #state { color: var(--dim); }
+  #state.ok { color: var(--ok); }
+  #state.bad { color: var(--bad); }
+
+  #grid {
+    flex: 1; min-height: 0; display: grid; gap: 8px;
+  }
+  #grid.dual { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+  #grid.quad { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+  .pane {
+    position: relative; background: #000; border: 2px solid var(--edge);
+    border-radius: 4px; overflow: hidden; display: flex; flex-direction: column;
+    min-height: 0; cursor: pointer;
+  }
+  .pane.audio-active { border-color: var(--acc); }
+  .pane.hidden { display: none; }
+  .pane-bar {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    background: var(--panel); border-bottom: 1px solid var(--edge); flex-shrink: 0;
+    cursor: default;
+  }
+  .pane-bar select { flex: 1; min-width: 0; }
+  .pane-status { color: var(--dim); font-size: 12px; white-space: nowrap; }
+  .pane-status.ok { color: var(--ok); }
+  .pane-status.bad { color: var(--bad); }
+  .pane-video {
+    flex: 1; min-height: 0; position: relative; background: #000;
+  }
+  .pane-video video {
+    width: 100%; height: 100%; object-fit: contain; display: block; background: #000;
+  }
+  .pane-empty {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; color: var(--dim); pointer-events: none;
+  }
+  .pane-empty.hidden { display: none; }
+  .audio-badge {
+    position: absolute; top: 8px; right: 8px; font-size: 11px;
+    padding: 3px 8px; border-radius: 3px; background: rgba(20, 24, 29, .85);
+    color: var(--acc); border: 1px solid var(--acc); display: none; z-index: 1;
+  }
+  .pane.audio-active .audio-badge { display: block; }
+
+  body:fullscreen #grid, body:-webkit-full-screen #grid { gap: 4px; }
+  body:fullscreen .topnav, body:-webkit-full-screen .topnav,
+  body:fullscreen h1, body:-webkit-full-screen h1,
+  body:fullscreen .bar, body:-webkit-full-screen .bar { display: none; }
+  body:fullscreen, body:-webkit-full-screen { padding: 4px; }
+</style>
+</head>
+<body>
+<nav class="topnav" aria-label="NexVUE">
+  <a href="/index.html">Player</a>
+  <a href="/multiview.html" class="active">Multiview</a>
+  <a href="/metrics.html">Metrics</a>
+</nav>
+<h1>NexVUE — Multiviewer</h1>
+
+<div class="bar">
+  <input id="host" placeholder="(auto)" aria-label="Edge WHEP base URL — leave blank to use this page's host" title="Leave blank to auto-use the address you loaded this page from. Override to point at a different edge, e.g. http://10.0.0.5:8889">
+  <span class="qlabel">layout:</span>
+  <button id="layout-dual" class="layout">Dual</button>
+  <button id="layout-quad" class="layout active">Quad</button>
+  <span style="border-left:1px solid var(--edge);height:20px"></span>
+  <span class="qlabel">quality:</span>
+  <button id="q-hi" class="q">HI</button>
+  <button id="q-lo" class="q active">LO</button>
+  <button id="fs" title="Fullscreen multiview">⛶ Fullscreen</button>
+  <span id="state">idle</span>
+</div>
+
+<div id="grid" class="quad">
+  <!-- panes filled by JS -->
+</div>
+
+<script>
+"use strict";
+(() => {
+  const $ = id => document.getElementById(id);
+  const grid = $("grid");
+  const stateEl = $("state");
+  const PANE_COUNT = 4;
+  const RECONNECT_BASE_MS = 2000;
+  const RECONNECT_MAX_MS = 30000;
+
+  const PORT = { whep: 8889 };
+  const PROTO = location.protocol === "https:" ? "https:" : "http:";
+  const EDGE_HOST = (location.hostname && location.hostname.length)
+    ? location.hostname : "127.0.0.1";
+
+  let layout = "quad";   // "dual" | "quad"
+  let rendition = "lo";  // "hi" | "lo" — LO default for multi-session load
+  let audioPane = -1;    // index of unmuted pane, or -1
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const h = $("host");
+    if (h) h.placeholder = `${PROTO}//${EDGE_HOST}:${PORT.whep}`;
+  });
+
+  function whepBase() {
+    const override = $("host").value.trim().replace(/\/+$/, "");
+    return override || `${PROTO}//${EDGE_HOST}:${PORT.whep}`;
+  }
+
+  function pathFor(base) {
+    return rendition === "lo" ? `${base}lo` : base;
+  }
+
+  function setGlobalState(text, cls) {
+    stateEl.textContent = text;
+    stateEl.className = cls || "";
+  }
+
+  // ---- Per-pane session -------------------------------------------------------
+  const panes = [];
+
+  function createPane(index) {
+    const el = document.createElement("div");
+    el.className = "pane";
+    el.dataset.index = String(index);
+    el.innerHTML = `
+      <div class="pane-bar">
+        <select aria-label="Channel for pane ${index + 1}">
+          <option value="">(none)</option>
+          ${[0,1,2,3,4,5,6,7].map(i => `<option value="ch${i}">ch${i}</option>`).join("")}
+        </select>
+        <span class="pane-status">idle</span>
+      </div>
+      <div class="pane-video">
+        <span class="audio-badge">AUDIO</span>
+        <video autoplay playsinline muted></video>
+        <div class="pane-empty">no channel</div>
+      </div>`;
+
+    const select = el.querySelector("select");
+    const statusEl = el.querySelector(".pane-status");
+    const video = el.querySelector("video");
+    const empty = el.querySelector(".pane-empty");
+
+    const pane = {
+      index, el, select, statusEl, video, empty,
+      base: null, path: null, pc: null,
+      intentionalClose: false,
+      reconnectTimer: null, reconnectAttempt: 0
+    };
+
+    select.addEventListener("change", () => {
+      const val = select.value;
+      if (!val) {
+        closePane(pane, true);
+        pane.base = null;
+        setPaneStatus(pane, "idle");
+        empty.classList.remove("hidden");
+        if (audioPane === index) selectAudio(-1);
+        return;
+      }
+      pane.base = val;
+      empty.classList.add("hidden");
+      openPane(pane);
+    });
+    select.addEventListener("click", e => e.stopPropagation());
+
+    el.addEventListener("click", () => {
+      if (pane.base) selectAudio(index);
+    });
+
+    panes.push(pane);
+    grid.appendChild(el);
+    return pane;
+  }
+
+  function setPaneStatus(pane, text, cls) {
+    pane.statusEl.textContent = text;
+    pane.statusEl.className = "pane-status" + (cls ? " " + cls : "");
+  }
+
+  function closePane(pane, intentional) {
+    pane.intentionalClose = intentional;
+    if (pane.reconnectTimer) {
+      clearTimeout(pane.reconnectTimer);
+      pane.reconnectTimer = null;
+    }
+    if (pane.pc) {
+      pane.pc.close();
+      pane.pc = null;
+    }
+    pane.video.srcObject = null;
+    pane.path = null;
+    pane.video.muted = true;
+  }
+
+  function scheduleReconnect(pane) {
+    if (pane.intentionalClose || pane.reconnectTimer || !pane.base) return;
+    pane.reconnectAttempt++;
+    const delay = Math.min(
+      RECONNECT_BASE_MS * 2 ** (pane.reconnectAttempt - 1),
+      RECONNECT_MAX_MS
+    );
+    setPaneStatus(pane, `retry ${Math.round(delay / 1000)}s…`, "bad");
+    pane.reconnectTimer = setTimeout(() => {
+      pane.reconnectTimer = null;
+      if (pane.intentionalClose || !pane.base) return;
+      openPane(pane);
+    }, delay);
+  }
+
+  async function openPane(pane) {
+    if (!pane.base) return;
+    closePane(pane, false);
+    pane.intentionalClose = false;
+    const path = pathFor(pane.base);
+    pane.path = path;
+    setPaneStatus(pane, `connecting…`);
+    emptyHidden(pane, true);
+
+    const url = `${whepBase()}/${path}/whep`;
+    const pc = new RTCPeerConnection();
+    pane.pc = pc;
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
+    pc.ontrack = ev => {
+      try { ev.receiver.playoutDelayHint = 0; } catch (e) { /* unsupported */ }
+      try { ev.receiver.jitterBufferTarget = 0; } catch (e) { /* unsupported */ }
+      if (!pane.video.srcObject) pane.video.srcObject = ev.streams[0];
+      pane.video.muted = audioPane !== pane.index;
+    };
+    pc.onconnectionstatechange = () => {
+      if (!pane.pc || pane.pc !== pc) return;
+      if (pc.connectionState === "connected") {
+        setPaneStatus(pane, path, "ok");
+        pane.reconnectAttempt = 0;
+        updateGlobalState();
+      } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+        setPaneStatus(pane, pc.connectionState, "bad");
+        if (!pane.intentionalClose && pane.base) scheduleReconnect(pane);
+        updateGlobalState();
+      }
+    };
+
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await new Promise(resolve => {
+        if (pc.iceGatheringState === "complete") return resolve();
+        const check = () => {
+          if (pc.iceGatheringState === "complete") {
+            pc.removeEventListener("icegatheringstatechange", check);
+            resolve();
+          }
+        };
+        pc.addEventListener("icegatheringstatechange", check);
+        setTimeout(resolve, 2000);
+      });
+      if (pane.pc !== pc) return;  // superseded
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/sdp" },
+        body: pc.localDescription.sdp
+      });
+      if (!res.ok) throw new Error(`WHEP ${res.status}`);
+      await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
+    } catch (err) {
+      setPaneStatus(pane, `error: ${err.message}`, "bad");
+      closePane(pane, false);
+      if (pane.base) scheduleReconnect(pane);
+      updateGlobalState();
+    }
+  }
+
+  function emptyHidden(pane, hide) {
+    pane.empty.classList.toggle("hidden", hide);
+  }
+
+  function selectAudio(index) {
+    audioPane = index;
+    panes.forEach((p, i) => {
+      p.el.classList.toggle("audio-active", i === index && !!p.base);
+      p.video.muted = i !== index;
+    });
+  }
+
+  function reconnectAllActive() {
+    panes.forEach(p => {
+      if (p.base) openPane(p);
+    });
+  }
+
+  function updateGlobalState() {
+    const active = panes.filter(p => p.base);
+    if (active.length === 0) {
+      setGlobalState("idle");
+      return;
+    }
+    const bad = active.filter(p => p.statusEl.classList.contains("bad"));
+    const ok = active.filter(p => p.statusEl.classList.contains("ok"));
+    if (bad.length) setGlobalState(`${ok.length}/${active.length} connected`, "bad");
+    else if (ok.length === active.length) setGlobalState(`${ok.length} connected`, "ok");
+    else setGlobalState(`connecting ${ok.length}/${active.length}…`);
+  }
+
+  function applyLayout(mode) {
+    layout = mode;
+    grid.className = mode;
+    $("layout-dual").classList.toggle("active", mode === "dual");
+    $("layout-quad").classList.toggle("active", mode === "quad");
+    panes.forEach((p, i) => {
+      const visible = mode === "quad" || i < 2;
+      p.el.classList.toggle("hidden", !visible);
+      if (!visible && p.base) {
+        // Tear down hidden panes so we don't keep unused WHEP sessions.
+        closePane(p, true);
+        p.base = null;
+        p.select.value = "";
+        emptyHidden(p, false);
+        setPaneStatus(p, "idle");
+        if (audioPane === i) selectAudio(-1);
+      }
+    });
+    updateGlobalState();
+  }
+
+  function setRendition(rend) {
+    if (rend === rendition) return;
+    rendition = rend;
+    $("q-hi").classList.toggle("active", rend === "hi");
+    $("q-lo").classList.toggle("active", rend === "lo");
+    reconnectAllActive();
+  }
+
+  // ---- Controls ---------------------------------------------------------------
+  $("layout-dual").addEventListener("click", () => applyLayout("dual"));
+  $("layout-quad").addEventListener("click", () => applyLayout("quad"));
+  $("q-hi").addEventListener("click", () => setRendition("hi"));
+  $("q-lo").addEventListener("click", () => setRendition("lo"));
+  $("host").addEventListener("change", reconnectAllActive);
+
+  $("fs").addEventListener("click", () => {
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fsEl) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else {
+      (document.documentElement.requestFullscreen ||
+       document.documentElement.webkitRequestFullscreen).call(document.documentElement);
+    }
+  });
+
+  for (let i = 0; i < PANE_COUNT; i++) createPane(i);
+  applyLayout("quad");
+})();
+</script>
+</body>
+</html>
