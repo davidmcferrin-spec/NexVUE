@@ -62,16 +62,15 @@
   #state.ok { color: var(--ok); }
   #state.bad { color: var(--bad); }
 
-  /* Grid stays reactive; on ultrawide, letterbox and center horizontally. */
+  /* Grid stays reactive; on ultrawide, letterbox on the right. */
   .stage {
     flex: 1; min-height: 0; width: 100%;
-    display: flex; justify-content: center; align-items: center;
+    display: flex; justify-content: flex-start; align-items: center;
     container-type: size;
   }
   #grid {
     display: grid; gap: 8px;
     max-width: 100%; max-height: 100%;
-    margin-inline: auto;
   }
   #grid.dual {
     grid-template-columns: 1fr 1fr; grid-template-rows: 1fr;

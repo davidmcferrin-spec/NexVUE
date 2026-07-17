@@ -15,8 +15,10 @@
   port. If this file has been renamed (e.g. to metrics.html), that's fine;
   everything below uses paths relative to wherever this file itself loads
   from, so it keeps working regardless of the filename or directory.
+
+  Chart.js: prefer vendored chart.umd.min.js (LAN/offline); fall back to
+  jsDelivr if the local file is missing. (cdnjs Chart.js/4.4.4 UMD path 404s.)
 -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
@@ -175,6 +177,55 @@
   const charts = {};
   const palette = ["#56c4f5", "#4cc38a", "#e5484d", "#f5a623", "#b56cf5", "#f56ca0", "#6ce0f5", "#c3e54c"];
 
+  // #region agent log
+  function dbg(hypothesisId, location, message, data) {
+    fetch('http://127.0.0.1:7806/ingest/69e7d629-d3ec-4a1c-8011-9b8c69c866b9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'96b70a'},body:JSON.stringify({sessionId:'96b70a',runId:'post-fix2',hypothesisId,location,message,data,timestamp:Date.now()})}).catch(()=>{});
+  }
+  // #endregion
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = src;
+      s.async = false;
+      s.onload = () => resolve(src);
+      s.onerror = () => reject(new Error(`failed to load ${src}`));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function ensureChart() {
+    if (typeof Chart === "function") {
+      window.__nexvueChartJsLoad = "already";
+      return "already";
+    }
+    const candidates = [
+      "chart.umd.min.js",
+      "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js",
+    ];
+    const errors = [];
+    for (const src of candidates) {
+      try {
+        await loadScript(src);
+        if (typeof Chart === "function") {
+          window.__nexvueChartJsLoad = "ok:" + src;
+          // #region agent log
+          dbg("fix", "metrics.html:ensureChart", "Chart loaded", { src, typeofChart: typeof Chart });
+          // #endregion
+          return src;
+        }
+        errors.push(src + ": loaded but Chart global missing");
+      } catch (e) {
+        errors.push(String(e.message || e));
+      }
+    }
+    window.__nexvueChartJsLoad = "error";
+    // #region agent log
+    dbg("A-B", "metrics.html:ensureChart", "Chart load failed", { errors, typeofChart: typeof Chart });
+    // #endregion
+    throw new Error("Chart is not defined — tried local chart.umd.min.js and jsDelivr; " + errors.join("; "));
+  }
+
   function fmtTime(ms) {
     const d = new Date(ms);
     const now = new Date();
@@ -230,6 +281,9 @@
     };
   }
   function makeChart(canvasId, datasets, yScaleConfig) {
+    // #region agent log
+    dbg("A-D-E", "metrics.html:makeChart", "makeChart invoked", { canvasId, typeofChart: typeof Chart, chartJsLoadFlag: window.__nexvueChartJsLoad || "unset" });
+    // #endregion
     const ctx = document.getElementById(canvasId).getContext("2d");
     if (charts[canvasId]) charts[canvasId].destroy();
     charts[canvasId] = new Chart(ctx, { type: "line", data: { datasets }, options: chartOptions(yScaleConfig) });
@@ -255,6 +309,7 @@
   async function load() {
     stateEl.textContent = "loading…";
     try {
+      await ensureChart();
       const [totals, channels, inputs, viewers] = await Promise.all([
         fetchView("totals"), fetchView("channels"), fetchView("inputs"),
         fetchView("viewers", channelFilterEl.value ? { channel: channelFilterEl.value } : {})
@@ -263,8 +318,14 @@
       renderChannels(channels.channels);
       renderInputs(inputs.inputs);
       renderViewers(viewers.sessions);
+      // #region agent log
+      dbg("verify", "metrics.html:load-ok", "load() succeeded", { typeofChart: typeof Chart, chartJsLoadFlag: window.__nexvueChartJsLoad || "unset", chartCount: Object.keys(charts).length });
+      // #endregion
       stateEl.textContent = `updated ${new Date().toLocaleTimeString()}`;
     } catch (err) {
+      // #region agent log
+      dbg("A-B", "metrics.html:load-catch", "load() failed", { errMessage: String(err && err.message || err), typeofChart: typeof Chart, chartJsLoadFlag: window.__nexvueChartJsLoad || "unset", online: navigator.onLine });
+      // #endregion
       stateEl.textContent = `error: ${err.message}`;
     }
   }

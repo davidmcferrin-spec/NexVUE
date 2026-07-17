@@ -153,7 +153,7 @@ Drop the UI files into Apache's docroot (same place IT already serves on
 
 ```bash
 sudo cp index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php \
-        nexvue-status.php nexvue-qr.js services.html channels.html nexvue-ops.php /var/www/html/
+        nexvue-status.php nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php /var/www/html/
 # if PHP isn't wired into Apache yet:
 #   sudo apt install -y libapache2-mod-php && sudo a2enmod php8.3
 sudo systemctl restart apache2
@@ -433,9 +433,9 @@ dots stay gray and **SDI input** shows `status unreachable`, check that
    copied to `/etc/systemd/system/` and reloaded.
 5. **Deploy the current web UI to Apache's docroot** (`index.html`,
    `multiview.html`, `metrics.html`, `cast-receiver.html`, `nexvue-metrics.php`,
-   `nexvue-status.php`, `nexvue-qr.js`, `services.html`, `channels.html`,
-   `nexvue-ops.php`) — player pages auto-detect `https:`/`http:` from
-   `location.protocol`. Input-status dots use `nexvue-status.php`
+   `nexvue-status.php`, `nexvue-qr.js`, `chart.umd.min.js`, `services.html`,
+   `channels.html`, `nexvue-ops.php`) — player pages auto-detect `https:`/`http:`
+   from `location.protocol`. Input-status dots use `nexvue-status.php`
    (same-origin). Cast needs `cast-receiver.html` on HTTPS. Ops pages need
    the sudoers drop-in from `setup.sh` as well.
 6. **Self-signed cert (e.g. Ubuntu's `ssl-cert-snakeoil`, or any cert issued
