@@ -28,6 +28,11 @@
     background: var(--panel); border-bottom: 1px solid var(--edge);
     flex-shrink: 0;
   }
+  .topnav .brand {
+    background: none; border: none; color: var(--acc); font: inherit; font-weight: 600;
+    font-size: 15px; padding: 6px 12px 6px 0; margin-right: 4px; cursor: pointer;
+  }
+  .topnav .brand:hover { text-decoration: underline; }
   .topnav a {
     color: var(--dim); text-decoration: none; padding: 6px 12px;
     border-radius: 4px; border: 1px solid transparent;
@@ -36,7 +41,6 @@
   .topnav a.active {
     background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
   }
-  h1 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--acc); flex-shrink: 0; }
   .bar {
     display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     margin-bottom: 12px; flex-shrink: 0;
@@ -59,11 +63,29 @@
   #state.ok { color: var(--ok); }
   #state.bad { color: var(--bad); }
 
-  #grid {
-    flex: 1; min-height: 0; display: grid; gap: 8px;
+  /* Grid stays reactive; on ultrawide, letterbox and center horizontally. */
+  .stage {
+    flex: 1; min-height: 0; width: 100%;
+    display: flex; justify-content: center; align-items: center;
+    container-type: size;
   }
-  #grid.dual { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
-  #grid.quad { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  #grid {
+    display: grid; gap: 8px;
+    max-width: 100%; max-height: 100%;
+    margin-inline: auto;
+  }
+  #grid.dual {
+    grid-template-columns: 1fr 1fr; grid-template-rows: 1fr;
+    aspect-ratio: 32 / 9;
+    width: min(100cqw, calc(100cqh * 32 / 9));
+    height: auto;
+  }
+  #grid.quad {
+    grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
+    aspect-ratio: 16 / 9;
+    width: min(100cqw, calc(100cqh * 16 / 9));
+    height: auto;
+  }
 
   .pane {
     position: relative; background: #000; border: 2px solid var(--edge);
@@ -99,22 +121,43 @@
   }
   .pane.audio-active .audio-badge { display: block; }
 
+  body:fullscreen .stage, body:-webkit-full-screen .stage {
+    flex: 1; min-height: 0;
+  }
   body:fullscreen #grid, body:-webkit-full-screen #grid { gap: 4px; }
   body:fullscreen .topnav, body:-webkit-full-screen .topnav,
-  body:fullscreen h1, body:-webkit-full-screen h1,
   body:fullscreen .bar, body:-webkit-full-screen .bar { display: none; }
   body:fullscreen, body:-webkit-full-screen { padding: 4px; }
+  .qr-modal {
+    display: none; position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,.6); align-items: center; justify-content: center; padding: 16px;
+  }
+  .qr-modal.open { display: flex; }
+  .qr-panel {
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
+    padding: 20px; max-width: 360px; width: 100%; text-align: center;
+  }
+  .qr-panel h2 { margin: 0 0 12px; font-size: 14px; color: var(--acc); }
+  .qr-panel canvas {
+    image-rendering: pixelated; width: 220px; height: 220px;
+    background: #fff; border-radius: 4px;
+  }
+  .qr-url {
+    word-break: break-all; color: var(--dim); font-size: 12px;
+    margin: 12px 0; text-align: left;
+  }
+  .qr-actions { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
 </head>
 <body>
 <nav class="topnav" aria-label="NexVUE">
+  <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
   <a href="/index.html">Player</a>
   <a href="/multiview.html" class="active">Multiview</a>
   <a href="/metrics.html">Metrics</a>
   <a href="/services.html">Services</a>
   <a href="/channels.html">Channels</a>
 </nav>
-<h1>NexVUE — Multiviewer</h1>
 
 <div class="bar">
   <input id="host" placeholder="(auto)" aria-label="Edge WHEP base URL — leave blank to use this page's host" title="Leave blank to auto-use the address you loaded this page from. Override to point at a different edge, e.g. http://10.0.0.5:8889">
@@ -129,10 +172,25 @@
   <span id="state">idle</span>
 </div>
 
-<div id="grid" class="quad">
-  <!-- panes filled by JS -->
+<div class="stage">
+  <div id="grid" class="quad">
+    <!-- panes filled by JS -->
+  </div>
 </div>
 
+<div id="qr-modal" class="qr-modal" role="dialog" aria-modal="true" aria-labelledby="qr-title" hidden>
+  <div class="qr-panel">
+    <h2 id="qr-title">Open on phone</h2>
+    <canvas id="qr-canvas" width="220" height="220" aria-hidden="true"></canvas>
+    <div class="qr-url" id="qr-url"></div>
+    <div class="qr-actions">
+      <button type="button" id="qr-copy">Copy URL</button>
+      <button type="button" id="qr-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="nexvue-qr.js"></script>
 <script>
 "use strict";
 (() => {
@@ -464,6 +522,50 @@
       });
     } catch { /* optional */ }
   })();
+function sharePageUrl() {
+    const path = location.pathname || "/multiview.html";
+    const search = location.search || "";
+    try {
+      const override = $("host").value.trim().replace(/\/+$/, "");
+      if (override) {
+        const u = new URL(override);
+        if (u.hostname && u.hostname !== EDGE_HOST) {
+          return `${u.protocol}//${u.host}${path}${search}`;
+        }
+      }
+    } catch { /* ignore */ }
+    return `${location.origin}${path}${search}`;
+  }
+  const qrModal = $("qr-modal");
+  function openQr() {
+    const url = sharePageUrl();
+    $("qr-url").textContent = url;
+    try { NexVUEQR.render($("qr-canvas"), url, { scale: 6, margin: 2 }); }
+    catch (err) {
+      console.warn("QR render failed:", err);
+      $("qr-url").textContent = `${url}\n(QR unavailable: ${err.message})`;
+    }
+    qrModal.hidden = false;
+    qrModal.classList.add("open");
+  }
+  function closeQr() {
+    qrModal.classList.remove("open");
+    qrModal.hidden = true;
+  }
+  $("brand").addEventListener("click", openQr);
+  $("qr-close").addEventListener("click", closeQr);
+  qrModal.addEventListener("click", (e) => { if (e.target === qrModal) closeQr(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && qrModal.classList.contains("open")) closeQr();
+  });
+  $("qr-copy").addEventListener("click", async () => {
+    const url = $("qr-url").textContent.split("\n")[0];
+    try {
+      await navigator.clipboard.writeText(url);
+      $("qr-copy").textContent = "Copied";
+      setTimeout(() => { $("qr-copy").textContent = "Copy URL"; }, 1200);
+    } catch { prompt("Copy URL:", url); }
+  });
 })();
 </script>
 </body>

@@ -110,6 +110,8 @@ specifically because this box can't get additional ports opened.
   package, file, or unit added to the project.
 - Dark monospace UI aesthetic (see `index.html` palette) — consistent
   across the tool family (player, multiviewer, metrics, services, channels).
+  Top-nav **NexVUE** brand opens a QR of the page URL; player session tiles
+  live in a collapsed bottom drawer.
   Top nav: Player / Multiview / Metrics / Services / Channels.
 - Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +
   allowlisted sudo wrappers. Phase 1 LAN-trust — not for DMZ without auth.

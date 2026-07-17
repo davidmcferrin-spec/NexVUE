@@ -153,7 +153,7 @@ Drop the UI files into Apache's docroot (same place IT already serves on
 
 ```bash
 sudo cp index.html multiview.html metrics.html nexvue-metrics.php \
-        nexvue-status.php services.html channels.html nexvue-ops.php /var/www/html/
+        nexvue-status.php nexvue-qr.js services.html channels.html nexvue-ops.php /var/www/html/
 # if PHP isn't wired into Apache yet:
 #   sudo apt install -y libapache2-mod-php && sudo a2enmod php8.3
 sudo systemctl restart apache2
@@ -267,10 +267,13 @@ Then from a LAN machine:
 
 - **Built-in player:** `http://<edge-ip>:8889/ch0`
 - **Test player with stats:** open `index.html` via Apache (top nav → Player),
-  click a channel. Gives resolution/fps, bitrate, RTT, jitter buffer, loss.
+  click a channel. Session tiles (resolution/fps, bitrate, RTT, loss, SDI
+  input, …) live in a bottom drawer — click **Session metrics** to expand
+  (collapsed by default). Click the **NexVUE** brand for a QR code of the
+  page URL (phone scan).
 - **Multiviewer:** open `multiview.html` (top nav → Multiview). Dual or quad
   layout with a channel dropdown per pane; defaults to LO; click a pane for
-  audio (one pane unmuted at a time).
+  audio (one pane unmuted at a time). Same NexVUE brand → QR share.
 - **Usage metrics:** top nav → Metrics (`/metrics.html` + `nexvue-metrics.php`
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
@@ -627,8 +630,9 @@ cycles); otherwise "ended."
   all target that same host on their fixed ports (8889/9997/9998). The host
   field is an optional override, not a requirement. Protocol (`http:`/`https:`)
   is also auto-detected from the page's own scheme — see the TLS section above
-  if that's not lining up. Top nav: Player / Multiview / Metrics / Services /
-  Channels.
+  if that's not lining up. Top nav brand **NexVUE** (click for page-URL QR) /
+  Player / Multiview / Metrics / Services / Channels. Player session metrics
+  sit in a collapsed bottom drawer (`Session metrics`).
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Player and Multiview show the alias when set;
   WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Channels page.

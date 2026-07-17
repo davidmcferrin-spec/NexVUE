@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NexVUE — Usage Metrics</title>
+<title>NexVUE — Metrics</title>
 <!--
   Usage/analytics dashboard — bandwidth, viewer counts, active streams,
   input lock/format history, and per-channel + per-viewer drill-down. NOT
@@ -32,6 +32,11 @@
     margin: -16px -16px 16px; padding: 10px 16px;
     background: var(--panel); border-bottom: 1px solid var(--edge);
   }
+  .topnav .brand {
+    background: none; border: none; color: var(--acc); font: inherit; font-weight: 600;
+    font-size: 15px; padding: 6px 12px 6px 0; margin-right: 4px; cursor: pointer;
+  }
+  .topnav .brand:hover { text-decoration: underline; }
   .topnav a {
     color: var(--dim); text-decoration: none; padding: 6px 12px;
     border-radius: 4px; border: 1px solid transparent;
@@ -40,7 +45,6 @@
   .topnav a.active {
     background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
   }
-  h1 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--acc); }
   .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
   button, select {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge);
@@ -66,17 +70,36 @@
   td.ua { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   th.num { text-align: right; }
+  .qr-modal {
+    display: none; position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,.6); align-items: center; justify-content: center; padding: 16px;
+  }
+  .qr-modal.open { display: flex; }
+  .qr-panel {
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
+    padding: 20px; max-width: 360px; width: 100%; text-align: center;
+  }
+  .qr-panel h2 { margin: 0 0 12px; font-size: 14px; color: var(--acc); }
+  .qr-panel canvas {
+    image-rendering: pixelated; width: 220px; height: 220px;
+    background: #fff; border-radius: 4px;
+  }
+  .qr-url {
+    word-break: break-all; color: var(--dim); font-size: 12px;
+    margin: 12px 0; text-align: left;
+  }
+  .qr-actions { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
 </head>
 <body>
 <nav class="topnav" aria-label="NexVUE">
+  <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
   <a href="/index.html">Player</a>
   <a href="/multiview.html">Multiview</a>
   <a href="/metrics.html" class="active">Metrics</a>
   <a href="/services.html">Services</a>
   <a href="/channels.html">Channels</a>
 </nav>
-<h1>NexVUE — Usage Metrics</h1>
 
 <div class="bar">
   <span style="color:var(--dim)">range:</span>
@@ -131,6 +154,19 @@
   </div>
 </div>
 
+<div id="qr-modal" class="qr-modal" role="dialog" aria-modal="true" aria-labelledby="qr-title" hidden>
+  <div class="qr-panel">
+    <h2 id="qr-title">Open on phone</h2>
+    <canvas id="qr-canvas" width="220" height="220" aria-hidden="true"></canvas>
+    <div class="qr-url" id="qr-url"></div>
+    <div class="qr-actions">
+      <button type="button" id="qr-copy">Copy URL</button>
+      <button type="button" id="qr-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="nexvue-qr.js"></script>
 <script>
 "use strict";
 (() => {
@@ -361,6 +397,46 @@
   load();
   setInterval(load, 30000);
 })();
+</script>
+
+<script>
+"use strict";
+  (function wireBrandQr() {
+    const $ = (id) => document.getElementById(id);
+    function sharePageUrl() {
+      return `${location.origin}${location.pathname || "/"}${location.search || ""}`;
+    }
+    const qrModal = $("qr-modal");
+    function openQr() {
+      const url = sharePageUrl();
+      $("qr-url").textContent = url;
+      try { NexVUEQR.render($("qr-canvas"), url, { scale: 6, margin: 2 }); }
+      catch (err) {
+        console.warn("QR render failed:", err);
+        $("qr-url").textContent = `${url}\n(QR unavailable: ${err.message})`;
+      }
+      qrModal.hidden = false;
+      qrModal.classList.add("open");
+    }
+    function closeQr() {
+      qrModal.classList.remove("open");
+      qrModal.hidden = true;
+    }
+    $("brand").addEventListener("click", openQr);
+    $("qr-close").addEventListener("click", closeQr);
+    qrModal.addEventListener("click", (e) => { if (e.target === qrModal) closeQr(); });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && qrModal.classList.contains("open")) closeQr();
+    });
+    $("qr-copy").addEventListener("click", async () => {
+      const url = $("qr-url").textContent.split("\n")[0];
+      try {
+        await navigator.clipboard.writeText(url);
+        $("qr-copy").textContent = "Copied";
+        setTimeout(() => { $("qr-copy").textContent = "Copy URL"; }, 1200);
+      } catch { prompt("Copy URL:", url); }
+    });
+  })();
 </script>
 </body>
 </html>

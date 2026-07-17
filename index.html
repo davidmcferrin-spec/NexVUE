@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NexVUE — WHEP Test Player</title>
+<title>NexVUE — Player</title>
 <!--
   Phase 1 bring-up tool (v3).
   Adds: Auto/HI/LO rendition selection with stats-driven auto-switching.
@@ -21,15 +21,23 @@
     --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    margin: 0; padding: 16px; padding-bottom: 56px; background: var(--bg); color: var(--text);
     font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    display: flex; flex-direction: column; min-height: 100vh;
   }
   .topnav {
     display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
     margin: -16px -16px 16px; padding: 10px 16px;
     background: var(--panel); border-bottom: 1px solid var(--edge);
+    flex-shrink: 0;
   }
+  .topnav .brand {
+    background: none; border: none; color: var(--acc); font: inherit; font-weight: 600;
+    font-size: 15px; padding: 6px 12px 6px 0; margin-right: 4px; cursor: pointer;
+  }
+  .topnav .brand:hover { text-decoration: underline; }
   .topnav a {
     color: var(--dim); text-decoration: none; padding: 6px 12px;
     border-radius: 4px; border: 1px solid transparent;
@@ -38,8 +46,10 @@
   .topnav a.active {
     background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
   }
-  h1 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--acc); }
-  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .bar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-bottom: 12px; flex-shrink: 0;
+  }
   input, button {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge);
     border-radius: 4px; padding: 7px 10px; font: inherit;
@@ -64,9 +74,19 @@
   #state.ok { color: var(--ok); }
   #state.bad { color: var(--bad); }
   .qlabel { color: var(--dim); }
-  .videowrap { max-width: 1280px; }
+  /* Video grows with the window; on ultrawide, letterbox and center horizontally. */
+  .stage {
+    flex: 1; min-height: 0; width: 100%;
+    display: flex; justify-content: center; align-items: center;
+  }
+  .videowrap {
+    width: min(1280px, 100%);
+    max-height: 100%;
+    aspect-ratio: 16 / 9;
+    margin-inline: auto;
+  }
   video {
-    width: 100%; aspect-ratio: 16/9; display: block;
+    width: 100%; height: 100%; display: block; object-fit: contain;
     background: #000; border: 1px solid var(--edge); border-radius: 4px;
   }
   /* Mirror/flip transforms are applied inline via JS (not CSS classes) so they
@@ -76,24 +96,59 @@
   .videowrap:fullscreen { display: flex; align-items: center; background: #000; }
   .videowrap:-webkit-full-screen { display: flex; align-items: center; background: #000; }
   .videowrap:fullscreen video, .videowrap:-webkit-full-screen video { max-height: 100vh; }
+  .stats-drawer {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+    background: var(--panel); border-top: 1px solid var(--edge);
+  }
+  .stats-drawer #stats-toggle {
+    width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
+    background: transparent; border: none; border-radius: 0; padding: 10px 16px;
+    color: var(--dim); font: inherit; cursor: pointer;
+  }
+  .stats-drawer #stats-toggle:hover { color: var(--text); }
+  .stats-drawer .caret { display: inline-block; transition: transform .15s ease; }
+  .stats-drawer.open .caret { transform: rotate(180deg); }
+  .stats-drawer .stats-panel {
+    display: none; max-height: 40vh; overflow: auto; padding: 0 16px 16px;
+  }
+  .stats-drawer.open .stats-panel { display: block; }
   #stats {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 8px; max-width: 1280px; margin-top: 12px;
+    gap: 8px; max-width: 1280px; margin: 0 auto;
   }
-  .stat { background: var(--panel); border: 1px solid var(--edge); border-radius: 4px; padding: 8px 10px; }
+  .stat { background: var(--bg); border: 1px solid var(--edge); border-radius: 4px; padding: 8px 10px; }
   .stat .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
   .stat .v { font-size: 16px; margin-top: 2px; }
+  .qr-modal {
+    display: none; position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,.6); align-items: center; justify-content: center; padding: 16px;
+  }
+  .qr-modal.open { display: flex; }
+  .qr-panel {
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
+    padding: 20px; max-width: 360px; width: 100%; text-align: center;
+  }
+  .qr-panel h2 { margin: 0 0 12px; font-size: 14px; color: var(--acc); }
+  .qr-panel canvas {
+    image-rendering: pixelated; width: 220px; height: 220px;
+    background: #fff; border-radius: 4px;
+  }
+  .qr-url {
+    word-break: break-all; color: var(--dim); font-size: 12px;
+    margin: 12px 0; text-align: left;
+  }
+  .qr-actions { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
 </head>
 <body>
 <nav class="topnav" aria-label="NexVUE">
+  <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
   <a href="/index.html" class="active">Player</a>
   <a href="/multiview.html">Multiview</a>
   <a href="/metrics.html">Metrics</a>
   <a href="/services.html">Services</a>
   <a href="/channels.html">Channels</a>
 </nav>
-<h1>NexVUE — WHEP Test Player</h1>
 
 <div class="bar">
   <input id="host" placeholder="(auto)" aria-label="Edge WHEP base URL — leave blank to use this page's host" title="Leave blank to auto-use the address you loaded this page from. Override to point at a different edge, e.g. http://10.0.0.5:8889">
@@ -113,27 +168,49 @@
   <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip)">⛶ Fullscreen</button>
 </div>
 
-<div class="videowrap">
-  <video id="video" autoplay playsinline controls muted></video>
-  <!-- muted: browsers block un-muted autoplay; unmute via controls once playing -->
+<div class="stage">
+  <div class="videowrap">
+    <video id="video" autoplay playsinline controls muted></video>
+    <!-- muted: browsers block un-muted autoplay; unmute via controls once playing -->
+  </div>
 </div>
 
-<div id="stats">
-  <div class="stat"><div class="k">Rendition</div><div class="v" id="s-rend">—</div></div>
-  <div class="stat"><div class="k">Resolution / FPS</div><div class="v" id="s-res">—</div></div>
-  <div class="stat"><div class="k">My video bitrate</div><div class="v" id="s-vbr">—</div></div>
-  <div class="stat"><div class="k">RTT (ICE)</div><div class="v" id="s-rtt">—</div></div>
-  <div class="stat"><div class="k">Jitter buffer</div><div class="v" id="s-jb">—</div></div>
-  <div class="stat"><div class="k">Loss (1s)</div><div class="v" id="s-loss">—</div></div>
-  <div class="stat"><div class="k">Frames dropped</div><div class="v" id="s-drop">—</div></div>
-  <div class="stat"><div class="k">Viewers (path)</div><div class="v" id="s-viewers">—</div></div>
-  <div class="stat"><div class="k">Path egress</div><div class="v" id="s-chout">—</div></div>
-  <div class="stat"><div class="k">Edge egress (all)</div><div class="v" id="s-allout">—</div></div>
-  <div class="stat"><div class="k">SDI input</div><div class="v" id="s-input">—</div></div>
-  <div class="stat"><div class="k">Reference</div><div class="v" id="s-ref">—</div></div>
-  <div class="stat"><div class="k">Screen awake</div><div class="v" id="s-wake">—</div></div>
+<div id="stats-drawer" class="stats-drawer">
+  <button type="button" id="stats-toggle" aria-expanded="false" aria-controls="stats">
+    <span class="caret" aria-hidden="true">▴</span> Session metrics
+  </button>
+  <div class="stats-panel" id="stats-panel">
+    <div id="stats">
+      <div class="stat"><div class="k">Rendition</div><div class="v" id="s-rend">—</div></div>
+      <div class="stat"><div class="k">Resolution / FPS</div><div class="v" id="s-res">—</div></div>
+      <div class="stat"><div class="k">My video bitrate</div><div class="v" id="s-vbr">—</div></div>
+      <div class="stat"><div class="k">RTT (ICE)</div><div class="v" id="s-rtt">—</div></div>
+      <div class="stat"><div class="k">Jitter buffer</div><div class="v" id="s-jb">—</div></div>
+      <div class="stat"><div class="k">Loss (1s)</div><div class="v" id="s-loss">—</div></div>
+      <div class="stat"><div class="k">Frames dropped</div><div class="v" id="s-drop">—</div></div>
+      <div class="stat"><div class="k">Viewers (path)</div><div class="v" id="s-viewers">—</div></div>
+      <div class="stat"><div class="k">Path egress</div><div class="v" id="s-chout">—</div></div>
+      <div class="stat"><div class="k">Edge egress (all)</div><div class="v" id="s-allout">—</div></div>
+      <div class="stat"><div class="k">SDI input</div><div class="v" id="s-input">—</div></div>
+      <div class="stat"><div class="k">Reference</div><div class="v" id="s-ref">—</div></div>
+      <div class="stat"><div class="k">Screen awake</div><div class="v" id="s-wake">—</div></div>
+    </div>
+  </div>
 </div>
 
+<div id="qr-modal" class="qr-modal" role="dialog" aria-modal="true" aria-labelledby="qr-title" hidden>
+  <div class="qr-panel">
+    <h2 id="qr-title">Open on phone</h2>
+    <canvas id="qr-canvas" width="220" height="220" aria-hidden="true"></canvas>
+    <div class="qr-url" id="qr-url"></div>
+    <div class="qr-actions">
+      <button type="button" id="qr-copy">Copy URL</button>
+      <button type="button" id="qr-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="nexvue-qr.js"></script>
 <script>
 "use strict";
 (() => {
@@ -672,6 +749,69 @@
   pollInputStatus();
   loadChannelButtons().then(() => pollInputStatus());
   $("disconnect").addEventListener("click", () => { teardown(); setState("idle"); });
+
+  // ---- Session metrics drawer -------------------------------------------------------
+  const drawer = $("stats-drawer");
+  const toggle = $("stats-toggle");
+  function setDrawerOpen(open) {
+    drawer.classList.toggle("open", open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    try { sessionStorage.setItem("nexvue-stats-drawer", open ? "1" : "0"); } catch { /* private mode */ }
+  }
+  toggle.addEventListener("click", () => setDrawerOpen(!drawer.classList.contains("open")));
+  try {
+    if (sessionStorage.getItem("nexvue-stats-drawer") === "1") setDrawerOpen(true);
+  } catch { /* default closed */ }
+
+  // ---- Brand QR share ---------------------------------------------------------------
+  function sharePageUrl() {
+    const path = location.pathname || "/index.html";
+    const search = location.search || "";
+    try {
+      const override = $("host").value.trim().replace(/\/+$/, "");
+      if (override) {
+        const u = new URL(override);
+        if (u.hostname && u.hostname !== EDGE_HOST) {
+          return `${u.protocol}//${u.host}${path}${search}`;
+        }
+      }
+    } catch { /* ignore bad override */ }
+    return `${location.origin}${path}${search}`;
+  }
+
+  const qrModal = $("qr-modal");
+  function openQr() {
+    const url = sharePageUrl();
+    $("qr-url").textContent = url;
+    try {
+      NexVUEQR.render($("qr-canvas"), url, { scale: 6, margin: 2 });
+    } catch (err) {
+      console.warn("QR render failed:", err);
+      $("qr-url").textContent = `${url}\n(QR unavailable: ${err.message})`;
+    }
+    qrModal.hidden = false;
+    qrModal.classList.add("open");
+  }
+  function closeQr() {
+    qrModal.classList.remove("open");
+    qrModal.hidden = true;
+  }
+  $("brand").addEventListener("click", openQr);
+  $("qr-close").addEventListener("click", closeQr);
+  qrModal.addEventListener("click", (e) => { if (e.target === qrModal) closeQr(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && qrModal.classList.contains("open")) closeQr();
+  });
+  $("qr-copy").addEventListener("click", async () => {
+    const url = $("qr-url").textContent.split("\n")[0];
+    try {
+      await navigator.clipboard.writeText(url);
+      $("qr-copy").textContent = "Copied";
+      setTimeout(() => { $("qr-copy").textContent = "Copy URL"; }, 1200);
+    } catch {
+      prompt("Copy URL:", url);
+    }
+  });
 })();
 </script>
 </body>
