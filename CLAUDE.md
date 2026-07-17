@@ -80,12 +80,17 @@ specifically because this box can't get additional ports opened.
 - Two of four Duo 2 connectors are still configured as Output, not Input —
   card config task, not code. See README "DeckLink Duo 2 connector direction".
 - Self-signed TLS cert (Apache's `ssl-cert-snakeoil` or similar) on
-  8889/9997/9998 requires a one-time per-browser click-through — fine for
+  8889/9997 requires a one-time per-browser click-through — fine for
   bench testing, plan a real cert before this reaches other users.
+  Player input-status dots no longer need a separate `:9998` trust click
+  (`nexvue-status.php` same-origin proxy); `:9998` TLS remains optional for
+  direct daemon clients / metrics collector URL scheme.
 - `decklink-status.cpp`'s active-detection probe takes ~0.7s per IDLE input
   it has to open and test; status daemon poll interval was raised to 5s
-  (from 2s) to accommodate. Inputs held by a running encoder use the fast
-  status-flag fallback instead, so production (encoders running) stays quick.
+  (from 2s) to accommodate, and `STALE_AFTER_S` is set above the helper
+  timeout so mid-poll lag does not blank player signal dots. Inputs held by
+  a running encoder use the fast status-flag fallback instead, so production
+  (encoders running) stays quick.
 - `vah264enc` property names confirmed working on this deployment's
   GStreamer/driver combo (Arrow Lake, Ubuntu 24.04 HWE) — `gst-inspect-1.0
   vah264enc` is still the source of truth if a different box rejects a
@@ -104,8 +109,10 @@ specifically because this box can't get additional ports opened.
 - `setup.sh` is the canonical installer — keep it in sync with any new
   package, file, or unit added to the project.
 - Dark monospace UI aesthetic (see `index.html` palette) — consistent
-  across the tool family (player, multiviewer, metrics). Top nav links
-  Player / Multiview / Metrics (`/metrics.html`).
+  across the tool family (player, multiviewer, metrics, services, channels).
+  Top nav: Player / Multiview / Metrics / Services / Channels.
+- Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +
+  allowlisted sudo wrappers. Phase 1 LAN-trust — not for DMZ without auth.
 - Production-ready code only: no placeholders, no TODOs. Unit tests for new
   or changed logic (`test/`). Complete file rewrites over accumulated diffs.
 - Architecture decisions confirmed with the owner before code.

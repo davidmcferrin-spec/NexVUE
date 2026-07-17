@@ -53,7 +53,11 @@ HELPER = "/usr/local/bin/decklink-status"
 # is quick — the slow path only hits genuinely idle inputs.
 POLL_INTERVAL_S = 5.0
 HELPER_TIMEOUT_S = 15.0
-STALE_AFTER_S = 10.0
+# Must stay above HELPER_TIMEOUT_S: while a slow decklink-status probe is
+# in flight, `ts` is not updated. If STALE_AFTER_S is shorter than the
+# helper's worst case, /status flips stale=true mid-poll and the player
+# blanks its signal dots even though the daemon is healthy.
+STALE_AFTER_S = HELPER_TIMEOUT_S + POLL_INTERVAL_S
 LISTEN_ADDR = ("0.0.0.0", 9998)
 
 # Log level: DEBUG surfaces every poll cycle and every request; INFO (default)

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NexVUE — Services</title>
+<!--
+  Ops: systemd unit status + poll-based journal viewer (near tail -f).
+  Data: nexvue-ops.php via allowlisted sudo wrappers. Phase 1 LAN-trust.
+-->
+<style>
+  :root {
+    --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
+    --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    display: flex; flex-direction: column; min-height: 100vh;
+  }
+  .topnav {
+    display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+    margin: -16px -16px 16px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--edge); flex-shrink: 0;
+  }
+  .topnav a {
+    color: var(--dim); text-decoration: none; padding: 6px 12px;
+    border-radius: 4px; border: 1px solid transparent;
+  }
+  .topnav a:hover { color: var(--text); border-color: var(--edge); }
+  .topnav a.active {
+    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--acc); flex-shrink: 0; }
+  .warn {
+    color: var(--dim); font-size: 12px; margin: -4px 0 12px; flex-shrink: 0;
+  }
+  .layout {
+    flex: 1; min-height: 0; display: grid; gap: 12px;
+    grid-template-columns: minmax(220px, 280px) 1fr;
+  }
+  @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 6px;
+    padding: 10px; min-height: 0; display: flex; flex-direction: column;
+  }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--dim); margin: 0 0 8px; font-weight: 600;
+  }
+  #unit-list { overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+  .unit {
+    text-align: left; background: var(--bg); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 4px; padding: 8px 10px;
+    font: inherit; cursor: pointer;
+  }
+  .unit:hover { border-color: var(--acc); }
+  .unit.selected { border-color: var(--acc); background: #1a2833; }
+  .unit .name { font-weight: 600; }
+  .unit .state { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .unit .state.ok { color: var(--ok); }
+  .unit .state.bad { color: var(--bad); }
+  .log-bar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-bottom: 8px; flex-shrink: 0;
+  }
+  button {
+    background: var(--bg); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 6px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--acc); }
+  button.active { background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600; }
+  #log {
+    flex: 1; min-height: 200px; margin: 0; padding: 10px; overflow: auto;
+    background: #0c0f12; border: 1px solid var(--edge); border-radius: 4px;
+    white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--text);
+  }
+  #status { color: var(--dim); margin-left: auto; font-size: 12px; }
+</style>
+</head>
+<body>
+<nav class="topnav" aria-label="NexVUE">
+  <a href="/index.html">Player</a>
+  <a href="/multiview.html">Multiview</a>
+  <a href="/metrics.html">Metrics</a>
+  <a href="/services.html" class="active">Services</a>
+  <a href="/channels.html">Channels</a>
+</nav>
+<h1>NexVUE — Services</h1>
+<p class="warn">Ops page (LAN-trust). Shows systemd status and recent journal lines — not a substitute for SSH.</p>
+
+<div class="layout">
+  <div class="panel">
+    <h2>Units</h2>
+    <div id="unit-list"></div>
+  </div>
+  <div class="panel">
+    <h2>Journal</h2>
+    <div class="log-bar">
+      <button type="button" id="follow" class="active" title="Poll for new lines">Follow</button>
+      <button type="button" id="clear-log">Clear view</button>
+      <button type="button" id="restart-unit" disabled>Restart unit…</button>
+      <span id="status">select a unit</span>
+    </div>
+    <pre id="log"></pre>
+  </div>
+</div>
+
+<script>
+"use strict";
+(() => {
+  const listEl = document.getElementById("unit-list");
+  const logEl = document.getElementById("log");
+  const statusEl = document.getElementById("status");
+  const followBtn = document.getElementById("follow");
+  const restartBtn = document.getElementById("restart-unit");
+
+  let selected = null;
+  let follow = true;
+  let lastLine = "";
+  let sinceCursor = "";
+
+  async function api(action, body) {
+    const opts = body
+      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...body }) }
+      : {};
+    const url = body ? "nexvue-ops.php" : `nexvue-ops.php?action=${encodeURIComponent(action)}`;
+    const res = await fetch(url, opts);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
+  function stateClass(state) {
+    if (state === "active") return "ok";
+    if (state === "failed" || state === "inactive") return "bad";
+    return "";
+  }
+
+  async function refreshServices() {
+    try {
+      const data = await api("services");
+      const keep = selected;
+      listEl.innerHTML = "";
+      for (const s of data.services) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "unit" + (keep === s.unit ? " selected" : "");
+        b.innerHTML = `<div class="name">${s.unit}</div><div class="state ${stateClass(s.state)}">${s.state}</div>`;
+        b.addEventListener("click", () => selectUnit(s.unit));
+        listEl.appendChild(b);
+      }
+      if (keep) {
+        const still = data.services.find(x => x.unit === keep);
+        restartBtn.disabled = !still;
+      }
+    } catch (err) {
+      statusEl.textContent = `status error: ${err.message}`;
+    }
+  }
+
+  function selectUnit(unit) {
+    selected = unit;
+    lastLine = "";
+    sinceCursor = "";
+    logEl.textContent = "";
+    [...listEl.querySelectorAll(".unit")].forEach(el => {
+      el.classList.toggle("selected", el.querySelector(".name").textContent === unit);
+    });
+    restartBtn.disabled = false;
+    statusEl.textContent = unit;
+    pollJournal(true);
+  }
+
+  function extractIso(line) {
+    // short-iso: 2026-07-17T15:00:00-0500 hostname ...
+    const m = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{4}|Z)?)/);
+    return m ? m[1] : "";
+  }
+
+  async function pollJournal(full) {
+    if (!selected) return;
+    try {
+      const body = { unit: selected, lines: full || !sinceCursor ? 150 : 80 };
+      if (!full && sinceCursor) body.since = sinceCursor;
+      const data = await api("journal", body);
+      const text = data.log || "";
+      const lines = text.split("\n").filter(Boolean);
+      if (!lines.length) {
+        statusEl.textContent = `${selected} · no new lines`;
+        return;
+      }
+      if (full || !logEl.textContent) {
+        logEl.textContent = text;
+      } else {
+        // Append only lines after lastLine
+        let start = 0;
+        if (lastLine) {
+          const idx = lines.lastIndexOf(lastLine);
+          start = idx >= 0 ? idx + 1 : 0;
+        }
+        const add = lines.slice(start).join("\n");
+        if (add) {
+          logEl.textContent += (logEl.textContent.endsWith("\n") ? "" : "\n") + add + "\n";
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+      }
+      lastLine = lines[lines.length - 1];
+      const iso = extractIso(lastLine);
+      if (iso) sinceCursor = iso;
+      statusEl.textContent = `${selected} · updated ${new Date().toLocaleTimeString()}`;
+    } catch (err) {
+      statusEl.textContent = `journal error: ${err.message}`;
+    }
+  }
+
+  followBtn.addEventListener("click", () => {
+    follow = !follow;
+    followBtn.classList.toggle("active", follow);
+  });
+  document.getElementById("clear-log").addEventListener("click", () => {
+    logEl.textContent = "";
+    lastLine = "";
+  });
+  restartBtn.addEventListener("click", async () => {
+    if (!selected) return;
+    if (!confirm(`Restart ${selected} now?`)) return;
+    try {
+      await api("restart", { units: [selected] });
+      statusEl.textContent = `restarted ${selected}`;
+      refreshServices();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  refreshServices();
+  setInterval(refreshServices, 2000);
+  setInterval(() => { if (follow && selected) pollJournal(false); }, 1000);
+})();
+</script>
+</body>
+</html>

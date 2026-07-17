@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NexVUE — Channels</title>
+<!--
+  Ops: edit /etc/nexvue/channels/<N>.env — single channel or bulk patch.
+  Saves write files only; restart is an explicit confirm. Phase 1 LAN-trust.
+-->
+<style>
+  :root {
+    --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
+    --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  .topnav {
+    display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+    margin: -16px -16px 16px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--edge);
+  }
+  .topnav a {
+    color: var(--dim); text-decoration: none; padding: 6px 12px;
+    border-radius: 4px; border: 1px solid transparent;
+  }
+  .topnav a:hover { color: var(--text); border-color: var(--edge); }
+  .topnav a.active {
+    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 8px; color: var(--acc); }
+  .warn { color: var(--dim); font-size: 12px; margin: 0 0 16px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  button, select, input {
+    background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 7px 10px; font: inherit;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--acc); }
+  button.primary { background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 6px;
+    padding: 12px; margin-bottom: 16px;
+  }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--dim); margin: 0 0 10px; font-weight: 600;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--edge); }
+  th { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  tr.row { cursor: pointer; }
+  tr.row:hover { background: #1a222c; }
+  tr.row.selected { background: #1a2833; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--dim); }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+  .form-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;
+  }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim); }
+  label.ro input { opacity: .7; }
+  .bulk-keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+  .bulk-key {
+    display: flex; gap: 8px; align-items: center; padding: 6px 8px;
+    border: 1px solid var(--edge); border-radius: 4px; background: var(--bg);
+  }
+  .bulk-key input[type="checkbox"] { flex-shrink: 0; }
+  .bulk-key input[type="text"], .bulk-key select { flex: 1; min-width: 0; }
+  #state { color: var(--dim); margin-left: auto; }
+  dialog {
+    background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 16px; max-width: 420px;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  dialog .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+</style>
+</head>
+<body>
+<nav class="topnav" aria-label="NexVUE">
+  <a href="/index.html">Player</a>
+  <a href="/multiview.html">Multiview</a>
+  <a href="/metrics.html">Metrics</a>
+  <a href="/services.html">Services</a>
+  <a href="/channels.html" class="active">Channels</a>
+</nav>
+<h1>NexVUE — Channels</h1>
+<p class="warn">Edits <code>/etc/nexvue/channels/*.env</code>. MediaMTX path stays <code>chN</code>; set <code>CHANNEL_ALIAS</code> for a friendly label. Restart is optional after save.</p>
+
+<div class="panel">
+  <h2>Channel list</h2>
+  <div class="bar">
+    <button type="button" id="reload">Reload</button>
+    <button type="button" id="select-all">Select all</button>
+    <button type="button" id="select-none">Select none</button>
+    <span id="state">loading…</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th></th><th>ID</th><th>Path</th><th>Alias</th><th>Bitrate</th>
+        <th>Deint</th><th>Audio</th><th>LO</th><th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<div class="panel" id="bulk-panel">
+  <h2>Bulk edit selected</h2>
+  <p style="color:var(--dim); margin:0 0 10px; font-size:12px">Check parameters to apply, set values, then Apply to all checked channels. Does not change DEVICE_NUMBER / CHANNEL_PATH.</p>
+  <div class="bulk-keys" id="bulk-keys"></div>
+  <div class="bar" style="margin-top:12px">
+    <button type="button" class="primary" id="bulk-apply" disabled>Apply to selected</button>
+  </div>
+</div>
+
+<div class="panel" id="editor-panel" style="display:none">
+  <h2>Edit channel <span id="edit-title"></span></h2>
+  <div class="form-grid" id="edit-form"></div>
+  <div class="bar" style="margin-top:12px">
+    <button type="button" class="primary" id="save-one">Save channel</button>
+    <button type="button" id="cancel-edit">Close</button>
+  </div>
+</div>
+
+<dialog id="restart-dlg">
+  <p id="restart-msg">Restart encoder unit(s) now so changes take effect?</p>
+  <div class="actions">
+    <button type="button" id="restart-skip">Skip</button>
+    <button type="button" class="primary" id="restart-go">Restart now</button>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+(() => {
+  const tbody = document.getElementById("tbody");
+  const stateEl = document.getElementById("state");
+  const editPanel = document.getElementById("editor-panel");
+  const editForm = document.getElementById("edit-form");
+  const editTitle = document.getElementById("edit-title");
+  const bulkKeysEl = document.getElementById("bulk-keys");
+  const bulkApply = document.getElementById("bulk-apply");
+  const dlg = document.getElementById("restart-dlg");
+  const restartMsg = document.getElementById("restart-msg");
+
+  let channels = [];
+  let editableKeys = [];
+  let selectedId = null;
+  let pendingRestart = [];
+
+  const FIELD_META = {
+    CHANNEL_ALIAS: { label: "Alias (display name)", type: "text" },
+    MAX_DEVICES: { label: "MAX_DEVICES", type: "text" },
+    DEINT_FIELDS: { label: "DEINT_FIELDS", type: "select", options: ["all", "top"] },
+    BITRATE_KBPS: { label: "BITRATE_KBPS", type: "text" },
+    GOP_FRAMES: { label: "GOP_FRAMES", type: "text" },
+    ENABLE_AUDIO: { label: "ENABLE_AUDIO", type: "select", options: ["true", "false"] },
+    AUDIO_FRAME_MS: { label: "AUDIO_FRAME_MS", type: "text" },
+    AUDIO_BITRATE_BPS: { label: "AUDIO_BITRATE_BPS", type: "text" },
+    AUDIO_CHANNELS: { label: "AUDIO_CHANNELS", type: "text" },
+    DECKLINK_BUFFER_FRAMES: { label: "DECKLINK_BUFFER_FRAMES", type: "text" },
+    VIDEO_ENCODER: { label: "VIDEO_ENCODER", type: "select", options: ["vah264enc", "x264enc"] },
+    EXTRA_ENC_ARGS: { label: "EXTRA_ENC_ARGS", type: "text" },
+    LO_ENABLE: { label: "LO_ENABLE", type: "select", options: ["true", "false"] },
+    LO_PRESET: { label: "LO_PRESET", type: "select", options: ["720p", "540p", "480p", "360p", "240p", "180p"] },
+    LO_WIDTH: { label: "LO_WIDTH", type: "text" },
+    LO_HEIGHT: { label: "LO_HEIGHT", type: "text" },
+    LO_BITRATE_KBPS: { label: "LO_BITRATE_KBPS", type: "text" },
+    LO_FPS: { label: "LO_FPS", type: "text" },
+  };
+
+  async function api(action, body) {
+    const res = await fetch("nexvue-ops.php", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...body })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
+  function checkedIds() {
+    return [...tbody.querySelectorAll("input.sel:checked")].map(el => parseInt(el.value, 10));
+  }
+
+  function updateBulkEnable() {
+    bulkApply.disabled = checkedIds().length === 0;
+  }
+
+  function buildBulkKeys(keys) {
+    bulkKeysEl.innerHTML = "";
+    for (const key of keys) {
+      const meta = FIELD_META[key] || { label: key, type: "text" };
+      const row = document.createElement("div");
+      row.className = "bulk-key";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.dataset.key = key;
+      cb.className = "bulk-enable";
+      let control;
+      if (meta.type === "select") {
+        control = document.createElement("select");
+        control.dataset.key = key;
+        for (const opt of meta.options) {
+          const o = document.createElement("option");
+          o.value = opt; o.textContent = opt;
+          control.appendChild(o);
+        }
+      } else {
+        control = document.createElement("input");
+        control.type = "text";
+        control.dataset.key = key;
+        control.placeholder = meta.label;
+      }
+      const lab = document.createElement("span");
+      lab.style.flex = "0 0 110px";
+      lab.style.color = "var(--dim)";
+      lab.style.fontSize = "11px";
+      lab.textContent = key;
+      row.appendChild(cb);
+      row.appendChild(lab);
+      row.appendChild(control);
+      bulkKeysEl.appendChild(row);
+    }
+  }
+
+  function renderTable() {
+    tbody.innerHTML = channels.map(c => {
+      const alias = c.CHANNEL_ALIAS || "—";
+      const lo = c.LO_ENABLE === "true" ? (c.LO_PRESET || "on") : "off";
+      const dot = c.active ? "ok" : "bad";
+      return `<tr class="row" data-id="${c.id}">
+        <td><input type="checkbox" class="sel" value="${c.id}"></td>
+        <td><span class="dot ${dot}"></span>${c.id}</td>
+        <td>${c.CHANNEL_PATH || ("ch" + c.id)}</td>
+        <td>${alias}</td>
+        <td>${c.BITRATE_KBPS || "—"}</td>
+        <td>${c.DEINT_FIELDS || "—"}</td>
+        <td>${c.ENABLE_AUDIO || "—"}</td>
+        <td>${lo}</td>
+        <td>${c.state || "—"}</td>
+      </tr>`;
+    }).join("");
+    tbody.querySelectorAll("tr.row").forEach(tr => {
+      tr.addEventListener("click", e => {
+        if (e.target.classList.contains("sel")) return;
+        openEditor(parseInt(tr.dataset.id, 10));
+      });
+    });
+    tbody.querySelectorAll("input.sel").forEach(cb => {
+      cb.addEventListener("click", e => e.stopPropagation());
+      cb.addEventListener("change", updateBulkEnable);
+    });
+    updateBulkEnable();
+  }
+
+  async function load() {
+    stateEl.textContent = "loading…";
+    try {
+      const data = await api("channels_list", {});
+      channels = data.channels || [];
+      editableKeys = data.editable_keys || Object.keys(FIELD_META);
+      buildBulkKeys(editableKeys);
+      renderTable();
+      stateEl.textContent = `${channels.length} channel(s)`;
+    } catch (err) {
+      stateEl.textContent = `error: ${err.message}`;
+    }
+  }
+
+  function fieldControl(key, value, readonly) {
+    const meta = FIELD_META[key] || { label: key, type: "text" };
+    const wrap = document.createElement("label");
+    if (readonly) wrap.classList.add("ro");
+    wrap.textContent = "";
+    const title = document.createElement("span");
+    title.textContent = meta.label || key;
+    wrap.appendChild(title);
+    let control;
+    if (!readonly && meta.type === "select") {
+      control = document.createElement("select");
+      control.dataset.key = key;
+      const blank = document.createElement("option");
+      blank.value = ""; blank.textContent = "(unset)";
+      control.appendChild(blank);
+      for (const opt of meta.options) {
+        const o = document.createElement("option");
+        o.value = opt; o.textContent = opt;
+        if (String(value) === opt) o.selected = true;
+        control.appendChild(o);
+      }
+    } else {
+      control = document.createElement("input");
+      control.type = "text";
+      control.dataset.key = key;
+      control.value = value == null ? "" : String(value);
+      if (readonly) control.readOnly = true;
+    }
+    wrap.appendChild(control);
+    return wrap;
+  }
+
+  async function openEditor(id) {
+    selectedId = id;
+    tbody.querySelectorAll("tr.row").forEach(tr => {
+      tr.classList.toggle("selected", parseInt(tr.dataset.id, 10) === id);
+    });
+    try {
+      const data = await api("channel_get", { id });
+      const keys = data.keys || {};
+      editTitle.textContent = `#${id} (${keys.CHANNEL_PATH || "ch" + id})`;
+      editForm.innerHTML = "";
+      for (const rk of ["DEVICE_NUMBER", "CHANNEL_PATH", "RTSP_URL"]) {
+        editForm.appendChild(fieldControl(rk, keys[rk] || "", true));
+      }
+      for (const key of (data.editable_keys || editableKeys)) {
+        editForm.appendChild(fieldControl(key, keys[key] || "", false));
+      }
+      editPanel.style.display = "block";
+      editPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  function askRestart(units) {
+    pendingRestart = units || [];
+    if (!pendingRestart.length) return;
+    restartMsg.textContent = `Restart ${pendingRestart.join(", ")} now so changes take effect?`;
+    dlg.showModal();
+  }
+
+  document.getElementById("restart-skip").addEventListener("click", () => dlg.close());
+  document.getElementById("restart-go").addEventListener("click", async () => {
+    try {
+      await api("restart", { units: pendingRestart });
+      dlg.close();
+      stateEl.textContent = `restarted ${pendingRestart.length} unit(s)`;
+      load();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  document.getElementById("save-one").addEventListener("click", async () => {
+    if (selectedId == null) return;
+    const patch = {};
+    editForm.querySelectorAll("[data-key]").forEach(el => {
+      if (el.readOnly) return;
+      const key = el.dataset.key;
+      if (!editableKeys.includes(key) && !(FIELD_META[key])) return;
+      patch[key] = el.value;
+    });
+    try {
+      const data = await api("channel_put", { id: selectedId, patch });
+      stateEl.textContent = `saved channel ${selectedId}`;
+      await load();
+      askRestart(data.restart_units || []);
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  document.getElementById("cancel-edit").addEventListener("click", () => {
+    editPanel.style.display = "none";
+    selectedId = null;
+  });
+
+  bulkApply.addEventListener("click", async () => {
+    const ids = checkedIds();
+    if (!ids.length) return;
+    const patch = {};
+    bulkKeysEl.querySelectorAll(".bulk-key").forEach(row => {
+      const cb = row.querySelector(".bulk-enable");
+      if (!cb.checked) return;
+      const key = cb.dataset.key;
+      const control = row.querySelector("[data-key='" + key + "']");
+      if (control) patch[key] = control.value;
+    });
+    if (!Object.keys(patch).length) {
+      alert("Check at least one parameter to apply.");
+      return;
+    }
+    if (!confirm(`Apply ${Object.keys(patch).length} parameter(s) to channels ${ids.join(", ")}?`)) return;
+    try {
+      const data = await api("channels_bulk", { ids, patch });
+      stateEl.textContent = `updated ${data.updated.length} channel(s)`;
+      await load();
+      askRestart(data.restart_units || []);
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  document.getElementById("reload").addEventListener("click", load);
+  document.getElementById("select-all").addEventListener("click", () => {
+    tbody.querySelectorAll("input.sel").forEach(cb => { cb.checked = true; });
+    updateBulkEnable();
+  });
+  document.getElementById("select-none").addEventListener("click", () => {
+    tbody.querySelectorAll("input.sel").forEach(cb => { cb.checked = false; });
+    updateBulkEnable();
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

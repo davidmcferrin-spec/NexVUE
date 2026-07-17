@@ -50,10 +50,11 @@ stay comfortably inside it.
 ## Install
 
 **Preferred:** from the repo root as root, `sudo ./setup.sh` installs packages,
-MediaMTX, systemd units (encode / status / metrics collector), and — when
-`/var/www/html` exists — the Apache web UI (`index.html`, `multiview.html`,
-`metrics.html`, `nexvue-metrics.php`). Use `sudo ./setup.sh --check` after a
-reboot; `sudo ./setup.sh --firewall` for Phase 1 ufw rules.
+MediaMTX, systemd units (encode / status / metrics collector), ops sudo
+wrappers + `/etc/sudoers.d/nexvue-ops`, and — when `/var/www/html` exists —
+the Apache web UI (player, multiview, metrics, services, channels). Use
+`sudo ./setup.sh --check` after a reboot; `sudo ./setup.sh --firewall` for
+Phase 1 ufw rules.
 
 Manual steps below match what `setup.sh` does if you prefer to run them by hand.
 
@@ -144,21 +145,32 @@ Add channels by creating `1.env` .. `7.env` and enabling `nexvue-encode@1` .. `@
 The metrics **collector** has no listening port — it only writes SQLite.
 Reading it back is Apache + PHP (next step). See "Usage Metrics Dashboard".
 
-### 5. Apache web UI (player / multiviewer / metrics)
+### 5. Apache web UI (player / multiviewer / metrics / ops)
 
-Drop the four files into Apache's docroot (same place IT already serves on
-80/443). They must sit together so `metrics.html` can `fetch()` 
-`nexvue-metrics.php` with a relative path:
+Drop the UI files into Apache's docroot (same place IT already serves on
+80/443). Metrics and ops PHP scripts must sit next to the HTML so relative
+`fetch()` paths resolve:
 
 ```bash
-sudo cp index.html multiview.html metrics.html nexvue-metrics.php /var/www/html/
+sudo cp index.html multiview.html metrics.html nexvue-metrics.php \
+        nexvue-status.php services.html channels.html nexvue-ops.php /var/www/html/
 # if PHP isn't wired into Apache yet:
 #   sudo apt install -y libapache2-mod-php && sudo a2enmod php8.3
 sudo systemctl restart apache2
 ```
 
+Ops pages (`services.html`, `channels.html`) also need the allowlisted sudo
+wrappers and sudoers drop-in (installed by `setup.sh`):
+
+```bash
+sudo install -m 755 nexvue-ops-*.sh nexvue-ops-env-update.py /usr/local/bin/
+sudo install -m 440 nexvue-ops.sudoers /etc/sudoers.d/nexvue-ops
+sudo visudo -cf /etc/sudoers.d/nexvue-ops
+```
+
 Then open `http://<edge-ip>/index.html` (top nav → Player / Multiview /
-Metrics). No reverse proxy and no extra firewall port for metrics.
+Metrics / Services / Channels). **Services and Channels are LAN-trust ops
+pages** — do not expose them on a DMZ without Phase 2 auth.
 
 ### 6. Input status helper (signal/reference display in the player)
 
@@ -176,8 +188,9 @@ sudo make install                       # -> /usr/local/bin/decklink-status
 (`setup.sh` builds this automatically when the SDK is at `/opt/decklink-sdk`.
 The status **daemon** unit itself is already installed in step 4.)
 
-Optional but recommended — the player degrades gracefully (dots grey,
-"n/a" tiles) if the status daemon isn't running.
+Optional but recommended — the player degrades gracefully (gray dots,
+SDI input = `status unreachable`) if the status daemon isn't reachable
+via `nexvue-status.php`.
 
 ## Firewall (ufw)
 
@@ -260,6 +273,11 @@ Then from a LAN machine:
   audio (one pane unmuted at a time).
 - **Usage metrics:** top nav → Metrics (`/metrics.html` + `nexvue-metrics.php`
   in Apache docroot — no separate port).
+- **Services:** top nav → Services — unit status + poll-based journal viewer
+  (near `tail -f`). LAN-trust ops.
+- **Channels:** top nav → Channels — edit `/etc/nexvue/channels/<N>.env`
+  (single or bulk). Optional `CHANNEL_ALIAS` for friendly labels; path stays
+  `chN`. Save asks before restarting encoders.
 
 ### Latency measurement (do this properly once)
 
@@ -328,8 +346,9 @@ mistake is enabling some and assuming the rest inherited it. They did not:
 |---|---|---|---|
 | MediaMTX WHEP (viewers)   | 8889 | `webrtcEncryption`, `webrtcServerKey/Cert` | Mixed-content block (if page is HTTPS) |
 | MediaMTX Control API      | 9997 | `apiEncryption`, `apiServerKey/Cert` — **separate from webrtcEncryption above, does NOT inherit it** | `ERR_SSL_PROTOCOL_ERROR` |
-| NexVUE status daemon      | 9998 | `NEXVUE_STATUS_TLS_CERT`/`_KEY` env vars on the systemd unit | `ERR_SSL_PROTOCOL_ERROR` |
+| NexVUE status daemon      | 9998 | Optional for the **player UI** (see below). Still needed if the metrics collector uses `https://127.0.0.1:9998`, or for direct curl/CheckMK hits on `:9998`. | `ERR_SSL_PROTOCOL_ERROR` on direct `:9998` |
 | NexVUE metrics dashboard  | —    | N/A — no port, no TLS needed for this piece at all. The collector has no listener; PHP reads SQLite directly and Apache (already TLS) serves the result. | N/A |
+| Player input-status dots  | —    | `nexvue-status.php` on Apache (same-origin). Proxies to loopback `:9998` over HTTP or HTTPS. | Gray dots + SDI input line = `status unreachable` (not “daemon down”) |
 
 `ERR_SSL_PROTOCOL_ERROR` specifically means the browser tried a TLS
 handshake against a server that's still answering plain HTTP — i.e. that
@@ -337,6 +356,14 @@ particular switch wasn't actually flipped (or the unit wasn't reloaded after
 editing). A generic mixed-content *console warning* (not a network error)
 means the page is HTTPS and a request is plain HTTP with no TLS attempted at
 all.
+
+**Player signal dots:** the browser fetches `nexvue-status.php` on the same
+origin as the page (Apache), which talks to `nexvue-status` on loopback. That
+avoids mixed content and a second per-port cert trust click for `:9998`. If
+dots stay gray and **SDI input** shows `status unreachable`, check that
+`nexvue-status.php` is in the docroot, PHP can reach `127.0.0.1:9998`, and
+`nexvue-status` is running. A `stale` suffix means the daemon answered but
+`decklink-status` is lagging — not a fetch failure.
 
 ### Steps (assumes Apache's TLS is already working)
 
@@ -374,11 +401,12 @@ all.
    `systemctl cat nexvue-status` shows what's actually LIVE — use it to verify
    an edit really landed, since a repo-file edit alone changes nothing until
    copied to `/etc/systemd/system/` and reloaded.
-5. **Deploy the current `index.html`, `multiview.html`, `metrics.html`, and
-   `nexvue-metrics.php` to Apache's docroot** — the player pages auto-detect
-   `https:`/`http:` from `location.protocol`, so they must be the current
-   versions or they will keep requesting `http://` regardless of what you
-   fixed server-side. Top-nav Metrics points at `/metrics.html`.
+5. **Deploy the current web UI to Apache's docroot** (`index.html`,
+   `multiview.html`, `metrics.html`, `nexvue-metrics.php`, `nexvue-status.php`,
+   `services.html`, `channels.html`, `nexvue-ops.php`) — player pages
+   auto-detect `https:`/`http:` from `location.protocol`. Input-status dots
+   use `nexvue-status.php` (same-origin). Ops pages need the sudoers drop-in
+   from `setup.sh` as well.
 6. **Self-signed cert (e.g. Ubuntu's `ssl-cert-snakeoil`, or any cert issued
    for a hostname while you're testing via bare IP): trust it on each port
    individually**, once per browser — visiting `https://<ip>/` does NOT
@@ -386,10 +414,10 @@ all.
    ```
    https://<edge-ip>:8889/
    https://<edge-ip>:9997/v3/paths/list
-   https://<edge-ip>:9998/status
    ```
-   (metrics has no port of its own to trust at all — it rides entirely on
-   Apache's existing cert)
+   (`:9998` is no longer required for the player UI once `nexvue-status.php`
+   is deployed; still useful for direct daemon checks. Metrics rides entirely
+   on Apache's existing cert.)
    Click through "Advanced -> Proceed" on each. Skipping this step causes
    silent failures that look identical to a misconfiguration.
 
@@ -599,8 +627,15 @@ cycles); otherwise "ended."
   all target that same host on their fixed ports (8889/9997/9998). The host
   field is an optional override, not a requirement. Protocol (`http:`/`https:`)
   is also auto-detected from the page's own scheme — see the TLS section above
-  if that's not lining up. Top nav links Player / Multiview / Metrics
-  (`/metrics.html`).
+  if that's not lining up. Top nav: Player / Multiview / Metrics / Services /
+  Channels.
+- **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
+  `channels-example.env`). Player and Multiview show the alias when set;
+  WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Channels page.
+- **Ops pages (Services / Channels)** call `nexvue-ops.php`, which uses
+  allowlisted sudo wrappers under `/usr/local/bin/nexvue-ops-*` (sudoers drop-in
+  `/etc/sudoers.d/nexvue-ops`). Saves write env files only; restart is an
+  explicit confirm. Phase 1 LAN-trust — do not DMZ-expose without auth.
 - **Multiviewer defaults to LO** with a global HI/LO toggle (quad = up to four
   simultaneous WHEP sessions). Only one pane is unmuted at a time — click a
   pane to select audio. Switching Dual↔Quad tears down hidden panes so unused
@@ -614,9 +649,10 @@ cycles); otherwise "ended."
 - **Input status & reference:** the `nexvue-status` daemon (port 9998) polls the
   DeckLink Status API via the `decklink-status` helper and serves JSON
   (per-input signal lock + detected format, genlock reference lock + mode).
-  The test player shows this as green/red dots per channel plus SDI input and
-  Reference tiles. Build the helper first: download the Blackmagic DeckLink
-  SDK, then `make DECKLINK_SDK=/path/to/sdk && sudo make install`, and
+  The test player fetches it through same-origin `nexvue-status.php` (Apache
+  → loopback), showing green/red dots per channel plus SDI input and Reference
+  tiles. Build the helper first: download the Blackmagic DeckLink SDK, then
+  `make DECKLINK_SDK=/path/to/sdk && sudo make install`, and
   `systemctl enable --now nexvue-status`. Status queries coexist safely with an
   active capture.
 - **LO renditions (adaptive bandwidth):** `LO_ENABLE=true` in a channel env

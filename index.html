@@ -90,6 +90,8 @@
   <a href="/index.html" class="active">Player</a>
   <a href="/multiview.html">Multiview</a>
   <a href="/metrics.html">Metrics</a>
+  <a href="/services.html">Services</a>
+  <a href="/channels.html">Channels</a>
 </nav>
 <h1>NexVUE — WHEP Test Player</h1>
 
@@ -479,29 +481,79 @@
     }
   }
 
-  // ---- DeckLink input/reference status (:9998) — runs continuously -----------------
+  // ---- DeckLink input/reference status — runs continuously -------------------------
+  // Prefer same-origin nexvue-status.php (Apache → loopback :9998) so HTTPS
+  // pages are not blocked by mixed content or a second untrusted cert on
+  // :9998. Fall back to direct :9998 only when the host field points at a
+  // different edge hostname.
+  function statusPollUrl() {
+    try {
+      const override = $("host").value.trim().replace(/\/+$/, "");
+      if (override) {
+        const host = new URL(override).hostname;
+        if (host && host !== EDGE_HOST) {
+          return serviceBase("status") + "/status";
+        }
+      }
+    } catch { /* ignore bad override; use proxy */ }
+    return "nexvue-status.php";
+  }
+
+  function clearSignalDots() {
+    document.querySelectorAll("button.ch").forEach(b => {
+      b.classList.remove("sig-ok", "sig-lost");
+    });
+  }
+
   async function pollInputStatus() {
-    const statusUrl = serviceBase("status") + "/status";
+    const statusUrl = statusPollUrl();
     try {
       const res = await fetch(statusUrl);
-      if (!res.ok) throw new Error(res.status);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const byIndex = {};
       for (const d of data.devices || []) byIndex[d.index] = d;
 
-      document.querySelectorAll("button.ch").forEach((b, i) => {
-        const d = byIndex[i];
+      if (data.error && (!data.devices || !data.devices.length)) {
+        clearSignalDots();
+        $("s-input").textContent = `status error: ${data.error}`;
+        $("s-input").style.color = "var(--bad)";
+        $("s-ref").textContent = "n/a";
+        $("s-ref").style.color = "var(--dim)";
+        console.warn("nexvue status:", data.error, statusUrl);
+        return;
+      }
+
+      document.querySelectorAll("button.ch").forEach((b) => {
+        const idx = parseInt(b.dataset.device || "", 10);
+        const d = Number.isFinite(idx) ? byIndex[idx] : undefined;
         b.classList.remove("sig-ok", "sig-lost");
-        if (d && !data.stale) {
-          b.classList.add(d.input_locked ? "sig-ok" : "sig-lost");
-          b.title = d.input_locked ? `signal: ${d.input_mode}` : "no signal";
+        if (!d) return;
+        if (data.stale) {
+          const base = b.dataset.path || `ch${idx}`;
+          b.title = `${base}: status stale (daemon slow or helper lag)`;
+          return;
         }
+        b.classList.add(d.input_locked ? "sig-ok" : "sig-lost");
+        b.title = d.input_locked ? `signal: ${d.input_mode}` : "no signal";
       });
 
       if (currentBase) {
-        const idx = parseInt(currentBase.replace(/\D/g, ""), 10);
+        const btn = document.querySelector(`button.ch[data-path="${currentBase}"]`);
+        const idx = btn
+          ? parseInt(btn.dataset.device || "", 10)
+          : parseInt(currentBase.replace(/\D/g, ""), 10);
         const d = byIndex[idx];
-        if (d) {
+        if (data.stale) {
+          $("s-input").textContent = d
+            ? `${d.input_locked ? d.input_mode : "NO SIGNAL"} (stale)`
+            : "stale";
+          $("s-input").style.color = "var(--dim)";
+          $("s-ref").textContent = d
+            ? (d.reference_locked ? `locked · ${d.reference_mode}` : "free-run")
+            : "—";
+          $("s-ref").style.color = "var(--dim)";
+        } else if (d) {
           $("s-input").textContent = d.input_locked ? d.input_mode : "NO SIGNAL";
           $("s-input").style.color = d.input_locked ? "" : "var(--bad)";
           $("s-ref").textContent = d.reference_locked
@@ -509,18 +561,22 @@
           $("s-ref").style.color = d.reference_locked ? "" : "var(--dim)";
         }
       } else {
-        $("s-input").textContent = "—";
+        $("s-input").textContent = data.stale ? "stale" : "—";
+        $("s-input").style.color = data.stale ? "var(--dim)" : "";
         $("s-ref").textContent = "—";
+        $("s-ref").style.color = "";
       }
-    } catch {
-      document.querySelectorAll("button.ch")
-        .forEach(b => b.classList.remove("sig-ok", "sig-lost"));
-      $("s-input").textContent = "n/a";
+    } catch (err) {
+      clearSignalDots();
+      $("s-input").textContent = "status unreachable";
+      $("s-input").style.color = "var(--bad)";
       $("s-ref").textContent = "n/a";
+      $("s-ref").style.color = "var(--dim)";
+      console.warn("nexvue status poll failed:", statusUrl, err);
     }
   }
   setInterval(pollInputStatus, 2000);
-  pollInputStatus();
+  // First poll after channel buttons exist (created synchronously below).
 
   // ---- Quality selector -------------------------------------------------------------
   $("q-auto").addEventListener("click", () => {
@@ -575,13 +631,46 @@
   }
 
   // ---- Channel buttons ------------------------------------------------------------------
-  for (let i = 0; i < 8; i++) {
-    const b = document.createElement("button");
-    b.className = "ch";
-    b.textContent = `ch${i}`;
-    b.addEventListener("click", () => connectChannel(`ch${i}`, b));
-    $("channels").appendChild(b);
+  // Labels use CHANNEL_ALIAS from ops API when available; WHEP path stays chN.
+  // data-device maps DeckLink device-number for status dots (may differ from
+  // channel id). Build buttons synchronously first so status polling has
+  // targets immediately; then refresh labels/devices from ops.
+  function renderChannelButtons(aliases, devices) {
+    const prevActive = currentBase;
+    $("channels").innerHTML = "";
+    for (let i = 0; i < 8; i++) {
+      const path = `ch${i}`;
+      const label = aliases[path] || aliases[String(i)] || path;
+      const device = (devices && Number.isFinite(devices[path]))
+        ? devices[path]
+        : i;
+      const b = document.createElement("button");
+      b.className = "ch";
+      b.dataset.path = path;
+      b.dataset.device = String(device);
+      b.textContent = label;
+      b.title = path === label ? path : `${label} (${path})`;
+      if (prevActive === path) b.classList.add("active");
+      b.addEventListener("click", () => connectChannel(path, b));
+      $("channels").appendChild(b);
+    }
   }
+
+  async function loadChannelButtons() {
+    let aliases = {};
+    let devices = {};
+    try {
+      const res = await fetch("nexvue-ops.php?action=aliases");
+      const data = await res.json();
+      if (data && data.ok && data.aliases) aliases = data.aliases;
+      if (data && data.ok && data.devices) devices = data.devices;
+    } catch { /* ops API optional for bring-up */ }
+    renderChannelButtons(aliases, devices);
+  }
+
+  renderChannelButtons({}, {});
+  pollInputStatus();
+  loadChannelButtons().then(() => pollInputStatus());
   $("disconnect").addEventListener("click", () => { teardown(); setState("idle"); });
 })();
 </script>

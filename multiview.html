@@ -111,6 +111,8 @@
   <a href="/index.html">Player</a>
   <a href="/multiview.html" class="active">Multiview</a>
   <a href="/metrics.html">Metrics</a>
+  <a href="/services.html">Services</a>
+  <a href="/channels.html">Channels</a>
 </nav>
 <h1>NexVUE — Multiviewer</h1>
 
@@ -150,6 +152,37 @@
   let rendition = "lo";  // "hi" | "lo" — LO default for multi-session load
   let audioPane = -1;    // index of unmuted pane, or -1
 
+  // ---- Screen wake lock ---------------------------------------------------------
+  // This page is explicitly for wall monitors / confidence checks — exactly
+  // the case where the display must not sleep during a long unattended run.
+  // Held while at least one pane is connected; released when all panes are
+  // idle. Browsers force-release the lock whenever the tab is hidden, so it
+  // must be re-acquired on visibilitychange too, or one alt-tab permanently
+  // loses the stay-awake behavior.
+  let wakeLock = null;
+
+  async function acquireWakeLock() {
+    if (!("wakeLock" in navigator) || wakeLock) return;
+    try {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    } catch (e) {
+      // Commonly fails if the tab isn't visible/focused yet; the
+      // visibilitychange handler below re-attempts once it is.
+    }
+  }
+  function releaseWakeLockIfIdle() {
+    if (wakeLock && !panes.some(p => p.base)) {
+      wakeLock.release();
+      wakeLock = null;
+    }
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && panes.some(p => p.base)) {
+      acquireWakeLock();
+    }
+  });
+
   document.addEventListener("DOMContentLoaded", () => {
     const h = $("host");
     if (h) h.placeholder = `${PROTO}//${EDGE_HOST}:${PORT.whep}`;
@@ -180,7 +213,6 @@
       <div class="pane-bar">
         <select aria-label="Channel for pane ${index + 1}">
           <option value="">(none)</option>
-          ${[0,1,2,3,4,5,6,7].map(i => `<option value="ch${i}">ch${i}</option>`).join("")}
         </select>
         <span class="pane-status">idle</span>
       </div>
@@ -194,6 +226,14 @@
     const statusEl = el.querySelector(".pane-status");
     const video = el.querySelector("video");
     const empty = el.querySelector(".pane-empty");
+
+    // Options filled after aliases load (fillChannelOptions).
+    for (let i = 0; i < 8; i++) {
+      const opt = document.createElement("option");
+      opt.value = `ch${i}`;
+      opt.textContent = `ch${i}`;
+      select.appendChild(opt);
+    }
 
     const pane = {
       index, el, select, statusEl, video, empty,
@@ -210,10 +250,12 @@
         setPaneStatus(pane, "idle");
         empty.classList.remove("hidden");
         if (audioPane === index) selectAudio(-1);
+        releaseWakeLockIfIdle();
         return;
       }
       pane.base = val;
       empty.classList.add("hidden");
+      acquireWakeLock();
       openPane(pane);
     });
     select.addEventListener("click", e => e.stopPropagation());
@@ -376,6 +418,7 @@
       }
     });
     updateGlobalState();
+    releaseWakeLockIfIdle();
   }
 
   function setRendition(rend) {
@@ -405,6 +448,22 @@
 
   for (let i = 0; i < PANE_COUNT; i++) createPane(i);
   applyLayout("quad");
+
+  // Friendly labels from CHANNEL_ALIAS when ops API is available.
+  (async () => {
+    try {
+      const res = await fetch("nexvue-ops.php?action=aliases");
+      const data = await res.json();
+      if (!data || !data.ok || !data.aliases) return;
+      panes.forEach(p => {
+        [...p.select.options].forEach(opt => {
+          if (!opt.value) return;
+          const label = data.aliases[opt.value] || data.aliases[opt.value.replace(/\D/g, "")];
+          if (label) opt.textContent = label === opt.value ? opt.value : `${label} (${opt.value})`;
+        });
+      });
+    } catch { /* optional */ }
+  })();
 })();
 </script>
 </body>

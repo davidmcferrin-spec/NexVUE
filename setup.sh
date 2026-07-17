@@ -51,7 +51,11 @@ REQUIRED_FILES=(
   nexvue-encode.sh nexvue-encode@.service
   nexvue-status-server.py nexvue-status.service
   nexvue-metrics-server.py nexvue-metrics.service
-  nexvue-metrics.php metrics.html index.html multiview.html
+  nexvue-metrics.php nexvue-status.php metrics.html index.html multiview.html
+  nexvue-ops.php services.html channels.html
+  nexvue-ops-env-update.py nexvue-ops.sudoers
+  nexvue-ops-status.sh nexvue-ops-journal.sh
+  nexvue-ops-env-read.sh nexvue-ops-env-write.sh nexvue-ops-restart.sh
   channels-example.env
 )
 if ! $CHECK_ONLY; then
@@ -117,6 +121,12 @@ fi
 install -m 755 "${REPO_DIR}/nexvue-encode.sh" /usr/local/bin/nexvue-encode.sh
 install -m 755 "${REPO_DIR}/nexvue-status-server.py" /usr/local/bin/nexvue-status-server.py
 install -m 755 "${REPO_DIR}/nexvue-metrics-server.py" /usr/local/bin/nexvue-metrics-server.py
+install -m 755 "${REPO_DIR}/nexvue-ops-env-update.py" /usr/local/bin/nexvue-ops-env-update.py
+install -m 755 "${REPO_DIR}/nexvue-ops-status.sh" /usr/local/bin/nexvue-ops-status.sh
+install -m 755 "${REPO_DIR}/nexvue-ops-journal.sh" /usr/local/bin/nexvue-ops-journal.sh
+install -m 755 "${REPO_DIR}/nexvue-ops-env-read.sh" /usr/local/bin/nexvue-ops-env-read.sh
+install -m 755 "${REPO_DIR}/nexvue-ops-env-write.sh" /usr/local/bin/nexvue-ops-env-write.sh
+install -m 755 "${REPO_DIR}/nexvue-ops-restart.sh" /usr/local/bin/nexvue-ops-restart.sh
 install -m 644 "${REPO_DIR}/mediamtx.service" \
                "${REPO_DIR}/nexvue-encode@.service" \
                "${REPO_DIR}/nexvue-status.service" \
@@ -124,7 +134,23 @@ install -m 644 "${REPO_DIR}/mediamtx.service" \
 systemctl daemon-reload
 ok "scripts + units installed, systemd reloaded"
 
-# Apache docroot: player, multiviewer, metrics dashboard + PHP reader.
+# Ops UI sudoers — validate before installing (a bad drop-in breaks sudo).
+if command -v visudo >/dev/null; then
+  TMP_SUDOERS="$(mktemp)"
+  # visudo -cf needs the final path form; stage then install.
+  install -m 440 "${REPO_DIR}/nexvue-ops.sudoers" "${TMP_SUDOERS}"
+  if visudo -cf "${TMP_SUDOERS}" >/dev/null 2>&1; then
+    install -m 440 "${REPO_DIR}/nexvue-ops.sudoers" /etc/sudoers.d/nexvue-ops
+    ok "sudoers drop-in installed: /etc/sudoers.d/nexvue-ops"
+  else
+    warn "nexvue-ops.sudoers failed visudo -cf — NOT installed; Services/Channels pages will not work until fixed"
+  fi
+  rm -f "${TMP_SUDOERS}"
+else
+  warn "visudo not found — copy nexvue-ops.sudoers to /etc/sudoers.d/nexvue-ops manually (mode 0440)"
+fi
+
+# Apache docroot: player, multiviewer, metrics, ops pages + PHP.
 # Override with NEXVUE_WEBROOT if the site isn't under /var/www/html.
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 if [ -d "${WEBROOT}" ]; then
@@ -132,10 +158,14 @@ if [ -d "${WEBROOT}" ]; then
                  "${REPO_DIR}/multiview.html" \
                  "${REPO_DIR}/metrics.html" \
                  "${REPO_DIR}/nexvue-metrics.php" \
+                 "${REPO_DIR}/nexvue-status.php" \
+                 "${REPO_DIR}/services.html" \
+                 "${REPO_DIR}/channels.html" \
+                 "${REPO_DIR}/nexvue-ops.php" \
                  "${WEBROOT}/"
-  ok "web UI installed to ${WEBROOT} (index / multiview / metrics + nexvue-metrics.php)"
+  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels)"
 else
-  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php ${WEBROOT}/"
+  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php services.html channels.html nexvue-ops.php ${WEBROOT}/"
 fi
 
 step "5/5 decklink-status helper"
@@ -197,11 +227,23 @@ else
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 if [ -d "${WEBROOT}" ]; then
-  for f in index.html multiview.html metrics.html nexvue-metrics.php; do
+  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php services.html channels.html nexvue-ops.php; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
 else
   warn "Apache docroot ${WEBROOT} not present — web UI not deployed yet"
+fi
+
+# Ops wrappers + sudoers
+for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
+         nexvue-ops-env-write.sh nexvue-ops-restart.sh nexvue-ops-env-update.py; do
+  [ -x "/usr/local/bin/$w" ] || [ -f "/usr/local/bin/$w" ] \
+    && ok "ops helper: $w" || warn "ops helper missing: /usr/local/bin/$w"
+done
+if [ -f /etc/sudoers.d/nexvue-ops ]; then
+  ok "sudoers drop-in: /etc/sudoers.d/nexvue-ops"
+else
+  warn "sudoers drop-in missing — Services/Channels need /etc/sudoers.d/nexvue-ops"
 fi
 
 # decklink-status
@@ -261,8 +303,10 @@ Next steps:
   6. Apache + PHP (if not already serving pages):
        sudo apt install -y libapache2-mod-php   # if PHP module not enabled yet
        sudo a2enmod php8.3                      # adjust version; then: sudo systemctl restart apache2
-       # setup.sh copies index.html / multiview.html / metrics.html / nexvue-metrics.php
-       # into /var/www/html when that directory exists (override with NEXVUE_WEBROOT=).
+       # setup.sh copies web UI + nexvue-ops.php into /var/www/html when present
+       # (override with NEXVUE_WEBROOT=) and installs /etc/sudoers.d/nexvue-ops.
   7. Verify:  http://<edge-ip>:8889/ch0
               http://<edge-ip>/index.html  (Player) /multiview.html /metrics.html
+              http://<edge-ip>/services.html  /channels.html
+     Ops pages are LAN-trust — do not DMZ-expose without Phase 2 auth.
 NEXT

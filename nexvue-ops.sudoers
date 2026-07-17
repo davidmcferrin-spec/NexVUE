@@ -1,0 +1,17 @@
+# /etc/sudoers.d/nexvue-ops
+#
+# NexVUE ops UI (nexvue-ops.php) runs as the Apache user and may only invoke
+# these allowlisted wrappers — no shell, no arbitrary systemctl/journalctl.
+# Trailing * permits arguments; each wrapper validates them itself.
+# Install via setup.sh after visudo -cf validates this file.
+#
+# LAN-trust Phase 1: treat Services/Channels pages as ops-sensitive; do not
+# expose them on a DMZ without Phase 2 auth.
+
+Defaults:www-data !requiretty
+
+www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-status.sh *
+www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-journal.sh *
+www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-env-read.sh *
+www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-env-write.sh *
+www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-restart.sh *
