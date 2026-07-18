@@ -189,7 +189,10 @@ specifically because this box can't get additional ports opened.
   tracks).
 - Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +
  allowlisted sudo wrappers. Logo upload/delete is www-data direct write
- (no sudo). Phase 1 LAN-trust — not for DMZ without auth.
+ (no sudo). Settings channel editor (and bulk edit) field labels show a
+ ~2s hover/focus tip (`#field-tip`) with purpose, recommended range, and
+ blank semantics — same delay pattern as Player `#stat-tip`. Phase 1
+ LAN-trust — not for DMZ without auth.
  Services shows systemd enable state (`nexvue-ops-status.sh` prints
  `<is-active> <is-enabled>`) plus Enable/Disable (`set_enabled`, --now) and
  Start/Stop (`set_running`, runtime-only) toggles for `nexvue-encode@0-7`

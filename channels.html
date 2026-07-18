@@ -212,6 +212,11 @@
   }
   .field > span.label-row {
     display: flex; align-items: center; gap: 8px;
+    cursor: help; border-bottom: 1px dotted var(--dim); width: fit-content;
+    max-width: 100%;
+  }
+  .field > span.label-row:focus-visible {
+    outline: 2px solid var(--acc); outline-offset: 2px; border-radius: 2px;
   }
   .field input[type="text"], .field select {
     width: 100%; background: var(--bg);
@@ -225,7 +230,13 @@
     display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted);
   }
   .bulk-field .label-row input[type="checkbox"] { flex-shrink: 0; margin: 0; }
-  .bulk-field .label-row .key { flex: 1; min-width: 0; word-break: break-all; }
+  .bulk-field .label-row .key {
+    flex: 1; min-width: 0; word-break: break-all;
+    cursor: help; border-bottom: 1px dotted var(--dim); width: fit-content;
+  }
+  .bulk-field .label-row .key:focus-visible {
+    outline: 2px solid var(--acc); outline-offset: 2px; border-radius: 2px;
+  }
   .bulk-field input[type="text"], .bulk-field select { width: 100%; }
   .bulk-field:not(.enabled) input[type="text"],
   .bulk-field:not(.enabled) select { opacity: .55; }
@@ -249,6 +260,14 @@
     margin: 12px 0; text-align: left;
   }
   .qr-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  #field-tip {
+    display: none; position: fixed; z-index: 60; max-width: 360px;
+    padding: 8px 10px; background: var(--panel); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 4px;
+    font: 12px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    box-shadow: var(--shadow); pointer-events: none; white-space: pre-wrap;
+  }
+  #field-tip.visible { display: block; }
 </style>
 </head>
 <body>
@@ -264,6 +283,26 @@
 </nav>
 
 <p class="warn">Edits <code>/etc/nexvue/channels/*.env</code>. MediaMTX path stays <code>chN</code>; set <code>CHANNEL_ALIAS</code> for a friendly label. Restart is optional after save. Click a row to edit; select rows for bulk edit.</p>
+
+<div class="panel">
+  <h2>Channel list</h2>
+  <div class="bar">
+    <button type="button" id="reload">Reload</button>
+    <button type="button" id="select-all">Select all</button>
+    <button type="button" id="select-none">Select none</button>
+    <button type="button" class="primary" id="bulk-open" disabled>Bulk edit</button>
+    <span id="state">loading…</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th></th><th>ID</th><th>Path</th><th>Alias</th><th>Bitrate</th>
+        <th>Deint</th><th>Audio</th><th>LO</th><th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
 
 <div class="panel" id="branding-panel">
   <h2>Branding</h2>
@@ -289,26 +328,6 @@
       <div id="logo-msg" aria-live="polite"></div>
     </div>
   </div>
-</div>
-
-<div class="panel">
-  <h2>Channel list</h2>
-  <div class="bar">
-    <button type="button" id="reload">Reload</button>
-    <button type="button" id="select-all">Select all</button>
-    <button type="button" id="select-none">Select none</button>
-    <button type="button" class="primary" id="bulk-open" disabled>Bulk edit</button>
-    <span id="state">loading…</span>
-  </div>
-  <table>
-    <thead>
-      <tr>
-        <th></th><th>ID</th><th>Path</th><th>Alias</th><th>Bitrate</th>
-        <th>Deint</th><th>Audio</th><th>LO</th><th>Status</th>
-      </tr>
-    </thead>
-    <tbody id="tbody"></tbody>
-  </table>
 </div>
 
 <dialog id="edit-dlg" class="modal-sheet" aria-labelledby="edit-heading">
@@ -371,6 +390,8 @@
   </div>
 </div>
 
+<div id="field-tip" role="tooltip" aria-hidden="true"></div>
+
 <script src="nexvue-qr.js"></script>
 <script>
 "use strict";
@@ -392,31 +413,174 @@
   const bulkOpen = document.getElementById("bulk-open");
   const restartDlg = document.getElementById("restart-dlg");
   const restartMsg = document.getElementById("restart-msg");
+  const fieldTip = document.getElementById("field-tip");
 
   let channels = [];
   let editableKeys = [];
   let selectedId = null;
   let pendingRestart = [];
 
+  // Hover/focus explainers for field labels (2s delay; fixed so modal overflow
+  // does not clip). Moved into the open <dialog> so it paints in the top layer.
+  const TIP_DELAY_MS = 2000;
+  let tipTimer = null;
+  let tipAnchor = null;
+
+  function hideFieldTip() {
+    if (tipTimer) { clearTimeout(tipTimer); tipTimer = null; }
+    tipAnchor = null;
+    fieldTip.classList.remove("visible");
+    fieldTip.setAttribute("aria-hidden", "true");
+    fieldTip.textContent = "";
+  }
+
+  function ensureTipHost(el) {
+    const host = el.closest("dialog") || document.body;
+    if (fieldTip.parentElement !== host) host.appendChild(fieldTip);
+  }
+
+  function placeFieldTip(el) {
+    const text = el.getAttribute("data-tip");
+    if (!text) return;
+    ensureTipHost(el);
+    fieldTip.textContent = text;
+    fieldTip.classList.add("visible");
+    fieldTip.setAttribute("aria-hidden", "false");
+    // position:fixed is viewport-relative UNLESS an ancestor has a transform
+    // (or filter/will-change/contain), which makes that ancestor the
+    // containing block — e.g. the dialog's modal-in animation. Measure the
+    // containing block's viewport origin at (0,0) and subtract it, so the
+    // viewport math below is correct in both cases.
+    fieldTip.style.left = "0px";
+    fieldTip.style.top = "0px";
+    const origin = fieldTip.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const pad = 8;
+    const tw = fieldTip.offsetWidth;
+    const th = fieldTip.offsetHeight;
+    let left = r.left + (r.width - tw) / 2;
+    left = Math.max(pad, Math.min(left, window.innerWidth - tw - pad));
+    let top = r.bottom + 6;
+    if (top + th > window.innerHeight - pad) top = r.top - th - 6;
+    if (top < pad) top = pad;
+    fieldTip.style.left = `${Math.round(left - origin.left)}px`;
+    fieldTip.style.top = `${Math.round(top - origin.top)}px`;
+  }
+
+  function scheduleFieldTip(el) {
+    if (tipAnchor === el && fieldTip.classList.contains("visible")) return;
+    hideFieldTip();
+    tipAnchor = el;
+    tipTimer = setTimeout(() => {
+      tipTimer = null;
+      if (tipAnchor === el) placeFieldTip(el);
+    }, TIP_DELAY_MS);
+  }
+
+  function wireFieldTip(el) {
+    if (!el || !el.getAttribute("data-tip")) return;
+    el.addEventListener("mouseenter", () => scheduleFieldTip(el));
+    el.addEventListener("mouseleave", () => { if (tipAnchor === el) hideFieldTip(); });
+    el.addEventListener("focus", () => scheduleFieldTip(el));
+    el.addEventListener("blur", () => { if (tipAnchor === el) hideFieldTip(); });
+  }
+
   const FIELD_META = {
-    CHANNEL_ALIAS: { label: "Alias (display name)", type: "text" },
-    MAX_DEVICES: { label: "MAX_DEVICES", type: "text" },
-    DEINT_FIELDS: { label: "DEINT_FIELDS", type: "select", options: ["all", "top"] },
-    BITRATE_KBPS: { label: "BITRATE_KBPS", type: "text" },
-    GOP_FRAMES: { label: "GOP_FRAMES", type: "text" },
-    ENABLE_AUDIO: { label: "ENABLE_AUDIO", type: "select", options: ["true", "false"] },
-    AUDIO_FRAME_MS: { label: "AUDIO_FRAME_MS", type: "text" },
-    AUDIO_BITRATE_BPS: { label: "AUDIO_BITRATE_BPS", type: "text" },
-    AUDIO_CHANNELS: { label: "AUDIO_CHANNELS", type: "text" },
-    DECKLINK_BUFFER_FRAMES: { label: "DECKLINK_BUFFER_FRAMES", type: "text" },
-    VIDEO_ENCODER: { label: "VIDEO_ENCODER", type: "select", options: ["vah264enc", "x264enc"] },
-    EXTRA_ENC_ARGS: { label: "EXTRA_ENC_ARGS", type: "text" },
-    LO_ENABLE: { label: "LO_ENABLE", type: "select", options: ["true", "false"] },
-    LO_PRESET: { label: "LO_PRESET", type: "select", options: ["720p", "540p", "480p", "360p", "240p", "180p"] },
-    LO_WIDTH: { label: "LO_WIDTH", type: "text" },
-    LO_HEIGHT: { label: "LO_HEIGHT", type: "text" },
-    LO_BITRATE_KBPS: { label: "LO_BITRATE_KBPS", type: "text" },
-    LO_FPS: { label: "LO_FPS", type: "text" },
+    CHANNEL_ALIAS: {
+      label: "Alias (display name)",
+      type: "text",
+      tip: "Friendly label shown in Player, Multiview, and Settings. Does not change the MediaMTX path — WHEP still uses CHANNEL_PATH (ch0, ch1, …). Spaces are fine (quoted on write). Blank = UIs show the path only.",
+    },
+    MAX_DEVICES: {
+      label: "MAX_DEVICES",
+      type: "text",
+      tip: "Installed card channel count used to validate DEVICE_NUMBER. Duo 2 / Duo 2 Mini = 4, Quad 2 = 8, original Duo = 2. Set 4 on a Duo so a typo'd device number fails fast. Range typically 2–8. Blank = 8 (Quad 2 default).",
+    },
+    DEINT_FIELDS: {
+      label: "DEINT_FIELDS",
+      type: "select",
+      options: ["all", "top"],
+      tip: "Output cadence from a 1080i59.94 source. all → 1080p59.94 full motion (program / director / talent return). top → 1080p29.97 at about half encode cost (multiview walls, prompter). Blank = all.",
+    },
+    BITRATE_KBPS: {
+      label: "BITRATE_KBPS",
+      type: "text",
+      tip: "HI-rendition H.264 CBR bitrate in kbps. Typical: 4000–6000 for 1080p59.94; 2500–3000 for 29.97p. Default 5000. Blank = 5000.",
+    },
+    GOP_FRAMES: {
+      label: "GOP_FRAMES",
+      type: "text",
+      tip: "Keyframe interval in frames. Affects viewer join / channel-switch time only — not steady-state latency. 30 = faster switching; 60 is the usual trade-off. Blank = 60.",
+    },
+    ENABLE_AUDIO: {
+      label: "ENABLE_AUDIO",
+      type: "select",
+      options: ["true", "false"],
+      tip: "Include Opus audio in the stream. false removes the browser A/V-sync buffer (~40–60 ms lower latency) — recommended for prompter / multiview channels. Blank = true.",
+    },
+    AUDIO_FRAME_MS: {
+      label: "AUDIO_FRAME_MS",
+      type: "text",
+      tip: "Opus frame size in milliseconds. Must be one of 2, 5, 10, 20, 40, 60. 10 is the low-latency default. Blank = 10.",
+    },
+    AUDIO_BITRATE_BPS: {
+      label: "AUDIO_BITRATE_BPS",
+      type: "text",
+      tip: "Opus bitrate in bits per second. Default 128000 (128 kbps). Common range 64000–256000. Blank = 128000.",
+    },
+    AUDIO_CHANNELS: {
+      label: "AUDIO_CHANNELS",
+      type: "text",
+      tip: "SDI embedded audio channels to capture. Must be 2, 8, or 16. Default 2 (one stereo pair). Blank = 2.",
+    },
+    DECKLINK_BUFFER_FRAMES: {
+      label: "DECKLINK_BUFFER_FRAMES",
+      type: "text",
+      tip: "DeckLink driver frame queue depth. Keep small for latency (2 is recommended). Raising it can help under load but adds delay. Blank = 2.",
+    },
+    VIDEO_ENCODER: {
+      label: "VIDEO_ENCODER",
+      type: "select",
+      options: ["vah264enc", "x264enc"],
+      tip: "Video encoder. vah264enc = Intel Quick Sync / VA-API (production). x264enc = CPU fallback for bring-up / debug only — much higher CPU. Blank = vah264enc.",
+    },
+    EXTRA_ENC_ARGS: {
+      label: "EXTRA_ENC_ARGS",
+      type: "text",
+      tip: "Extra GStreamer encoder properties appended to the encode element (e.g. cpb-size=…). Leave blank unless you know you need a specific property — almost everyone should leave this empty.",
+    },
+    LO_ENABLE: {
+      label: "LO_ENABLE",
+      type: "select",
+      options: ["true", "false"],
+      tip: "Publish a second lower-bitrate encode as <path>lo (e.g. ch0lo) for player auto-switch under packet loss. Same pipeline tee — never a second process on the DeckLink. Enable for external / cellular viewers. Blank = false.",
+    },
+    LO_PRESET: {
+      label: "LO_PRESET",
+      type: "select",
+      options: ["720p", "540p", "480p", "360p", "240p", "180p"],
+      tip: "LO resolution ladder (height): 720p / 540p / 480p / 360p / 240p / 180p with default bitrates 1200 / 800 / 700 / 500 / 300 / 200 kbps. The \"p\" number is height (480p = 854×480). Blank = 720p when LO is enabled.",
+    },
+    LO_WIDTH: {
+      label: "LO_WIDTH",
+      type: "text",
+      tip: "Explicit LO width in pixels; overrides LO_PRESET. Must be an even number. Blank = use the preset width (recommended unless you need a custom raster).",
+    },
+    LO_HEIGHT: {
+      label: "LO_HEIGHT",
+      type: "text",
+      tip: "Explicit LO height in pixels; overrides LO_PRESET. Must be an even number. Blank = use the preset height (recommended unless you need a custom raster).",
+    },
+    LO_BITRATE_KBPS: {
+      label: "LO_BITRATE_KBPS",
+      type: "text",
+      tip: "Explicit LO CBR bitrate in kbps; overrides the preset default. Blank = use the preset bitrate for LO_PRESET (recommended).",
+    },
+    LO_FPS: {
+      label: "LO_FPS",
+      type: "text",
+      tip: "LO framerate as a GStreamer fraction (e.g. 30000/1001 ≈ 29.97p, cellular-friendly). Blank = 30000/1001.",
+    },
   };
 
   const FIELD_GROUPS = [
@@ -612,6 +776,11 @@
         const title = document.createElement("span");
         title.className = "label-row";
         title.textContent = meta.label || key;
+        if (meta.tip) {
+          title.setAttribute("data-tip", meta.tip);
+          title.setAttribute("tabindex", "0");
+          wireFieldTip(title);
+        }
         field.appendChild(title);
         field.appendChild(makeControl(key, keys[key] || "", { blankUnset: true }));
         grid.appendChild(field);
@@ -645,6 +814,11 @@
         const lab = document.createElement("span");
         lab.className = "key";
         lab.textContent = meta.label || key;
+        if (meta.tip) {
+          lab.setAttribute("data-tip", meta.tip);
+          lab.setAttribute("tabindex", "0");
+          wireFieldTip(lab);
+        }
         labelRow.appendChild(cb);
         labelRow.appendChild(lab);
         const control = makeControl(key, "", { blankUnset: false });
@@ -700,6 +874,7 @@
   }
 
   function closeEditor() {
+    hideFieldTip();
     if (editDlg.open) editDlg.close();
     selectedId = null;
     tbody.querySelectorAll("tr.row.selected").forEach(tr => tr.classList.remove("selected"));
@@ -720,6 +895,7 @@
   }
 
   function closeBulk() {
+    hideFieldTip();
     if (bulkDlg.open) bulkDlg.close();
     setMsg(bulkMsg, "");
   }
@@ -730,6 +906,15 @@
     restartMsg.textContent = `Restart ${pendingRestart.join(", ")} now so changes take effect?`;
     if (!restartDlg.open) restartDlg.showModal();
   }
+
+  editBody.addEventListener("scroll", hideFieldTip, { passive: true });
+  bulkBody.addEventListener("scroll", hideFieldTip, { passive: true });
+  editDlg.addEventListener("close", hideFieldTip);
+  bulkDlg.addEventListener("close", hideFieldTip);
+  window.addEventListener("resize", hideFieldTip);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideFieldTip();
+  });
 
   wireBackdropClose(editDlg);
   wireBackdropClose(bulkDlg);

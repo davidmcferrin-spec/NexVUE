@@ -289,10 +289,12 @@ Then from a LAN machine:
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
   shown in the top nav next to **NexVUE** when present) plus channel list;
   click a row (or use Bulk edit) to open a modal editor for
-  `/etc/nexvue/channels/<N>.env`. Optional `CHANNEL_ALIAS` for friendly
-  labels; path stays `chN`. Save asks before restarting encoders. Every page
-  has a **Light/Dark** toggle (`localStorage.nexvue-theme`, default dark);
-  shared helpers live in `nexvue-ui.js`.
+  `/etc/nexvue/channels/<N>.env`. Hover a field label ~2s for an explainer
+  (what it does, recommended / valid range, and what blank means — same
+  pattern as Player session metric tiles). Optional `CHANNEL_ALIAS` for
+  friendly labels; path stays `chN`. Save asks before restarting encoders.
+  Every page has a **Light/Dark** toggle (`localStorage.nexvue-theme`,
+  default dark); shared helpers live in `nexvue-ui.js`.
 
 ### Closed captions (selectable overlay)
 
