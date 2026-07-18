@@ -185,11 +185,14 @@ specifically because this box can't get additional ports opened.
 - Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +
  allowlisted sudo wrappers. Phase 1 LAN-trust — not for DMZ without auth.
  Services shows systemd enable state (`nexvue-ops-status.sh` prints
- `<is-active> <is-enabled>`) and an Enable/Disable toggle for
- `nexvue-encode@0-7` ONLY (`nexvue-ops-enable.sh` + `set_enabled` action) —
- never the shared units. Disable = `disable --now` + `reset-failed` so a
- parked encoder doesn't show stale red "failed"; disabled+inactive renders
- neutral, not red, on Services and Settings.
+ `<is-active> <is-enabled>`) plus Enable/Disable (`set_enabled`, --now) and
+ Start/Stop (`set_running`, runtime-only) toggles for `nexvue-encode@0-7`
+ ONLY (`nexvue-ops-enable.sh` verbs enable|disable|start|stop) — never the
+ shared units. Disable and Stop both run `reset-failed` so a parked encoder
+ doesn't show stale red "failed"; any disabled + not-running unit (even
+ with a stale `failed` from an SSH-side disable) renders neutral
+ "disabled", not red, on Services and Settings — `failed` is red only when
+ enabled.
 - Channel `.env` files are SOURCED by bash (`nexvue-encode@.service`
  ExecStart), so values with spaces MUST be double-quoted —
  `CHANNEL_ALIAS=TVU 35` unquoted runs `35` as a command and truncates the

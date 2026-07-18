@@ -451,9 +451,13 @@
     tbody.innerHTML = channels.map(c => {
       const alias = c.CHANNEL_ALIAS || "—";
       const lo = c.LO_ENABLE === "true" ? (c.LO_PRESET || "on") : "off";
-      // Disabled (parked) encoders show a neutral dot, not failure red.
-      const dot = c.active ? "ok" : (c.enabled === "disabled" ? "" : "bad");
-      const stateTxt = (c.state || "—") + (c.enabled === "disabled" ? " · disabled" : "");
+      // Disabled + not running = parked: neutral dot and "disabled" label,
+      // even if the last run left a stale `failed` behind — no live fault.
+      const parked = c.enabled === "disabled" && !c.active;
+      const dot = c.active ? "ok" : (parked ? "" : "bad");
+      const stateTxt = parked
+        ? "disabled"
+        : (c.state || "—") + (c.enabled === "disabled" ? " · disabled" : "");
       const esc = s => String(s)
         .replace(/&/g, "&amp;").replace(/</g, "&lt;")
         .replace(/>/g, "&gt;").replace(/"/g, "&quot;");

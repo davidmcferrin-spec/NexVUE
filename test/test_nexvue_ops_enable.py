@@ -134,10 +134,24 @@ class TestEnableWrapper(unittest.TestCase):
             ["disable --now nexvue-encode@4", "reset-failed nexvue-encode@4"],
         )
 
+    def test_start_runs_start_only(self) -> None:
+        r = self._run("start", "nexvue-encode@2")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self._log_lines(), ["start nexvue-encode@2"])
+
+    def test_stop_runs_stop_and_reset_failed(self) -> None:
+        r = self._run("stop", "nexvue-encode@5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(
+            self._log_lines(),
+            ["stop nexvue-encode@5", "reset-failed nexvue-encode@5"],
+        )
+
     def test_rejects_bad_verb(self) -> None:
-        r = self._run("restart", "nexvue-encode@0")
-        self.assertEqual(r.returncode, 2)
-        self.assertIn("disallowed verb", r.stderr)
+        for verb in ("restart", "mask", "kill"):
+            r = self._run(verb, "nexvue-encode@0")
+            self.assertEqual(r.returncode, 2, f"{verb}: {r.stderr}")
+            self.assertIn("disallowed verb", r.stderr)
         self.assertEqual(self._log_lines(), [])
 
     def test_rejects_core_units_and_bad_instances(self) -> None:

@@ -8,11 +8,13 @@
  *
  * Actions (GET or POST JSON body):
  *   services | journal | channels_list | channel_get | channel_put
- *   | channels_bulk | restart | set_enabled | aliases | kick_viewer | kick_check
+ *   | channels_bulk | restart | set_enabled | set_running | aliases
+ *   | kick_viewer | kick_check
  *
- * set_enabled toggles systemd enable/disable (with --now) for encoder units
+ * set_enabled toggles systemd enable/disable (with --now); set_running is
+ * runtime start/stop (boot config untouched). Both apply to encoder units
  * ONLY (nexvue-encode@0-7) via nexvue-ops-enable.sh — the LAN-trust ops page
- * must not be able to disable mediamtx or the shared daemons.
+ * must not be able to disable or stop mediamtx or the shared daemons.
  *
  * kick_viewer POSTs to MediaMTX /v3/webrtcsessions/kick/{id} on loopback
  * (no sudo), then records the session in a short-lived kick registry so
@@ -636,6 +638,26 @@ if ($action === 'set_enabled') {
         fail(500, trim($r['stderr']) ?: "{$verb} failed");
     }
     echo json_encode(['ok' => true, 'unit' => $unit, 'enabled' => $enable]);
+    exit;
+}
+
+// ---- set_running (encoder units only, runtime start/stop) -----------------------
+
+if ($action === 'set_running') {
+    $unit = $body['unit'] ?? ($_GET['unit'] ?? '');
+    $run = $body['run'] ?? null;
+    if (!is_string($unit) || !unit_enable_allowed($unit)) {
+        fail(400, 'unit must be nexvue-encode@0-7');
+    }
+    if (!is_bool($run)) {
+        fail(400, 'run must be true or false');
+    }
+    $verb = $run ? 'start' : 'stop';
+    $r = sudo_run(['/usr/local/bin/nexvue-ops-enable.sh', $verb, $unit]);
+    if ($r['code'] !== 0) {
+        fail(500, trim($r['stderr']) ?: "{$verb} failed");
+    }
+    echo json_encode(['ok' => true, 'unit' => $unit, 'running' => $run]);
     exit;
 }
 

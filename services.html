@@ -127,6 +127,7 @@
       <button type="button" id="follow" class="active" title="Poll for new lines">Follow</button>
       <button type="button" id="clear-log">Clear view</button>
       <button type="button" id="restart-unit" disabled>Restart unit…</button>
+      <button type="button" id="power-unit" disabled>Start/Stop…</button>
       <button type="button" id="toggle-unit" disabled>Enable/Disable…</button>
       <span id="status">select a unit</span>
     </div>
@@ -155,6 +156,7 @@
   const statusEl = document.getElementById("status");
   const followBtn = document.getElementById("follow");
   const restartBtn = document.getElementById("restart-unit");
+  const powerBtn = document.getElementById("power-unit");
   const toggleBtn = document.getElementById("toggle-unit");
 
   let selected = null;
@@ -174,31 +176,46 @@
     return data;
   }
 
+  // Disabled and not running = deliberately parked, however the last run
+  // ended — a leftover `failed` on a disabled unit is stale (it cannot
+  // restart-loop) and must not read as a live fault.
+  function isParked(state, enabled) {
+    return enabled === "disabled" && (state === "inactive" || state === "failed");
+  }
+
   function stateClass(state, enabled) {
+    if (isParked(state, enabled)) return "off";
     if (state === "active") return "ok";
-    if (state === "failed") return "bad";
-    // A deliberately disabled unit sitting inactive is parked, not broken.
-    if (state === "inactive") return enabled === "disabled" ? "off" : "bad";
+    if (state === "failed" || state === "inactive") return "bad";
     return "";
   }
 
   function stateText(s) {
+    if (isParked(s.state, s.enabled)) return "disabled";
     const en = s.enabled && s.enabled !== "unknown" ? ` · ${s.enabled}` : "";
     return `${s.state}${en}`;
   }
 
-  function updateToggleBtn() {
+  function updateUnitButtons() {
     const svc = lastServices.find(x => x.unit === selected);
     if (!svc || !svc.can_toggle) {
       toggleBtn.disabled = true;
       toggleBtn.textContent = "Enable/Disable…";
       delete toggleBtn.dataset.enable;
+      powerBtn.disabled = true;
+      powerBtn.textContent = "Start/Stop…";
+      delete powerBtn.dataset.run;
       return;
     }
     const isEnabled = svc.enabled === "enabled";
     toggleBtn.disabled = false;
     toggleBtn.textContent = isEnabled ? "Disable unit…" : "Enable unit…";
     toggleBtn.dataset.enable = isEnabled ? "false" : "true";
+    // Anything not active (inactive/failed/deactivating) offers Start.
+    const isRunning = svc.state === "active" || svc.state === "activating";
+    powerBtn.disabled = false;
+    powerBtn.textContent = isRunning ? "Stop unit…" : "Start unit…";
+    powerBtn.dataset.run = isRunning ? "false" : "true";
   }
 
   async function refreshServices() {
@@ -219,7 +236,7 @@
         const still = data.services.find(x => x.unit === keep);
         restartBtn.disabled = !still;
       }
-      updateToggleBtn();
+      updateUnitButtons();
     } catch (err) {
       statusEl.textContent = `status error: ${err.message}`;
     }
@@ -234,7 +251,7 @@
       el.classList.toggle("selected", el.querySelector(".name").textContent === unit);
     });
     restartBtn.disabled = false;
-    updateToggleBtn();
+    updateUnitButtons();
     statusEl.textContent = unit;
     pollJournal(true);
   }
@@ -305,6 +322,21 @@
     try {
       await api("restart", { units: [selected] });
       statusEl.textContent = `restarted ${selected}`;
+      refreshServices();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+  powerBtn.addEventListener("click", async () => {
+    if (!selected || !("run" in powerBtn.dataset)) return;
+    const run = powerBtn.dataset.run === "true";
+    const detail = run
+      ? "starts it now (boot behavior unchanged)"
+      : "stops it now (clears any failed state; still starts on next boot if enabled)";
+    if (!confirm(`${run ? "Start" : "Stop"} ${selected}? This ${detail}.`)) return;
+    try {
+      await api("set_running", { unit: selected, run });
+      statusEl.textContent = `${run ? "started" : "stopped"} ${selected}`;
       refreshServices();
     } catch (err) {
       alert(err.message);

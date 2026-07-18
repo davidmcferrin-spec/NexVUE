@@ -867,15 +867,20 @@ Services/Settings).
   `/etc/sudoers.d/nexvue-ops`). Saves write env files only; restart is an
   explicit confirm. Phase 1 LAN-trust — do not DMZ-expose without auth.
   The Services page also shows each unit's systemd enable state
-  (`nexvue-ops-status.sh` prints `<is-active> <is-enabled>`) and offers an
-  Enable/Disable toggle for **encoder units only** (`nexvue-encode@0-7`, via
-  `nexvue-ops-enable.sh` + `set_enabled`) — parking an unpatched Quad port
-  from the UI instead of SSH. Core units (mediamtx, nexvue-status,
-  nexvue-metrics) can be restarted but never disabled from the page. Disable
-  runs `systemctl disable --now` **plus `reset-failed`**, so a previously
-  restart-looping encoder stops showing a stale red `failed` after being
-  parked; disabled+inactive encoders render as neutral "parked", not
-  failure-red, on both Services and Settings.
+  (`nexvue-ops-status.sh` prints `<is-active> <is-enabled>`) and offers two
+  toggles for **encoder units only** (`nexvue-encode@0-7`, via
+  `nexvue-ops-enable.sh`): Enable/Disable (`set_enabled`, boot config +
+  immediate `--now` effect — parking an unpatched Quad port from the UI
+  instead of SSH) and Start/Stop (`set_running`, runtime only — boot config
+  untouched). Core units (mediamtx, nexvue-status, nexvue-metrics) can be
+  restarted but never disabled or stopped from the page. Disable and Stop
+  both run `reset-failed` after acting, so a previously restart-looping
+  encoder stops showing a stale red `failed` after being parked. Any
+  encoder that is disabled and not running — including one still carrying a
+  stale `failed` from before it was parked (e.g. disabled over SSH without
+  `reset-failed`) — renders as neutral "disabled", never failure-red, on
+  both Services and Settings; `failed` stays red only while the unit is
+  enabled, where it is a live fault.
 - **Multiviewer defaults to LO** with a global HI/LO toggle (quad = up to four
   simultaneous WHEP sessions). Only one pane is unmuted at a time — click a
   pane to select audio. Switching Dual↔Quad tears down hidden panes so unused
