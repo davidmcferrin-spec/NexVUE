@@ -25,6 +25,14 @@ function captions_state_dir(): string {
     return '/run/nexvue/captions';
 }
 
+function captions_stale_after_s(): float {
+    $env = getenv('NEXVUE_CAPTIONS_STALE_S');
+    if (is_string($env) && $env !== '' && is_numeric($env)) {
+        return (float)$env;
+    }
+    return 60.0;
+}
+
 function captions_normalize_channel(?string $channel): ?string {
     if ($channel === null || $channel === '') {
         return null;
@@ -72,6 +80,17 @@ function captions_read_state(string $channel): array {
         $text = substr($text, 0, 2000);
     }
     $text = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $text) ?? '';
+    // Dead-writer guard: the decoder idle-erases after ~16s of caption
+    // silence, so a non-empty state file that hasn't been touched in far
+    // longer means the decoder/encoder died mid-caption. Serve it cleared
+    // rather than freezing the last words on every viewer's screen.
+    if ($text !== '') {
+        clearstatcache(true, $path);
+        $mtime = @filemtime($path);
+        if ($mtime !== false && (time() - $mtime) > captions_stale_after_s()) {
+            $text = '';
+        }
+    }
     return [
         'channel' => $channel,
         'text' => $text,
@@ -113,6 +132,13 @@ header('Content-Type: text/event-stream; charset=utf-8');
 header('Cache-Control: no-store');
 header('Connection: keep-alive');
 header('X-Accel-Buffering: no');
+// mod_deflate buffers compressed responses until it has a full block —
+// which turns a live event stream into delayed batches. Force it off for
+// this response, along with PHP's own zlib/output buffering.
+if (function_exists('apache_setenv')) {
+    @apache_setenv('no-gzip', '1');
+}
+@ini_set('zlib.output_compression', '0');
 while (ob_get_level() > 0) {
     ob_end_flush();
 }
@@ -122,8 +148,10 @@ set_time_limit(0);
 $lastSeq = -1;
 $lastText = null;
 $ticks = 0;
-$maxTicks = 6000; // ~10 min at 100ms — client reconnects
+$maxTicks = 12000; // ~10 min at 50ms — client reconnects
 
+// Fast reconnect after the 10-min cap or a network blip (browser default ~3s).
+echo "retry: 1000\n";
 echo ": nexvue-captions\n\n";
 flush();
 
@@ -136,11 +164,11 @@ while (!connection_aborted() && $ticks < $maxTicks) {
         flush();
         $lastSeq = $seq;
         $lastText = $text;
-    } elseif ($ticks > 0 && ($ticks % 50) === 0) {
+    } elseif ($ticks > 0 && ($ticks % 100) === 0) {
         // Heartbeat every ~5s so proxies do not idle-close the stream.
         echo ": ping\n\n";
         flush();
     }
     $ticks++;
-    usleep(100000);
+    usleep(50000);
 }

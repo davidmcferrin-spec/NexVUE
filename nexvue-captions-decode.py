@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import select
 import sys
 import time
 from pathlib import Path
@@ -62,6 +63,10 @@ class Cea608Cc1:
 
     ROWS = 15
     COLS = 32
+    # Overlay contract: at most 2 lines, newest at the bottom (standard 608
+    # roll-up presentation). Keeps the on-screen box a constant size and
+    # drops any stale rows a broadcaster leaves outside the active window.
+    MAX_LINES = 2
 
     def __init__(self) -> None:
         self._displayed = [["" for _ in range(self.COLS)] for _ in range(self.ROWS)]
@@ -74,12 +79,20 @@ class Cea608Cc1:
         self._text = ""
 
     def visible_text(self) -> str:
+        # Roll-up: only the active window (base row and the rows above it)
+        # is legitimate display; anything else in the grid is stale.
+        if self._mode == "rollup":
+            base = max(0, self._row - self._rollup_rows + 1)
+            row_range = range(base, min(self._row, self.ROWS - 1) + 1)
+        else:
+            row_range = range(self.ROWS)
         lines = []
-        for r in range(self.ROWS):
+        for r in row_range:
             line = "".join(self._displayed[r]).rstrip()
             if line:
                 lines.append(line)
-        return "\n".join(lines)
+        # Newest text is always the bottom row, so keep the LAST lines.
+        return "\n".join(lines[-self.MAX_LINES:])
 
     def feed_pair(self, b1: int, b2: int) -> str | None:
         """Process one CC pair. Returns new visible text if it changed, else None."""
@@ -140,13 +153,20 @@ class Cea608Cc1:
             # CC2 PACs use the high channel nibble (0x18-0x1F family).
             if b1 >= 0x18:
                 return False
+            changed = False
+            if self._mode == "rollup" and row != self._row:
+                # CEA-608 §8.4: a roll-up PAC naming a new base row moves the
+                # whole display window there immediately. Rebuilding the grid
+                # from the old window also erases any stale rows left outside
+                # it (the "stuck line" a placement change would leave behind).
+                changed = self._rollup_move_base(row)
             self._row = row
             self._col = 0
             # Indent PACs: 0x40|0x50|… carry column steps of 4.
             indent_n = (b2 >> 1) & 0x07
             if (b2 & 0x10) == 0x10 and (b2 & 0x0E) != 0:
                 self._col = min(indent_n * 4, self.COLS - 1)
-            return False
+            return changed
 
         # Mid-row codes (CC1): styling only for v1.
         if b1 == 0x11 and 0x20 <= b2 <= 0x2F:
@@ -183,18 +203,20 @@ class Cea608Cc1:
                     self._displayed[self._row][c] = ""
                 return True
             return False
-        if code == 0x25:  # RU2
+        if code in (0x25, 0x26, 0x27):  # RU2 / RU3 / RU4
+            changed = False
+            if self._mode != "rollup":
+                # Entering roll-up from pop-on/paint-on erases both memories
+                # (CEA-608 §8.4) — prevents old positioned text lingering as
+                # a frozen line under the new roll-up window.
+                changed = self._text != ""
+                self._clear(self._displayed)
+                self._clear(self._written)
+                self._row = self.ROWS - 1
+                self._col = 0
             self._mode = "rollup"
-            self._rollup_rows = 2
-            return False
-        if code == 0x26:  # RU3
-            self._mode = "rollup"
-            self._rollup_rows = 3
-            return False
-        if code == 0x27:  # RU4
-            self._mode = "rollup"
-            self._rollup_rows = 4
-            return False
+            self._rollup_rows = code - 0x25 + 2
+            return changed
         if code == 0x29:  # RDC — paint-on
             self._mode = "paint"
             return False
@@ -223,6 +245,20 @@ class Cea608Cc1:
             return True
         return False
 
+    def _rollup_move_base(self, new_row: int) -> bool:
+        """Relocate the roll-up window so it ends at new_row; erase the rest."""
+        old_row = self._row
+        shift = new_row - old_row
+        old_base = max(0, old_row - self._rollup_rows + 1)
+        moved = [["" for _ in range(self.COLS)] for _ in range(self.ROWS)]
+        for r in range(old_base, old_row + 1):
+            nr = r + shift
+            if 0 <= nr < self.ROWS:
+                moved[nr] = self._displayed[r][:]
+        changed = moved != self._displayed
+        self._displayed = moved
+        return changed
+
     def _rollup_cr(self) -> bool:
         # Scroll up within the rollup window ending at current row.
         base = max(0, self._row - self._rollup_rows + 1)
@@ -237,6 +273,16 @@ class Cea608Cc1:
         for r in range(len(buf)):
             for c in range(len(buf[r])):
                 buf[r][c] = ""
+
+    def idle_clear(self) -> str | None:
+        """Erase the display after prolonged caption silence (CEA-608
+        receiver convention, ~16s). Returns "" if text was visible (so the
+        caller writes a clear cue), None if nothing changed."""
+        self._clear(self._displayed)
+        if self._text == "":
+            return None
+        self._text = ""
+        return ""
 
     @staticmethod
     def _pac_row(b1: int, b2: int) -> int | None:
@@ -274,36 +320,74 @@ def atomic_write_json(path: Path, obj: dict) -> None:
     os.replace(str(tmp), str(path))
 
 
-def decode_stream(fifo: Path, state_path: Path, channel: str) -> None:
+def decode_stream(
+    fifo: Path, state_path: Path, channel: str, idle_erase_s: float = 16.0
+) -> None:
     dec = Cea608Cc1()
     seq = 0
+
+    def write_state(text: str) -> None:
+        nonlocal seq
+        seq += 1
+        atomic_write_json(
+            state_path,
+            {
+                "channel": channel,
+                "text": text,
+                "clear": text == "",
+                "ts": time.time(),
+                "seq": seq,
+                "service": "CC1",
+            },
+        )
+
     # Open blocks until the encode pipeline opens the write end.
     with open(fifo, "rb", buffering=0) as fh:
+        fd = fh.fileno()
         buf = b""
+        # "Activity" = a non-null CC1 pair. Stations pad cc_data with null
+        # pairs at frame rate, so raw bytes keep flowing even when nothing
+        # is being captioned — the idle-erase timer must key off real data.
+        last_activity = time.monotonic()
         while True:
-            chunk = fh.read(256)
-            if not chunk:
-                # Writer closed (encoder restart) — exit; systemd/encode respawns us.
-                break
-            buf += chunk
-            while len(buf) >= 2:
-                b1, b2 = buf[0], buf[1]
-                buf = buf[2:]
-                text = dec.feed_pair(b1, b2)
-                if text is None:
-                    continue
-                seq += 1
-                atomic_write_json(
-                    state_path,
-                    {
-                        "channel": channel,
-                        "text": text,
-                        "clear": text == "",
-                        "ts": time.time(),
-                        "seq": seq,
-                        "service": "CC1",
-                    },
-                )
+            ready, _, _ = select.select([fd], [], [], 1.0)
+            now = time.monotonic()
+            if ready:
+                chunk = fh.read(256)
+                if not chunk:
+                    # Writer closed (encoder restart) — exit; encode respawns us.
+                    break
+                buf += chunk
+                while len(buf) >= 2:
+                    b1, b2 = buf[0], buf[1]
+                    buf = buf[2:]
+                    if (b1 & 0x7F) or (b2 & 0x7F):
+                        last_activity = now
+                    # A malformed pair must never kill this process: the FIFO
+                    # would lose its reader, filesink would EPIPE, and the
+                    # WHOLE encode pipeline (video included) would restart.
+                    try:
+                        text = dec.feed_pair(b1, b2)
+                    except Exception as e:  # noqa: BLE001
+                        print(
+                            f"[nexvue-captions-decode] decode error "
+                            f"(pair {b1:#04x},{b2:#04x}): {e}",
+                            file=sys.stderr,
+                        )
+                        continue
+                    if text is not None:
+                        write_state(text)
+            if idle_erase_s > 0 and (now - last_activity) >= idle_erase_s:
+                text = dec.idle_clear()
+                if text is not None:
+                    write_state(text)
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -314,6 +398,13 @@ def main(argv: list[str] | None = None) -> int:
         "--state-dir",
         default="/run/nexvue/captions",
         help="Directory for <channel>.json state files",
+    )
+    p.add_argument(
+        "--idle-erase-s",
+        type=float,
+        default=_env_float("NEXVUE_CAPTIONS_IDLE_ERASE_S", 16.0),
+        help="Erase displayed captions after this many seconds without "
+        "caption data (CEA-608 receiver convention; 0 disables)",
     )
     args = p.parse_args(argv)
 
@@ -340,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        decode_stream(fifo, state_path, channel)
+        decode_stream(fifo, state_path, channel, idle_erase_s=args.idle_erase_s)
     except KeyboardInterrupt:
         return 0
     except OSError as e:

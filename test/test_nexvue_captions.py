@@ -31,10 +31,26 @@ def _load_decode():
     return mod
 
 
+def _text_pairs(s: str) -> list[tuple[int, int]]:
+    """Pack ASCII text into CEA-608 character pairs (odd length padded with 0)."""
+    codes = [ord(c) for c in s]
+    if len(codes) % 2:
+        codes.append(0x00)
+    return [(codes[i], codes[i + 1]) for i in range(0, len(codes), 2)]
+
+
 class TestCea608Decoder(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.mod = _load_decode()
+
+    def _feed(self, dec, pairs) -> list[str]:
+        texts = []
+        for a, b in pairs:
+            t = dec.feed_pair(a, b)
+            if t is not None:
+                texts.append(t)
+        return texts
 
     def test_rollup_text_and_edm(self) -> None:
         dec = self.mod.Cea608Cc1()
@@ -51,6 +67,67 @@ class TestCea608Decoder(unittest.TestCase):
                 texts.append(t)
         self.assertTrue(any("HI" in t for t in texts), texts)
         self.assertEqual(texts[-1], "")
+
+    def test_rollup_caps_at_two_lines(self) -> None:
+        # RU3 window fills with three lines; overlay contract is last-2 only,
+        # newest at the bottom.
+        dec = self.mod.Cea608Cc1()
+        pairs = [(0x14, 0x26)]          # RU3
+        pairs += _text_pairs("ONE")
+        pairs += [(0x14, 0x2D)]         # CR
+        pairs += _text_pairs("TWO")
+        pairs += [(0x14, 0x2D)]         # CR
+        pairs += _text_pairs("SIX")
+        texts = self._feed(dec, pairs)
+        self.assertEqual(dec.visible_text(), "TWO\nSIX")
+        self.assertTrue(all(t.count("\n") <= 1 for t in texts), texts)
+
+    def test_entering_rollup_erases_popon_leftovers(self) -> None:
+        # Pop-on segment (e.g. an ad) leaves positioned text; switching back
+        # to roll-up must not leave it behind as a frozen line.
+        dec = self.mod.Cea608Cc1()
+        pairs = [(0x14, 0x20)]          # RCL (pop-on)
+        pairs += [(0x14, 0x70)]         # PAC near the bottom
+        pairs += _text_pairs("SPONSOR")
+        pairs += [(0x14, 0x2F)]         # EOC — swap to display
+        texts = self._feed(dec, pairs)
+        self.assertIn("SPONSOR", texts[-1])
+        texts = self._feed(dec, [(0x14, 0x25)])  # RU2
+        self.assertEqual(dec.visible_text(), "")
+        self.assertEqual(texts[-1], "")
+
+    def test_rollup_pac_base_move_relocates_and_erases(self) -> None:
+        # A roll-up PAC naming a new base row moves the whole window there;
+        # the rows left behind are erased (this was the "stuck line" bug).
+        dec = self.mod.Cea608Cc1()      # RU2 default, base row 14
+        pairs = _text_pairs("AA")
+        pairs += [(0x14, 0x2D)]         # CR
+        pairs += _text_pairs("BB")
+        self._feed(dec, pairs)
+        self.assertEqual(dec.visible_text(), "AA\nBB")
+        self._feed(dec, [(0x14, 0x40)])  # PAC → base row 12
+        self.assertEqual(dec.visible_text(), "AA\nBB")
+        disp = dec._displayed
+        self.assertEqual("".join(disp[13]) + "".join(disp[14]), "")
+        self.assertEqual("".join(disp[12]).rstrip(), "BB")
+
+    def test_idle_clear_erases_visible_text_once(self) -> None:
+        # CEA-608 receiver convention: display erased after ~16s of caption
+        # silence. idle_clear reports the transition exactly once.
+        dec = self.mod.Cea608Cc1()
+        self._feed(dec, _text_pairs("HELLO"))
+        self.assertEqual(dec.visible_text(), "HELLO")
+        self.assertEqual(dec.idle_clear(), "")
+        self.assertEqual(dec.visible_text(), "")
+        self.assertIsNone(dec.idle_clear())  # already clear — no re-emit
+
+    def test_feed_pair_survives_arbitrary_bytes(self) -> None:
+        # The decoder must never raise: a crash would drop the FIFO reader
+        # and take the whole encode pipeline down with it.
+        dec = self.mod.Cea608Cc1()
+        for b1 in range(0, 256, 7):
+            for b2 in range(0, 256, 11):
+                dec.feed_pair(b1, b2)
 
     def test_atomic_write_json(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -118,6 +195,25 @@ echo json_encode(captions_read_state('ch1'));
         self.assertEqual(data["seq"], 3)
         self.assertNotIn("\x00", data["text"])
         self.assertIn("OK", data["text"])
+
+    def test_stale_state_served_cleared(self) -> None:
+        # Non-empty state whose file mtime is far older than the decoder's
+        # idle-erase window means a dead writer — must not freeze on screen.
+        path = self.dir / "ch2.json"
+        path.write_text(
+            json.dumps({"channel": "ch2", "text": "FROZEN", "clear": False, "seq": 9, "ts": 1.0}),
+            encoding="utf-8",
+        )
+        old = 1_000_000_000  # year 2001
+        os.utime(path, (old, old))
+        data = self._php("echo json_encode(captions_read_state('ch2'));")
+        self.assertEqual(data["text"], "")
+        self.assertTrue(data["clear"])
+        # Fresh file with the same content is served as-is.
+        os.utime(path)
+        data = self._php("echo json_encode(captions_read_state('ch2'));")
+        self.assertEqual(data["text"], "FROZEN")
+        self.assertFalse(data["clear"])
 
     def test_sse_encode(self) -> None:
         data = self._php("""

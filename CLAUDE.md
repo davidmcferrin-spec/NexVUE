@@ -80,6 +80,18 @@ specifically because this box can't get additional ports opened.
   `nexvue-captions-decode.py` + `nexvue-captions.php` + player **CC** toggle
   (`localStorage.nexvue-captions-on`); Cast payload carries `captions`.
   Probe feeds with `nexvue-captions-probe.sh` before assuming 608-in-708.
+ Caption display contract: decoder emits ≤2 lines, newest at the bottom
+ (608 roll-up presentation); roll-up window tracked per CEA-608 §8.4 —
+ PAC base-row moves relocate the window and erase abandoned rows, and
+ entering roll-up erases pop-on leftovers, so no stale line can stick.
+ Overlay CSS reserves a constant two-line box (no resize jitter) in
+ Player / Multiview / Cast.
+ Caption reliability: decoder is crash-proof per pair (a dead FIFO reader
+ EPIPEs filesink and restarts the WHOLE encode pipeline — never let bad
+ data kill it); ~16s idle erase (`NEXVUE_CAPTIONS_IDLE_ERASE_S`, non-null
+ pairs only) matches CEA-608 receivers and clears stale text; PHP serves
+ stale-mtime non-empty state as cleared (`NEXVUE_CAPTIONS_STALE_S`, 60s);
+ SSE disables mod_deflate per-response, sends `retry: 1000`, polls at 50ms.
  The FIFO `filesink` MUST be `buffer-mode=unbuffered`: the default mode
  accumulates ~64KB before flushing and raw 608 arrives at ~60-120 B/s, so
  buffered output starved `nexvue-captions-decode.py` and the browser CC

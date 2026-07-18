@@ -337,8 +337,32 @@ inside the existing encode pipeline and delivers timed text over Apache:
    buffered sink starves the decoder for 10+ minutes and the overlay never
    shows anything.
 2. `nexvue-captions-decode.py` (CC1) writes `<channel>.json` atomically.
+   It emits at most **2 lines, newest at the bottom** (standard 608 roll-up
+   presentation): the roll-up window is tracked per CEA-608 §8.4 (a PAC
+   naming a new base row moves the window and erases rows left behind;
+   entering roll-up from pop-on/paint-on erases the display), so stale
+   broadcaster rows can never freeze on screen. The overlay CSS reserves a
+   constant two-line box so the caption background doesn't resize per cue.
 3. `nexvue-captions.php` streams cues as Server-Sent Events (same origin; no
    new port). `?once=1` returns a JSON snapshot for debugging.
+
+Reliability/latency behavior:
+
+- The decoder never exits on bad caption data (a dead FIFO reader would
+  EPIPE `filesink` and restart the whole encode pipeline, video included) —
+  malformed pairs are logged and skipped.
+- **Idle erase**: after ~16s without caption data (null-pad pairs don't
+  count), the display is erased — standard CEA-608 receiver behavior, and
+  it clears the last caption when a station stops captioning. Tune with
+  `NEXVUE_CAPTIONS_IDLE_ERASE_S` in the channel `.env` (0 disables).
+- **Dead-writer guard**: `nexvue-captions.php` serves a non-empty state
+  file as cleared once its mtime is older than `NEXVUE_CAPTIONS_STALE_S`
+  (Apache SetEnv, default 60s) — a crashed decoder can't freeze its last
+  words on every viewer's screen.
+- SSE hardening: `mod_deflate` is disabled per-response (compression
+  buffering would batch live events), clients get `retry: 1000` for ~1s
+  reconnects, and the state poll runs at 50ms (worst-case added latency
+  ~50ms; negligible next to live-captioning typing lag).
 4. Player / Multiview / Cast draw a CSS overlay; **CC** persists via
    `localStorage.nexvue-captions-on`. Cast launch payload includes `captions`.
 

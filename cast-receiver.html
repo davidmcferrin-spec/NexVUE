@@ -44,6 +44,9 @@
     color: #fff; text-shadow: 0 1px 2px #000, 0 0 6px #000;
     white-space: pre-line; background: rgba(0,0,0,.55);
     padding: 0.2em 0.55em; border-radius: 2px;
+    /* Constant two-line box (decoder emits ≤2 lines, newest at the bottom). */
+    display: flex; flex-direction: column; justify-content: flex-end;
+    min-height: calc(2 * 1.35em + 0.4em);
   }
   #cc-overlay[hidden] { display: none; }
   #tap {
