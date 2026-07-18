@@ -344,21 +344,29 @@ v1 decodes **CEA-608 / CC1** (including 608 compatibility bytes inside 708
 CDP). Native 708-only services/windows are out of scope until a decoder
 dependency is approved.
 
-### Latency measurement (do this properly once)
+### Latency measurement
 
-Point a channel's SDI source at a burnt-in timecode or a clock, put the WHEP
-player next to the source monitor, photograph both in one frame, subtract.
-Repeat at 59.94p and 29.97p settings, and with `ENABLE_AUDIO` on and off.
-Target: **~200 ms** on LAN with the tuning below; treat >300 ms as a bug.
+**Preferred (glass-to-glass):** point a channel's SDI source at a burnt-in
+timecode or a clock, put the WHEP player next to the source monitor,
+photograph both in one frame, subtract. Repeat at 59.94p and 29.97p, and with
+`ENABLE_AUDIO` on and off. Target: **~200 ms** on LAN with the tuning below;
+treat >300 ms as a bug.
 
-Record results here when measured (LAN, player hints at 0):
+**Current deployment (remote datacenter):** the edge and SDI sources are in a
+rack with no co-located source monitor and no observable clock feed, so the
+photo method is not available. Phase 1 records an **RTT-based working
+estimate** instead — observed player RTT ~80–140 ms plus the tuned pipeline
+budget below puts glass-to-glass near the ~200 ms target. True glass-to-glass
+measurement is deferred until on-site or bench access and does **not** block
+Phase 1 closeout.
 
 | Mode | `DEINT_FIELDS` | `ENABLE_AUDIO` | Measured (ms) | Date | Notes |
 |------|----------------|----------------|---------------|------|-------|
-| 59.94p | all | true | _pending_ | | |
-| 59.94p | all | false | _pending_ | | |
-| 29.97p | top | true | _pending_ | | |
-| 29.97p | top | false | _pending_ | | |
+| (remote) | — | — | ~200 est. | 2026-07 | Player RTT ~80–140 ms; glass-to-glass photo deferred |
+| 59.94p | all | true | _deferred_ | | On-site/bench when available |
+| 59.94p | all | false | _deferred_ | | |
+| 29.97p | top | true | _deferred_ | | |
+| 29.97p | top | false | _deferred_ | | |
 
 ### Latency budget & tuning
 
@@ -411,17 +419,20 @@ on a captioned feed for the soak window.
 
 ### Phase 1 closeout checklist
 
-Do these on the edge before calling Phase 1 done (card config + measurement,
-not more code):
+Do these on the edge before calling Phase 1 done (card config + soak, not
+more code). Current hardware: **DeckLink Quad 2**.
 
-1. **Duo 2 connectors → Input** for every capture BNC — see
-   [DeckLink Duo 2 connector direction](#decklink-duo-2-connector-direction).
-   Confirm with `decklink-status` (lock + mode per intended device).
-2. **Latency table** above filled; all four cells ≤300 ms on LAN (target ~200).
+1. **Quad 2 connectors → Input** for every intended capture BNC
+   (`BlackmagicDesktopVideoSetup`). Confirm with `decklink-status` (lock +
+   mode per device; order is not guaranteed sequential). Set
+   `MAX_DEVICES=8`; enable `nexvue-encode@0..N` for populated inputs.
+2. **Latency:** RTT-based estimate recorded above (~200 ms). Glass-to-glass
+   photo deferred (remote rack) — not a Phase 1 blocker.
 3. **72h soak** with all intended `nexvue-encode@N` up; closeout script green
    (or only expected warnings); restart count ~0 beyond initial enable.
 4. **Deploy current web UI** (`setup.sh` or manual `cp` of player / multiview /
-   metrics / ops pages into the Apache docroot).
+   metrics / ops pages into the Apache docroot). Restart `nexvue-metrics` so
+   Temperature columns migrate; confirm Metrics Temperature chart.
 5. **Captions**: probe at least one live feed with `nexvue-captions-probe.sh`;
    Player/Multiview **CC** toggles overlay.
 
@@ -815,7 +826,7 @@ Services/Settings).
   sourced by bash): an unquoted `CHANNEL_ALIAS=TVU 35` runs `35` as a command
   and silently truncates the alias to `TVU` (journal tell:
   `<N>.env: line NN: 35: command not found`). Write
-  `CHANNEL_ALIAS="TVU 35"`. The Channels page writer
+  `CHANNEL_ALIAS="TVU 35"`. The Settings page writer
   (`nexvue-ops-env-update.py`) quotes such values automatically and reads
   quoted values back correctly.
 - **`index.html` / `multiview.html` auto-discover the edge host** from

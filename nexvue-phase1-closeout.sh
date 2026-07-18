@@ -14,9 +14,9 @@
 #   sudo ./nexvue-phase1-closeout.sh
 #   sudo ./nexvue-phase1-closeout.sh --since 24h   # shorter soak window
 #
-# Manual items this script cannot finish (fill in README results table):
-#   - burnt-in-clock latency photos (59.94p / 29.97p × audio on/off)
-#   - BlackmagicDesktopVideoSetup connector Input flips
+# Manual items this script cannot finish:
+#   - confirm Quad 2 connectors are Input (BlackmagicDesktopVideoSetup)
+#   - glass-to-glass latency photos (deferred on remote datacenter; see README)
 ###############################################################################
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
@@ -81,7 +81,7 @@ if [ -x /usr/local/bin/decklink-status ]; then
       # Hint: unlocked rows with no mode often mean Output direction or unpatched.
       UNLOCKED="$(printf '%s' "$STATUS_JSON" | jq -r '[.devices[]? | select(.input_locked!=true)] | length')"
       if [ "${UNLOCKED:-0}" -gt 0 ]; then
-        warn "unlocked inputs present — confirm Duo 2 connectors are Input (BlackmagicDesktopVideoSetup) and cables patched"
+        warn "unlocked inputs present — confirm Quad 2 connectors are Input (BlackmagicDesktopVideoSetup) and cables patched"
       fi
     else
       fail "decklink-status returned no JSON"
@@ -145,9 +145,10 @@ fi
 # ---- Manual gate reminder ---------------------------------------------------
 echo
 echo "Manual Phase 1 gates (not automatable here):"
-echo "  1. Flip remaining Duo 2 connectors Output → Input (BlackmagicDesktopVideoSetup)"
-echo "  2. Burnt-in-clock latency: fill results table in README.md"
-echo "     (59.94p / 29.97p × ENABLE_AUDIO on/off; target ~200 ms, bug if >300 ms)"
+echo "  1. Quad 2: every intended connector set to Input (BlackmagicDesktopVideoSetup);"
+echo "     MAX_DEVICES=8; map BNCs → device-number via decklink-status"
+echo "  2. Latency: RTT-based ~200 ms estimate is accepted for remote datacenter;"
+echo "     glass-to-glass photo deferred (see README) — not a Phase 1 blocker"
 echo "  3. Confirm soak window with all intended channels hot, then re-run this script"
 
 echo

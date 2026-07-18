@@ -56,14 +56,17 @@ specifically because this box can't get additional ports opened.
 
 ## Phase status
 
-- **Phase 1: hardware-validated on real DeckLink Duo 2 + Core Ultra 5 235,
-  latency measurement still pending.** Confirmed working end-to-end: SDK 16
-  compile, active input detection (decklink-status), Quick Sync H.264 encode
-  on Arrow Lake, full SDI -> encode -> MediaMTX -> WHEP -> browser chain with
-  real video on device-number 2. TLS enabled across WHEP/API/status (three
-  ports) to satisfy an IT-mandated HTTPS-only Apache front end; the metrics
-  component needed no such change since it was redesigned to have no port at
-  all (collector writes SQLite, PHP-in-Apache reads it directly).
+- **Phase 1: hardware-validated on DeckLink Duo 2 (bench) then Quad 2
+  (datacenter) + Core Ultra 5 235.** Glass-to-glass latency photo deferred
+  (remote rack — no source monitor); working estimate from player RTT
+  (~80–140 ms) plus the tuned pipeline budget ≈ ~200 ms target. Confirmed
+  working end-to-end: SDK 16 compile, active input detection
+  (decklink-status), Quick Sync H.264 encode on Arrow Lake, full SDI ->
+  encode -> MediaMTX -> WHEP -> browser chain. TLS enabled across
+  WHEP/API/status (three ports) to satisfy an IT-mandated HTTPS-only Apache
+  front end; the metrics component needed no such change since it was
+  redesigned to have no port at all (collector writes SQLite, PHP-in-Apache
+  reads it directly).
   Usage-metrics dashboard (bandwidth/viewers/streams/input-lock/per-viewer
   IP-channel drill-down with column filters — Status/IP/Channel/Duration/
   Data/Client via plain text, `/regex/`, or `>`/`<` comparisons —
@@ -109,9 +112,11 @@ specifically because this box can't get additional ports opened.
   worked. `NEXVUE_INTEL_GPU_TOP_PERIOD_MS` (default 1000) replaced the old
   `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` knob.
   Remaining before Phase 1 is formally "done" (hardware/operator, not more
-  code): burnt-in-clock latency table in README, flip the two Duo 2
-  connectors still set to Output back to Input (see README "DeckLink Duo 2
-  connector direction"), 72h soak. On the edge: `sudo ./nexvue-phase1-closeout.sh`.
+  code): Quad 2 bring-up (`MAX_DEVICES=8`, intended connectors Input,
+  `nexvue-encode@0..N`), 72h soak with all intended channels hot, deploy
+  current UI + metrics (Temperature chart). On the edge:
+  `sudo ./nexvue-phase1-closeout.sh`. Glass-to-glass latency photos remain
+  deferred until on-site/bench access.
 - **Phase 1.5 (next): Python supervisor** — persistent RTSP session with
   DeckLink/slate input switching ("NO SIGNAL" burn-in) so no-signal-at-boot
   serves a slate instead of a restart loop. Full spec in README
@@ -131,8 +136,10 @@ specifically because this box can't get additional ports opened.
 
 ## Known open items / risks
 
-- Two of four Duo 2 connectors are still configured as Output, not Input —
-  card config task, not code. See README "DeckLink Duo 2 connector direction".
+- Glass-to-glass latency still unmeasured with a burnt-in clock (datacenter
+  deployment — no co-located source monitor). RTT-based estimate recorded in
+  README; re-measure on bench when possible. Duo 2 connector-direction notes
+  in README remain useful reference if a Duo is ever reinstalled.
 - Self-signed TLS cert (Apache's `ssl-cert-snakeoil` or similar) on
   8889/9997 requires a one-time per-browser click-through — fine for
   bench testing, plan a real cert before this reaches other users.
