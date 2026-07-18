@@ -177,13 +177,19 @@ specifically because this box can't get additional ports opened.
   package, file, or unit added to the project.
 - Dark monospace UI aesthetic (see `index.html` palette) — consistent
   across the tool family (player, multiviewer, metrics, services, channels).
-  Top-nav **NexVUE** brand opens a QR of the page URL; player session tiles
-  live in a collapsed bottom drawer.
+  Light theme via `html[data-theme]` + `localStorage.nexvue-theme` (default
+  `dark`); shared `nexvue-ui.js` applies theme before paint and wires the
+  nav Light/Dark toggle. Metrics Chart.js colors follow the active theme.
+  Top-nav **NexVUE** brand opens a QR of the page URL; optional station logo
+  (Settings → Branding) sits to its right when uploaded
+  (`/var/lib/nexvue/branding`, served by `nexvue-logo.php`). Player session
+  tiles live in a collapsed bottom drawer.
   Top nav: Player / Multiview / Metrics / Services / Settings.
   Player/Multiview **CC** uses `nexvue-captions.js` + SSE (not WHEP text
   tracks).
 - Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +
- allowlisted sudo wrappers. Phase 1 LAN-trust — not for DMZ without auth.
+ allowlisted sudo wrappers. Logo upload/delete is www-data direct write
+ (no sudo). Phase 1 LAN-trust — not for DMZ without auth.
  Services shows systemd enable state (`nexvue-ops-status.sh` prints
  `<is-active> <is-enabled>`) plus Enable/Disable (`set_enabled`, --now) and
  Start/Stop (`set_running`, runtime-only) toggles for `nexvue-encode@0-7`

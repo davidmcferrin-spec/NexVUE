@@ -154,8 +154,10 @@ Drop the UI files into Apache's docroot (same place IT already serves on
 
 ```bash
 sudo cp index.html multiview.html metrics.html nexvue-metrics.php \
-        nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js chart.umd.min.js \
+        nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js \
+        nexvue-ui.js nexvue-logo.php chart.umd.min.js \
         services.html channels.html nexvue-ops.php /var/www/html/
+sudo install -d -m 750 -o www-data -g www-data /var/lib/nexvue/branding
 # if PHP isn't wired into Apache yet:
 #   sudo apt install -y libapache2-mod-php && sudo a2enmod php8.3
 sudo systemctl restart apache2
@@ -283,10 +285,14 @@ Then from a LAN machine:
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
   (near `tail -f`). LAN-trust ops.
-- **Settings:** top nav → Settings — channel list; click a row (or use Bulk
-  edit) to open a modal editor for `/etc/nexvue/channels/<N>.env`. Optional
-  `CHANNEL_ALIAS` for friendly labels; path stays `chN`. Save asks before
-  restarting encoders.
+- **Settings:** top nav → Settings — optional station **logo** (Branding
+  panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
+  shown in the top nav next to **NexVUE** when present) plus channel list;
+  click a row (or use Bulk edit) to open a modal editor for
+  `/etc/nexvue/channels/<N>.env`. Optional `CHANNEL_ALIAS` for friendly
+  labels; path stays `chN`. Save asks before restarting encoders. Every page
+  has a **Light/Dark** toggle (`localStorage.nexvue-theme`, default dark);
+  shared helpers live in `nexvue-ui.js`.
 
 ### Closed captions (selectable overlay)
 
@@ -530,10 +536,12 @@ dots stay gray and **SDI input** shows `status unreachable`, check that
    copied to `/etc/systemd/system/` and reloaded.
 5. **Deploy the current web UI to Apache's docroot** (`index.html`,
    `multiview.html`, `metrics.html`, `nexvue-metrics.php`,
-   `nexvue-status.php`, `nexvue-qr.js`, `chart.umd.min.js`, `services.html`,
-   `channels.html`, `nexvue-ops.php`) — player pages auto-detect `https:`/`http:`
-   from `location.protocol`. Input-status dots use `nexvue-status.php`
-   (same-origin). Ops pages need the sudoers drop-in from `setup.sh` as well.
+   `nexvue-status.php`, `nexvue-qr.js`, `nexvue-ui.js`, `nexvue-logo.php`,
+   `chart.umd.min.js`, `services.html`, `channels.html`, `nexvue-ops.php`) —
+   player pages auto-detect `https:`/`http:` from `location.protocol`.
+   Input-status dots use `nexvue-status.php` (same-origin). Ops pages need
+   the sudoers drop-in from `setup.sh` as well; logo upload needs
+   `/var/lib/nexvue/branding` (www-data writable).
 6. **Self-signed cert (e.g. Ubuntu's `ssl-cert-snakeoil`, or any cert issued
    for a hostname while you're testing via bare IP): trust it on each port
    individually**, once per browser — visiting `https://<ip>/` does NOT
@@ -864,8 +872,11 @@ Services/Settings).
   WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Settings page.
 - **Ops pages (Services / Settings)** call `nexvue-ops.php`, which uses
   allowlisted sudo wrappers under `/usr/local/bin/nexvue-ops-*` (sudoers drop-in
-  `/etc/sudoers.d/nexvue-ops`). Saves write env files only; restart is an
-  explicit confirm. Phase 1 LAN-trust — do not DMZ-expose without auth.
+  `/etc/sudoers.d/nexvue-ops`). Channel saves write env files only; restart is an
+  explicit confirm. Logo actions (`logo_get` / `logo_put` / `logo_delete`) write
+  `/var/lib/nexvue/branding/{logo.bin,logo.json}` as www-data (no sudo);
+  `nexvue-logo.php` streams the image for the nav. Phase 1 LAN-trust — do not
+  DMZ-expose without auth.
   The Services page also shows each unit's systemd enable state
   (`nexvue-ops-status.sh` prints `<is-active> <is-enabled>`) and offers two
   toggles for **encoder units only** (`nexvue-encode@0-7`, via

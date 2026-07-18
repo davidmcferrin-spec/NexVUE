@@ -52,7 +52,8 @@ REQUIRED_FILES=(
   nexvue-status-server.py nexvue-status.service
   nexvue-metrics-server.py nexvue-metrics.service
   nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js
-  nexvue-qr.js chart.umd.min.js metrics.html index.html multiview.html
+  nexvue-qr.js nexvue-ui.js nexvue-logo.php chart.umd.min.js
+  metrics.html index.html multiview.html
   nexvue-ops.php services.html channels.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
   nexvue-phase1-closeout.sh
@@ -174,6 +175,14 @@ else
   warn "visudo not found — copy nexvue-ops.sudoers to /etc/sudoers.d/nexvue-ops manually (mode 0440)"
 fi
 
+# Station branding logo storage (www-data writes via nexvue-ops.php logo_*).
+install -d -m 750 -o www-data -g www-data /var/lib/nexvue/branding 2>/dev/null \
+  || install -d -m 750 /var/lib/nexvue/branding
+if id www-data >/dev/null 2>&1; then
+  chown www-data:www-data /var/lib/nexvue/branding 2>/dev/null || true
+  chmod 750 /var/lib/nexvue/branding 2>/dev/null || true
+fi
+
 # Apache docroot: player, multiviewer, metrics, ops pages + PHP.
 # Override with NEXVUE_WEBROOT if the site isn't under /var/www/html.
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
@@ -186,14 +195,16 @@ if [ -d "${WEBROOT}" ]; then
                  "${REPO_DIR}/nexvue-captions.php" \
                  "${REPO_DIR}/nexvue-captions.js" \
                  "${REPO_DIR}/nexvue-qr.js" \
+                 "${REPO_DIR}/nexvue-ui.js" \
+                 "${REPO_DIR}/nexvue-logo.php" \
                  "${REPO_DIR}/chart.umd.min.js" \
                  "${REPO_DIR}/services.html" \
                  "${REPO_DIR}/channels.html" \
                  "${REPO_DIR}/nexvue-ops.php" \
                  "${WEBROOT}/"
-  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / captions)"
+  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / captions / branding)"
 else
-  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
+  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
 fi
 
 step "5/5 decklink-status helper"
@@ -259,9 +270,14 @@ else
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 if [ -d "${WEBROOT}" ]; then
-  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php; do
+  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
+  if [ -d /var/lib/nexvue/branding ]; then
+    ok "branding dir: /var/lib/nexvue/branding"
+  else
+    warn "branding dir missing — Settings logo upload needs /var/lib/nexvue/branding (www-data writable)"
+  fi
 else
   warn "Apache docroot ${WEBROOT} not present — web UI not deployed yet"
 fi

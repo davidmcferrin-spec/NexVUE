@@ -9,7 +9,7 @@
  * Actions (GET or POST JSON body):
  *   services | journal | channels_list | channel_get | channel_put
  *   | channels_bulk | restart | set_enabled | set_running | aliases
- *   | kick_viewer | kick_check
+ *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete
  *
  * set_enabled toggles systemd enable/disable (with --now); set_running is
  * runtime start/stop (boot config untouched). Both apply to encoder units
@@ -32,6 +32,13 @@ const SUDO = '/usr/bin/sudo';
 /** Kick registry TTL — long enough for the 5s player reconnect window + retries. */
 const KICK_REGISTRY_TTL_S = 600;
 const KICK_REASON_MAX_LEN = 200;
+/** Station branding logo — raw bytes + JSON metadata under /var/lib/nexvue/branding. */
+const LOGO_MAX_BYTES = 1048576;
+const LOGO_ALLOWED_MIMES = [
+    'image/png' => true,
+    'image/jpeg' => true,
+    'image/webp' => true,
+];
 
 const EDITABLE_KEYS = [
     'CHANNEL_ALIAS', 'MAX_DEVICES', 'DEINT_FIELDS', 'BITRATE_KBPS', 'GOP_FRAMES',
@@ -295,6 +302,175 @@ function mediamtx_session_remote_ip(string $sessionId): string {
         return '';
     }
     return kick_strip_ip_port($addr);
+}
+
+function logo_branding_dir(): string {
+    $override = getenv('NEXVUE_BRANDING_DIR');
+    if (is_string($override) && $override !== '') {
+        return rtrim($override, '/');
+    }
+    return '/var/lib/nexvue/branding';
+}
+
+function logo_bin_path(): string {
+    return logo_branding_dir() . '/logo.bin';
+}
+
+function logo_meta_path(): string {
+    return logo_branding_dir() . '/logo.json';
+}
+
+/**
+ * @return array{exists: bool, mime?: string, width?: int, height?: int, bytes?: int, mtime?: int, uploaded_at?: int}
+ */
+function logo_get_info(): array {
+    $bin = logo_bin_path();
+    $metaPath = logo_meta_path();
+    if (!is_readable($bin) || !is_file($bin)) {
+        return ['exists' => false];
+    }
+    $bytes = filesize($bin);
+    if ($bytes === false || $bytes < 1) {
+        return ['exists' => false];
+    }
+    $mtime = filemtime($bin);
+    $info = [
+        'exists' => true,
+        'bytes' => (int)$bytes,
+        'mtime' => is_int($mtime) ? $mtime : 0,
+        'mime' => 'application/octet-stream',
+        'width' => 0,
+        'height' => 0,
+        'uploaded_at' => is_int($mtime) ? $mtime : 0,
+    ];
+    if (is_readable($metaPath)) {
+        $raw = @file_get_contents($metaPath);
+        if (is_string($raw) && $raw !== '') {
+            $meta = json_decode($raw, true);
+            if (is_array($meta)) {
+                if (isset($meta['mime']) && is_string($meta['mime'])) {
+                    $info['mime'] = $meta['mime'];
+                }
+                if (isset($meta['width']) && is_numeric($meta['width'])) {
+                    $info['width'] = (int)$meta['width'];
+                }
+                if (isset($meta['height']) && is_numeric($meta['height'])) {
+                    $info['height'] = (int)$meta['height'];
+                }
+                if (isset($meta['bytes']) && is_numeric($meta['bytes'])) {
+                    $info['bytes'] = (int)$meta['bytes'];
+                }
+                if (isset($meta['uploaded_at']) && is_numeric($meta['uploaded_at'])) {
+                    $info['uploaded_at'] = (int)$meta['uploaded_at'];
+                }
+            }
+        }
+    }
+    return $info;
+}
+
+/**
+ * Decode base64 image payload, validate size/MIME, write logo.bin + logo.json atomically.
+ *
+ * @return array{mime: string, width: int, height: int, bytes: int, uploaded_at: int}
+ */
+function logo_put_base64(string $dataB64): array {
+    $dataB64 = trim($dataB64);
+    if ($dataB64 === '') {
+        throw new InvalidArgumentException('data required');
+    }
+    // Strip optional data-URL prefix.
+    if (str_starts_with($dataB64, 'data:')) {
+        $comma = strpos($dataB64, ',');
+        if ($comma === false) {
+            throw new InvalidArgumentException('invalid data URL');
+        }
+        $dataB64 = substr($dataB64, $comma + 1);
+    }
+    $bin = base64_decode($dataB64, true);
+    if ($bin === false || $bin === '') {
+        throw new InvalidArgumentException('data must be base64 image bytes');
+    }
+    $len = strlen($bin);
+    if ($len > LOGO_MAX_BYTES) {
+        throw new InvalidArgumentException('logo exceeds 1 MB limit');
+    }
+    $img = @getimagesizefromstring($bin);
+    if ($img === false || !isset($img['mime']) || !is_string($img['mime'])) {
+        throw new InvalidArgumentException('unrecognized image data');
+    }
+    $mime = strtolower($img['mime']);
+    if (!isset(LOGO_ALLOWED_MIMES[$mime])) {
+        throw new InvalidArgumentException('logo must be PNG, JPEG, or WebP');
+    }
+    $width = (int)($img[0] ?? 0);
+    $height = (int)($img[1] ?? 0);
+    if ($width < 1 || $height < 1) {
+        throw new InvalidArgumentException('invalid image dimensions');
+    }
+
+    $dir = logo_branding_dir();
+    if (!is_dir($dir)) {
+        if (!@mkdir($dir, 0750, true) && !is_dir($dir)) {
+            throw new RuntimeException('cannot create branding directory');
+        }
+    }
+    if (!is_writable($dir)) {
+        throw new RuntimeException('branding directory not writable');
+    }
+
+    $uploadedAt = time();
+    $meta = [
+        'mime' => $mime,
+        'width' => $width,
+        'height' => $height,
+        'bytes' => $len,
+        'uploaded_at' => $uploadedAt,
+    ];
+    $metaJson = json_encode($meta, JSON_UNESCAPED_SLASHES);
+    if ($metaJson === false) {
+        throw new RuntimeException('failed to encode logo metadata');
+    }
+
+    $binPath = logo_bin_path();
+    $metaPath = logo_meta_path();
+    $tmpBin = $binPath . '.tmp.' . getmypid();
+    $tmpMeta = $metaPath . '.tmp.' . getmypid();
+    try {
+        if (@file_put_contents($tmpBin, $bin) !== $len) {
+            throw new RuntimeException('failed to write logo bytes');
+        }
+        if (@file_put_contents($tmpMeta, $metaJson) === false) {
+            throw new RuntimeException('failed to write logo metadata');
+        }
+        if (!@rename($tmpBin, $binPath)) {
+            throw new RuntimeException('failed to install logo bytes');
+        }
+        $tmpBin = '';
+        if (!@rename($tmpMeta, $metaPath)) {
+            throw new RuntimeException('failed to install logo metadata');
+        }
+        $tmpMeta = '';
+    } finally {
+        if ($tmpBin !== '' && is_file($tmpBin)) {
+            @unlink($tmpBin);
+        }
+        if ($tmpMeta !== '' && is_file($tmpMeta)) {
+            @unlink($tmpMeta);
+        }
+    }
+    return $meta;
+}
+
+function logo_delete(): void {
+    $bin = logo_bin_path();
+    $meta = logo_meta_path();
+    if (is_file($bin) && !@unlink($bin)) {
+        throw new RuntimeException('failed to delete logo');
+    }
+    if (is_file($meta) && !@unlink($meta)) {
+        throw new RuntimeException('failed to delete logo metadata');
+    }
 }
 
 // Library mode for unit tests (php -r 'include …' without NEXVUE_OPS_HTTP).
@@ -727,6 +903,40 @@ if ($action === 'kick_check') {
         'kicked' => !empty($result['kicked']),
         'reason' => (string)($result['reason'] ?? ''),
     ]);
+    exit;
+}
+
+// ---- logo_get / logo_put / logo_delete (station branding) ---------------------
+
+if ($action === 'logo_get') {
+    $info = logo_get_info();
+    echo json_encode(array_merge(['ok' => true], $info));
+    exit;
+}
+
+if ($action === 'logo_put') {
+    $data = $body['data'] ?? null;
+    if (!is_string($data)) {
+        fail(400, 'data must be a base64 string');
+    }
+    try {
+        $meta = logo_put_base64($data);
+    } catch (InvalidArgumentException $e) {
+        fail(400, $e->getMessage());
+    } catch (RuntimeException $e) {
+        fail(500, $e->getMessage());
+    }
+    echo json_encode(array_merge(['ok' => true, 'exists' => true], $meta));
+    exit;
+}
+
+if ($action === 'logo_delete') {
+    try {
+        logo_delete();
+    } catch (RuntimeException $e) {
+        fail(500, $e->getMessage());
+    }
+    echo json_encode(['ok' => true, 'exists' => false]);
     exit;
 }
 

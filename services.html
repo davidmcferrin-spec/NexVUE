@@ -8,10 +8,21 @@
   Ops: systemd unit status + poll-based journal viewer (near tail -f).
   Data: nexvue-ops.php via allowlisted sudo wrappers. Phase 1 LAN-trust.
 -->
+<script src="nexvue-ui.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
-    --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
+    --text: #d6dde6; --dim: #98a6b5; --muted: #b0bbc8;
+    --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5; --on-acc: #08131a;
+    --row-selected: #1a2833; --log-bg: #0c0f12;
+    --backdrop: rgba(0, 0, 0, .6);
+  }
+  html[data-theme="light"] {
+    --bg: #f3f5f7; --panel: #ffffff; --edge: #cdd5de;
+    --text: #1c232b; --dim: #5a6675; --muted: #3d4a58;
+    --ok: #1f9d5c; --bad: #c62828; --acc: #0b7ea4; --on-acc: #ffffff;
+    --row-selected: #dceef6; --log-bg: #e8ecf0;
+    --backdrop: rgba(15, 23, 32, .4);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -30,16 +41,27 @@
     font-size: 15px; padding: 6px 12px 6px 0; margin-right: 4px; cursor: pointer;
   }
   .topnav .brand:hover { text-decoration: underline; }
+  .topnav .nav-logo {
+    display: block; height: 28px; width: auto; max-width: 140px;
+    object-fit: contain; margin-right: 8px;
+  }
+  .topnav .nav-logo[hidden] { display: none; }
   .topnav a {
-    color: var(--dim); text-decoration: none; padding: 6px 12px;
+    color: var(--muted); text-decoration: none; padding: 6px 12px;
     border-radius: 4px; border: 1px solid transparent;
   }
   .topnav a:hover { color: var(--text); border-color: var(--edge); }
   .topnav a.active {
-    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+    background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600;
   }
+  .topnav .theme-toggle {
+    margin-left: auto; background: var(--bg); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 4px; padding: 6px 10px;
+    font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .topnav .theme-toggle:hover { border-color: var(--acc); color: var(--acc); }
   .warn {
-    color: var(--dim); font-size: 12px; margin: -4px 0 12px; flex-shrink: 0;
+    color: var(--muted); font-size: 12px; margin: -4px 0 12px; flex-shrink: 0;
   }
   .layout {
     flex: 1; min-height: 0; display: grid; gap: 12px;
@@ -52,7 +74,7 @@
   }
   .panel h2 {
     font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
-    color: var(--dim); margin: 0 0 8px; font-weight: 600;
+    color: var(--muted); margin: 0 0 8px; font-weight: 600;
   }
   #unit-list { overflow: auto; display: flex; flex-direction: column; gap: 6px; }
   .unit {
@@ -61,7 +83,7 @@
     font: inherit; cursor: pointer;
   }
   .unit:hover { border-color: var(--acc); }
-  .unit.selected { border-color: var(--acc); background: #1a2833; }
+  .unit.selected { border-color: var(--acc); background: var(--row-selected); }
   .unit .name { font-weight: 600; }
   .unit .state { font-size: 12px; color: var(--dim); margin-top: 2px; }
   .unit .state.ok { color: var(--ok); }
@@ -76,16 +98,16 @@
     border-radius: 4px; padding: 6px 10px; font: inherit; cursor: pointer;
   }
   button:hover { border-color: var(--acc); }
-  button.active { background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600; }
+  button.active { background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600; }
   #log {
     flex: 1; min-height: 200px; margin: 0; padding: 10px; overflow: auto;
-    background: #0c0f12; border: 1px solid var(--edge); border-radius: 4px;
+    background: var(--log-bg); border: 1px solid var(--edge); border-radius: 4px;
     white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--text);
   }
   #status { color: var(--dim); margin-left: auto; font-size: 12px; }
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
-    background: rgba(0,0,0,.6); align-items: center; justify-content: center; padding: 16px;
+    background: var(--backdrop); align-items: center; justify-content: center; padding: 16px;
   }
   .qr-modal.open { display: flex; }
   .qr-panel {
@@ -107,11 +129,13 @@
 <body>
 <nav class="topnav" aria-label="NexVUE">
   <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
+  <img class="nav-logo" src="nexvue-logo.php" alt="" hidden>
   <a href="/index.html">Player</a>
   <a href="/multiview.html">Multiview</a>
   <a href="/metrics.html">Metrics</a>
   <a href="/services.html" class="active">Services</a>
   <a href="/channels.html">Settings</a>
+  <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
 </nav>
 
 <p class="warn">Ops page (LAN-trust). Shows systemd status and recent journal lines — not a substitute for SSH.</p>

@@ -10,10 +10,23 @@
   toggle. Only one pane is unmuted at a time — click a pane to hear it.
   Reuses the same WHEP + latency-hint pattern as index.html.
 -->
+<script src="nexvue-ui.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
-    --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
+    --text: #d6dde6; --dim: #98a6b5; --muted: #b0bbc8;
+    --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5; --on-acc: #08131a;
+    --warn: #f5a623; --backdrop: rgba(0, 0, 0, .6);
+    --overlay-scrim: rgba(20, 24, 29, .92);
+    --badge-bg: rgba(20, 24, 29, .85);
+  }
+  html[data-theme="light"] {
+    --bg: #f3f5f7; --panel: #ffffff; --edge: #cdd5de;
+    --text: #1c232b; --dim: #5a6675; --muted: #3d4a58;
+    --ok: #1f9d5c; --bad: #c62828; --acc: #0b7ea4; --on-acc: #ffffff;
+    --warn: #b86e00; --backdrop: rgba(15, 23, 32, .4);
+    --overlay-scrim: rgba(243, 245, 247, .94);
+    --badge-bg: rgba(255, 255, 255, .9);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -33,14 +46,25 @@
     font-size: 15px; padding: 6px 12px 6px 0; margin-right: 4px; cursor: pointer;
   }
   .topnav .brand:hover { text-decoration: underline; }
+  .topnav .nav-logo {
+    display: block; height: 28px; width: auto; max-width: 140px;
+    object-fit: contain; margin-right: 8px;
+  }
+  .topnav .nav-logo[hidden] { display: none; }
   .topnav a {
-    color: var(--dim); text-decoration: none; padding: 6px 12px;
+    color: var(--muted); text-decoration: none; padding: 6px 12px;
     border-radius: 4px; border: 1px solid transparent;
   }
   .topnav a:hover { color: var(--text); border-color: var(--edge); }
   .topnav a.active {
-    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+    background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600;
   }
+  .topnav .theme-toggle {
+    margin-left: auto; background: var(--bg); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 4px; padding: 6px 10px;
+    font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .topnav .theme-toggle:hover { border-color: var(--acc); color: var(--acc); }
   .bar {
     display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     margin-bottom: 12px; flex-shrink: 0;
@@ -56,7 +80,7 @@
   button { cursor: pointer; }
   button:disabled { opacity: .4; cursor: not-allowed; }
   button.layout.active, button.q.active, button.tgl.active {
-    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+    background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600;
   }
   .qlabel { color: var(--dim); }
   #state { color: var(--dim); }
@@ -119,11 +143,11 @@
     position: absolute; inset: 0; z-index: 2;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 6px; padding: 12px; text-align: center;
-    background: rgba(20, 24, 29, .92); color: var(--text); pointer-events: none;
+    background: var(--overlay-scrim); color: var(--text); pointer-events: none;
   }
   .pane-kicked[hidden] { display: none; }
   .pane-kicked .kicked-title { color: var(--bad); font-weight: 600; font-size: 13px; }
-  .pane-kicked .kicked-reason { color: var(--dim); font-size: 11px; max-width: 28em; }
+  .pane-kicked .kicked-reason { color: var(--muted); font-size: 11px; max-width: 28em; }
   .pane-cc {
     position: absolute; left: 4%; right: 4%; bottom: 6%; z-index: 1;
     text-align: center; pointer-events: none;
@@ -138,7 +162,7 @@
   .pane-cc[hidden] { display: none; }
   .audio-badge {
     position: absolute; top: 8px; right: 8px; font-size: 11px;
-    padding: 3px 8px; border-radius: 3px; background: rgba(20, 24, 29, .85);
+    padding: 3px 8px; border-radius: 3px; background: var(--badge-bg);
     color: var(--acc); border: 1px solid var(--acc); display: none; z-index: 1;
   }
   .pane.audio-active .audio-badge { display: block; }
@@ -152,7 +176,7 @@
   body:fullscreen, body:-webkit-full-screen { padding: 4px; }
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
-    background: rgba(0,0,0,.6); align-items: center; justify-content: center; padding: 16px;
+    background: var(--backdrop); align-items: center; justify-content: center; padding: 16px;
   }
   .qr-modal.open { display: flex; }
   .qr-panel {
@@ -174,11 +198,13 @@
 <body>
 <nav class="topnav" aria-label="NexVUE">
   <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
+  <img class="nav-logo" src="nexvue-logo.php" alt="" hidden>
   <a href="/index.html">Player</a>
   <a href="/multiview.html" class="active">Multiview</a>
   <a href="/metrics.html">Metrics</a>
   <a href="/services.html">Services</a>
   <a href="/channels.html">Settings</a>
+  <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
 </nav>
 
 <div class="bar">

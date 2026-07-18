@@ -9,10 +9,25 @@
   Saves write files only; restart is an explicit confirm. Phase 1 LAN-trust.
   Editor and bulk edit open in modals; the channel list is the page body.
 -->
+<script src="nexvue-ui.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
-    --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
+    --text: #d6dde6; --dim: #98a6b5; --muted: #b0bbc8;
+    --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5; --on-acc: #08131a;
+    --row-hover: #1a222c; --row-selected: #1a2833;
+    --backdrop: rgba(0, 0, 0, .55);
+    --shadow: 0 16px 48px rgba(0, 0, 0, .45);
+    --logo-checker: repeating-conic-gradient(#2c3542 0% 25%, #1d232b 0% 50%) 50% / 16px 16px;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f5f7; --panel: #ffffff; --edge: #cdd5de;
+    --text: #1c232b; --dim: #5a6675; --muted: #3d4a58;
+    --ok: #1f9d5c; --bad: #c62828; --acc: #0b7ea4; --on-acc: #ffffff;
+    --row-hover: #eef2f6; --row-selected: #dceef6;
+    --backdrop: rgba(15, 23, 32, .4);
+    --shadow: 0 16px 48px rgba(15, 23, 32, .18);
+    --logo-checker: repeating-conic-gradient(#dce3ea 0% 25%, #f3f5f7 0% 50%) 50% / 16px 16px;
   }
   * { box-sizing: border-box; }
   body {
@@ -29,15 +44,26 @@
     font-size: 15px; padding: 6px 12px 6px 0; margin-right: 4px; cursor: pointer;
   }
   .topnav .brand:hover { text-decoration: underline; }
+  .topnav .nav-logo {
+    display: block; height: 28px; width: auto; max-width: 140px;
+    object-fit: contain; margin-right: 8px;
+  }
+  .topnav .nav-logo[hidden] { display: none; }
   .topnav a {
-    color: var(--dim); text-decoration: none; padding: 6px 12px;
+    color: var(--muted); text-decoration: none; padding: 6px 12px;
     border-radius: 4px; border: 1px solid transparent;
   }
   .topnav a:hover { color: var(--text); border-color: var(--edge); }
   .topnav a.active {
-    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+    background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600;
   }
-  .warn { color: var(--dim); font-size: 12px; margin: 0 0 16px; }
+  .topnav .theme-toggle {
+    margin-left: auto; background: var(--bg); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 4px; padding: 6px 10px;
+    font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .topnav .theme-toggle:hover { border-color: var(--acc); color: var(--acc); }
+  .warn { color: var(--muted); font-size: 12px; margin: 0 0 16px; }
   .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
   button, select, input {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge);
@@ -45,7 +71,9 @@
   }
   button { cursor: pointer; }
   button:hover { border-color: var(--acc); }
-  button.primary { background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600; }
+  button.primary { background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600; }
+  button.danger { border-color: var(--bad); color: var(--bad); }
+  button.danger:hover { background: var(--row-hover); }
   button:disabled { opacity: .4; cursor: not-allowed; }
   button:disabled:hover { border-color: var(--edge); }
   button.icon-close {
@@ -62,14 +90,34 @@
   }
   .panel h2 {
     font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
-    color: var(--dim); margin: 0 0 10px; font-weight: 600;
+    color: var(--muted); margin: 0 0 10px; font-weight: 600;
   }
+  .branding-help { color: var(--muted); font-size: 12px; margin: 0 0 12px; max-width: 56em; }
+  .branding-row {
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start;
+  }
+  .logo-preview-wrap {
+    width: 200px; height: 56px; border: 1px solid var(--edge); border-radius: 4px;
+    background: var(--logo-checker); display: flex; align-items: center; justify-content: center;
+    overflow: hidden; flex-shrink: 0;
+  }
+  .logo-preview-wrap img {
+    max-width: 100%; max-height: 100%; object-fit: contain;
+  }
+  .logo-preview-wrap .logo-empty {
+    color: var(--dim); font-size: 12px; padding: 8px; text-align: center;
+  }
+  .branding-controls { display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1; }
+  .branding-controls .bar { margin-bottom: 0; }
+  #logo-meta, #logo-msg { color: var(--dim); font-size: 12px; }
+  #logo-msg.err { color: var(--bad); }
+  #logo-msg.ok { color: var(--ok); }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--edge); }
-  th { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
   tr.row { cursor: pointer; }
-  tr.row:hover { background: #1a222c; }
-  tr.row.selected { background: #1a2833; }
+  tr.row:hover { background: var(--row-hover); }
+  tr.row.selected { background: var(--row-selected); }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--dim); }
   .dot.ok { background: var(--ok); }
   .dot.bad { background: var(--bad); }
@@ -78,10 +126,10 @@
   dialog {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge);
     border-radius: 8px; padding: 0; max-width: 420px; width: calc(100% - 32px);
-    box-shadow: 0 16px 48px rgba(0, 0, 0, .45);
+    box-shadow: var(--shadow);
   }
   dialog::backdrop {
-    background: rgba(0, 0, 0, .55);
+    background: var(--backdrop);
     backdrop-filter: blur(2px);
   }
   dialog.modal-sheet {
@@ -115,7 +163,7 @@
     text-transform: none; letter-spacing: 0;
   }
   .modal-header .sub {
-    margin: 4px 0 0; font-size: 12px; color: var(--dim);
+    margin: 4px 0 0; font-size: 12px; color: var(--muted);
     word-break: break-word;
   }
   .modal-body {
@@ -128,7 +176,7 @@
     flex-shrink: 0; background: var(--panel);
   }
   .modal-footer .msg {
-    margin-right: auto; font-size: 12px; color: var(--dim); max-width: 50%;
+    margin-right: auto; font-size: 12px; color: var(--muted); max-width: 50%;
   }
   .modal-footer .msg.err { color: var(--bad); }
   .modal-footer .msg.ok { color: var(--ok); }
@@ -142,7 +190,7 @@
   }
   .identity .item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .identity .k {
-    font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim);
+    font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
   }
   .identity .v {
     font-size: 13px; color: var(--text); word-break: break-all;
@@ -152,14 +200,14 @@
   .form-section:last-child { margin-bottom: 0; }
   .form-section h3 {
     font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
-    color: var(--dim); margin: 0 0 10px; font-weight: 600;
+    color: var(--muted); margin: 0 0 10px; font-weight: 600;
     padding-bottom: 6px; border-bottom: 1px solid var(--edge);
   }
   .form-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px;
   }
   .field {
-    display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim);
+    display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted);
     min-width: 0;
   }
   .field > span.label-row {
@@ -174,7 +222,7 @@
     background: var(--bg); min-width: 0;
   }
   .bulk-field .label-row {
-    display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim);
+    display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted);
   }
   .bulk-field .label-row input[type="checkbox"] { flex-shrink: 0; margin: 0; }
   .bulk-field .label-row .key { flex: 1; min-width: 0; word-break: break-all; }
@@ -184,7 +232,7 @@
 
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
-    background: rgba(0,0,0,.6); align-items: center; justify-content: center; padding: 16px;
+    background: var(--backdrop); align-items: center; justify-content: center; padding: 16px;
   }
   .qr-modal.open { display: flex; }
   .qr-panel {
@@ -206,14 +254,42 @@
 <body>
 <nav class="topnav" aria-label="NexVUE">
   <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
+  <img class="nav-logo" src="nexvue-logo.php" alt="" hidden>
   <a href="/index.html">Player</a>
   <a href="/multiview.html">Multiview</a>
   <a href="/metrics.html">Metrics</a>
   <a href="/services.html">Services</a>
   <a href="/channels.html" class="active">Settings</a>
+  <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
 </nav>
 
 <p class="warn">Edits <code>/etc/nexvue/channels/*.env</code>. MediaMTX path stays <code>chN</code>; set <code>CHANNEL_ALIAS</code> for a friendly label. Restart is optional after save. Click a row to edit; select rows for bulk edit.</p>
+
+<div class="panel" id="branding-panel">
+  <h2>Branding</h2>
+  <p class="branding-help">
+    Optional station logo shown in the top nav next to <strong>NexVUE</strong> on every page.
+    Prefer a transparent-background <strong>PNG</strong> (or WebP/JPEG), wide/landscape aspect
+    (about 4:1), at least <strong>112&nbsp;px</strong> tall — displayed at 28&nbsp;px, so
+    2× for high-DPI (e.g. <strong>448&nbsp;×&nbsp;112</strong>). Maximum file size
+    <strong>1&nbsp;MB</strong>. The logo appears only after a successful upload and can be deleted anytime.
+  </p>
+  <div class="branding-row">
+    <div class="logo-preview-wrap" id="logo-preview-wrap">
+      <span class="logo-empty" id="logo-empty">No logo uploaded</span>
+      <img id="logo-preview" alt="Current logo preview" hidden>
+    </div>
+    <div class="branding-controls">
+      <div class="bar">
+        <input type="file" id="logo-file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" aria-label="Choose logo image">
+        <button type="button" class="primary" id="logo-upload" disabled>Upload</button>
+        <button type="button" class="danger" id="logo-delete" disabled>Delete logo</button>
+      </div>
+      <div id="logo-meta"></div>
+      <div id="logo-msg" aria-live="polite"></div>
+    </div>
+  </div>
+</div>
 
 <div class="panel">
   <h2>Channel list</h2>
@@ -756,6 +832,138 @@
     updateBulkEnable();
   });
 
+  // ---- Branding logo (station-wide) ---------------------------------------------
+
+  const logoFile = document.getElementById("logo-file");
+  const logoUpload = document.getElementById("logo-upload");
+  const logoDelete = document.getElementById("logo-delete");
+  const logoPreview = document.getElementById("logo-preview");
+  const logoEmpty = document.getElementById("logo-empty");
+  const logoMeta = document.getElementById("logo-meta");
+  const logoMsg = document.getElementById("logo-msg");
+  let pendingLogoB64 = null;
+
+  function setLogoMsg(text, cls) {
+    logoMsg.textContent = text || "";
+    logoMsg.className = cls || "";
+  }
+
+  function showLogoPreview(url, meta) {
+    if (url) {
+      logoPreview.src = url;
+      logoPreview.hidden = false;
+      logoEmpty.hidden = true;
+    } else {
+      logoPreview.removeAttribute("src");
+      logoPreview.hidden = true;
+      logoEmpty.hidden = false;
+    }
+    if (meta && meta.exists) {
+      const kb = ((meta.bytes || 0) / 1024).toFixed(1);
+      logoMeta.textContent = `${meta.width || "?"}×${meta.height || "?"} · ${meta.mime || "?"} · ${kb} KB`;
+      logoDelete.disabled = false;
+    } else {
+      logoMeta.textContent = "";
+      logoDelete.disabled = true;
+    }
+  }
+
+  async function refreshLogoStatus() {
+    try {
+      const data = await api("logo_get", {});
+      if (data.exists) {
+        showLogoPreview(`nexvue-logo.php?t=${Date.now()}`, data);
+      } else {
+        showLogoPreview(null, null);
+      }
+    } catch (err) {
+      setLogoMsg(err.message, "err");
+    }
+  }
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || "");
+        const comma = result.indexOf(",");
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
+      reader.onerror = () => reject(new Error("failed to read file"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  logoFile.addEventListener("change", async () => {
+    pendingLogoB64 = null;
+    logoUpload.disabled = true;
+    setLogoMsg("");
+    const file = logoFile.files && logoFile.files[0];
+    if (!file) return;
+    if (file.size > 1048576) {
+      setLogoMsg("File exceeds 1 MB limit", "err");
+      logoFile.value = "";
+      return;
+    }
+    try {
+      pendingLogoB64 = await fileToBase64(file);
+      logoUpload.disabled = false;
+      // Local preview before upload.
+      showLogoPreview(URL.createObjectURL(file), {
+        exists: true,
+        width: "?",
+        height: "?",
+        mime: file.type || "image/*",
+        bytes: file.size,
+      });
+      logoDelete.disabled = true;
+      setLogoMsg(`Ready to upload: ${file.name}`, "");
+    } catch (err) {
+      setLogoMsg(err.message, "err");
+    }
+  });
+
+  logoUpload.addEventListener("click", async () => {
+    if (!pendingLogoB64) return;
+    logoUpload.disabled = true;
+    setLogoMsg("Uploading…");
+    try {
+      const data = await api("logo_put", { data: pendingLogoB64 });
+      pendingLogoB64 = null;
+      logoFile.value = "";
+      showLogoPreview(`nexvue-logo.php?t=${Date.now()}`, data);
+      if (window.NexVUEUI && typeof NexVUEUI.refreshNavLogo === "function") {
+        NexVUEUI.refreshNavLogo();
+      }
+      setLogoMsg("Logo uploaded", "ok");
+    } catch (err) {
+      setLogoMsg(err.message, "err");
+      logoUpload.disabled = false;
+      await refreshLogoStatus();
+    }
+  });
+
+  logoDelete.addEventListener("click", async () => {
+    if (!confirm("Delete the station logo from the nav bar?")) return;
+    logoDelete.disabled = true;
+    setLogoMsg("Deleting…");
+    try {
+      await api("logo_delete", {});
+      pendingLogoB64 = null;
+      logoFile.value = "";
+      logoUpload.disabled = true;
+      showLogoPreview(null, null);
+      if (window.NexVUEUI && typeof NexVUEUI.refreshNavLogo === "function") {
+        NexVUEUI.refreshNavLogo();
+      }
+      setLogoMsg("Logo deleted", "ok");
+    } catch (err) {
+      setLogoMsg(err.message, "err");
+      await refreshLogoStatus();
+    }
+  });
+
+  refreshLogoStatus();
   load();
 })();
 </script>

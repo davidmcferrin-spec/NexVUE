@@ -19,10 +19,23 @@
   Chart.js: prefer vendored chart.umd.min.js (LAN/offline); fall back to
   jsDelivr if the local file is missing. (cdnjs Chart.js/4.4.4 UMD path 404s.)
 -->
+<script src="nexvue-ui.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
-    --text: #d6dde6; --dim: #7d8a99; --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5;
+    --text: #d6dde6; --dim: #98a6b5; --muted: #b0bbc8;
+    --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5; --on-acc: #08131a;
+    --warn: #f5a623; --kick-hover: #2a1a1b; --placeholder: #8a96a3;
+    --lock-nodata: #2c3542; --backdrop: rgba(0, 0, 0, .6);
+    --acc-rgb: 86, 196, 245;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f5f7; --panel: #ffffff; --edge: #cdd5de;
+    --text: #1c232b; --dim: #5a6675; --muted: #3d4a58;
+    --ok: #1f9d5c; --bad: #c62828; --acc: #0b7ea4; --on-acc: #ffffff;
+    --warn: #b86e00; --kick-hover: #fdecea; --placeholder: #7a8794;
+    --lock-nodata: #cdd5de; --backdrop: rgba(15, 23, 32, .4);
+    --acc-rgb: 11, 126, 164;
   }
   * { box-sizing: border-box; }
   body {
@@ -39,27 +52,38 @@
     font-size: 15px; padding: 6px 12px 6px 0; margin-right: 4px; cursor: pointer;
   }
   .topnav .brand:hover { text-decoration: underline; }
+  .topnav .nav-logo {
+    display: block; height: 28px; width: auto; max-width: 140px;
+    object-fit: contain; margin-right: 8px;
+  }
+  .topnav .nav-logo[hidden] { display: none; }
   .topnav a {
-    color: var(--dim); text-decoration: none; padding: 6px 12px;
+    color: var(--muted); text-decoration: none; padding: 6px 12px;
     border-radius: 4px; border: 1px solid transparent;
   }
   .topnav a:hover { color: var(--text); border-color: var(--edge); }
   .topnav a.active {
-    background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600;
+    background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600;
   }
+  .topnav .theme-toggle {
+    margin-left: auto; background: var(--bg); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 4px; padding: 6px 10px;
+    font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .topnav .theme-toggle:hover { border-color: var(--acc); color: var(--acc); }
   .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
   button, select {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge);
     border-radius: 4px; padding: 7px 12px; font: inherit; cursor: pointer;
   }
-  button.active { background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600; }
+  button.active { background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600; }
   button.kick {
     border-color: var(--bad); color: var(--bad); padding: 4px 10px; font-size: 12px;
   }
-  button.kick:hover { background: #2a1a1b; }
+  button.kick:hover { background: var(--kick-hover); }
   button.kick:disabled { opacity: .4; cursor: not-allowed; }
   th.nosort { cursor: default; }
-  th.nosort:hover { color: var(--dim); }
+  th.nosort:hover { color: var(--muted); }
   input[type="datetime-local"] {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge);
     border-radius: 4px; padding: 6px 8px; font: inherit;
@@ -72,11 +96,11 @@
     border: 1px solid var(--edge); padding: 4px 2px; text-align: center;
     min-width: 28px; cursor: default;
   }
-  .heat th { color: var(--dim); font-weight: 600; text-transform: none; letter-spacing: 0; }
-  .heat th:hover { color: var(--dim); }
+  .heat th { color: var(--muted); font-weight: 600; text-transform: none; letter-spacing: 0; }
+  .heat th:hover { color: var(--muted); }
   .heat td.heat-cell { color: var(--text); }
-  .heat td.heat-label { text-align: left; padding: 4px 8px; color: var(--dim); min-width: 36px; }
-  .heat-tip { color: var(--dim); font-size: 12px; margin: 0 0 8px; }
+  .heat td.heat-label { text-align: left; padding: 4px 8px; color: var(--muted); min-width: 36px; }
+  .heat-tip { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
   #state { color: var(--dim); margin-left: auto; }
   #state.ok { color: var(--ok); }
   #state.bad { color: var(--bad); }
@@ -84,32 +108,32 @@
   .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 12px; margin-top: 16px; }
   .panel h2 {
     font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
-    color: var(--dim); margin: 0 0 8px; font-weight: 600;
+    color: var(--muted); margin: 0 0 8px; font-weight: 600;
   }
   canvas { max-height: 260px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--edge); }
-  th { color: var(--dim); text-transform: uppercase; font-size: 11px; letter-spacing: .04em;
+  th { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .04em;
        cursor: pointer; user-select: none; }
   th:hover { color: var(--text); }
   /* Input lock timeline — per-device green/red bands (replaces the old line chart) */
   .lock-timeline { display: flex; flex-direction: column; gap: 8px; padding: 6px 0 2px; }
   .lock-row { display: flex; align-items: center; gap: 10px; }
-  .lock-label { color: var(--dim); font-size: 11px; min-width: 46px; text-align: right; white-space: nowrap; }
+  .lock-label { color: var(--muted); font-size: 11px; min-width: 46px; text-align: right; white-space: nowrap; }
   .lock-strip {
     position: relative; flex: 1; height: 18px; border-radius: 3px; overflow: hidden;
-    background: #2c3542; /* shows through as "no data" */
+    background: var(--lock-nodata); /* shows through as "no data" */
   }
   .lock-seg { position: absolute; top: 0; bottom: 0; }
   .lock-seg.locked { background: var(--ok); }
   .lock-seg.unlocked { background: var(--bad); }
   .lock-axis { display: flex; justify-content: space-between; color: var(--dim); font-size: 10px; padding-left: 56px; }
-  .lock-legend { display: flex; gap: 16px; color: var(--dim); font-size: 11px; margin-top: 8px; }
+  .lock-legend { display: flex; gap: 16px; color: var(--muted); font-size: 11px; margin-top: 8px; }
   .lock-legend span { display: inline-flex; align-items: center; gap: 5px; }
   .lock-key { display: inline-block; width: 14px; height: 9px; border-radius: 2px; }
   .lock-key.locked { background: var(--ok); }
   .lock-key.unlocked { background: var(--bad); }
-  .lock-key.nodata { background: #2c3542; }
+  .lock-key.nodata { background: var(--lock-nodata); }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
   .dot.live { background: var(--ok); }
   .dot.ended { background: var(--dim); }
@@ -120,7 +144,7 @@
     padding: 4px 6px; font-weight: 400; text-transform: none; letter-spacing: 0;
     cursor: default; vertical-align: top;
   }
-  tr.viewer-filters th:hover { color: var(--dim); }
+  tr.viewer-filters th:hover { color: var(--muted); }
   tr.viewer-filters input {
     width: 100%; min-width: 0; box-sizing: border-box;
     background: var(--bg); color: var(--text); border: 1px solid var(--edge);
@@ -128,15 +152,15 @@
   }
   tr.viewer-filters input:focus { outline: none; border-color: var(--acc); }
   tr.viewer-filters input.bad { border-color: var(--bad); }
-  tr.viewer-filters input::placeholder { color: #4a5563; }
+  tr.viewer-filters input::placeholder { color: var(--placeholder); }
   #viewer-filter-meta { color: var(--dim); font-size: 12px; margin-left: auto; }
   #viewer-filter-meta.bad { color: var(--bad); }
-  #viewer-filter-help { color: var(--dim); font-size: 11px; margin: 0 0 10px; }
+  #viewer-filter-help { color: var(--muted); font-size: 11px; margin: 0 0 10px; }
   .viewer-pager button:disabled { opacity: .4; cursor: not-allowed; }
   .viewer-pager select { padding: 5px 8px; }
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
-    background: rgba(0,0,0,.6); align-items: center; justify-content: center; padding: 16px;
+    background: var(--backdrop); align-items: center; justify-content: center; padding: 16px;
   }
   .qr-modal.open { display: flex; }
   .qr-panel {
@@ -158,11 +182,13 @@
 <body>
 <nav class="topnav" aria-label="NexVUE">
   <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
+  <img class="nav-logo" src="nexvue-logo.php" alt="" hidden>
   <a href="/index.html">Player</a>
   <a href="/multiview.html">Multiview</a>
   <a href="/metrics.html" class="active">Metrics</a>
   <a href="/services.html">Services</a>
   <a href="/channels.html">Settings</a>
+  <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
 </nav>
 
 <div class="bar">
@@ -309,11 +335,42 @@
   let lastHeatCells = [];
   let lastHeatTz = "";
   const charts = {};
-  const palette = ["#56c4f5", "#4cc38a", "#e5484d", "#f5a623", "#b56cf5", "#f56ca0", "#6ce0f5", "#c3e54c"];
+  const PALETTE_DARK = ["#56c4f5", "#4cc38a", "#e5484d", "#f5a623", "#b56cf5", "#f56ca0", "#6ce0f5", "#c3e54c"];
+  const PALETTE_LIGHT = ["#0b7ea4", "#1f9d5c", "#c62828", "#b86e00", "#7b3db8", "#c2185b", "#00838f", "#558b2f"];
   const DOW_LABELS = { 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri" };
   // Sustained-operation warning lines (Arrow Lake TjMax is 105 °C). Tune here only.
   const TEMP_LIMIT_CPU_C = 95;
   const TEMP_LIMIT_GPU_C = 95;
+
+  function cssVar(name, fallback) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  }
+
+  function themePalette() {
+    const theme = (window.NexVUEUI && NexVUEUI.getTheme()) || "dark";
+    return theme === "light" ? PALETTE_LIGHT : PALETTE_DARK;
+  }
+
+  function themeChrome() {
+    return {
+      edge: cssVar("--edge", "#2c3542"),
+      muted: cssVar("--muted", "#b0bbc8"),
+      text: cssVar("--text", "#d6dde6"),
+      bad: cssVar("--bad", "#e5484d"),
+      warn: cssVar("--warn", "#f5a623"),
+      accRgb: cssVar("--acc-rgb", "86, 196, 245"),
+    };
+  }
+
+  function withAlpha(hex, alpha) {
+    const h = String(hex || "").replace("#", "");
+    if (h.length !== 6) return hex;
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
 
   // #region agent log
   function dbg(hypothesisId, location, message, data) {
@@ -465,27 +522,30 @@
   // ---- Chart helpers --------------------------------------------------------------
 
   function xScaleConfig() {
+    const c = themeChrome();
     return {
       type: "linear",
-      ticks: { color: "#7d8a99", callback: v => fmtTime(v), maxRotation: 0, autoSkip: true },
-      grid: { color: "#2c3542" }
+      ticks: { color: c.muted, callback: v => fmtTime(v), maxRotation: 0, autoSkip: true },
+      grid: { color: c.edge }
     };
   }
   function defaultYScale(label) {
+    const c = themeChrome();
     return {
-      title: { display: true, text: label, color: "#7d8a99" },
-      ticks: { color: "#7d8a99" }, grid: { color: "#2c3542" }, beginAtZero: true
+      title: { display: true, text: label, color: c.muted },
+      ticks: { color: c.muted }, grid: { color: c.edge }, beginAtZero: true
     };
   }
   function tooltipLabel(item) {
     return `${item.dataset.label}: ${item.formattedValue}`;
   }
   function chartOptions(yScaleConfig) {
+    const c = themeChrome();
     return {
       responsive: true, animation: false, interaction: { mode: "nearest", intersect: false },
       scales: { x: xScaleConfig(), y: yScaleConfig },
       plugins: {
-        legend: { labels: { color: "#d6dde6", boxWidth: 12, font: { size: 11 } } },
+        legend: { labels: { color: c.text, boxWidth: 12, font: { size: 11 } } },
         tooltip: { callbacks: { title: items => items.length ? fmtTime(items[0].parsed.x) : "", label: tooltipLabel } }
       }
     };
@@ -498,6 +558,16 @@
     if (charts[canvasId]) charts[canvasId].destroy();
     charts[canvasId] = new Chart(ctx, { type: "line", data: { datasets }, options: chartOptions(yScaleConfig) });
   }
+
+  function applyThemeToCharts() {
+    // Rebuild charts from the last fetch path so series palette indices stay correct.
+    drawHeatmap();
+    if (typeof Chart !== "undefined") {
+      load();
+    }
+  }
+
+  window.addEventListener("nexvue-theme-changed", applyThemeToCharts);
 
   // ---- Data loading -----------------------------------------------------------------
 
@@ -568,6 +638,7 @@
   // ---- Renderers --------------------------------------------------------------------
 
   function renderTotals(rows) {
+    const palette = themePalette();
     makeChart("c-bw", [{
       label: "Total (Mbps)", data: rows.map(t => ({ x: t.ts * 1000, y: (t.total_bandwidth_bps || 0) / 1e6 })),
       borderColor: palette[0], backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, tension: 0.15
@@ -598,6 +669,8 @@
   }
 
   function renderHost(rows) {
+    const palette = themePalette();
+    const chrome = themeChrome();
     makeChart("c-cpu", [{
       label: "CPU %", data: rows.map(t => ({ x: t.ts * 1000, y: t.cpu_pct || 0 })),
       borderColor: palette[4], backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, tension: 0.15
@@ -657,12 +730,12 @@
     if (x0 != null && x1 != null && x1 >= x0) {
       if (TEMP_LIMIT_CPU_C === TEMP_LIMIT_GPU_C) {
         tempDatasets.push(
-          tempLimitDataset(`Limit ${TEMP_LIMIT_CPU_C} °C`, TEMP_LIMIT_CPU_C, "#e5484d88", x0, x1)
+          tempLimitDataset(`Limit ${TEMP_LIMIT_CPU_C} °C`, TEMP_LIMIT_CPU_C, withAlpha(chrome.bad, 0.53), x0, x1)
         );
       } else {
         tempDatasets.push(
-          tempLimitDataset(`CPU limit ${TEMP_LIMIT_CPU_C} °C`, TEMP_LIMIT_CPU_C, "#e5484d88", x0, x1),
-          tempLimitDataset(`GPU limit ${TEMP_LIMIT_GPU_C} °C`, TEMP_LIMIT_GPU_C, "#f5a62388", x0, x1),
+          tempLimitDataset(`CPU limit ${TEMP_LIMIT_CPU_C} °C`, TEMP_LIMIT_CPU_C, withAlpha(chrome.bad, 0.53), x0, x1),
+          tempLimitDataset(`GPU limit ${TEMP_LIMIT_GPU_C} °C`, TEMP_LIMIT_GPU_C, withAlpha(chrome.warn, 0.53), x0, x1),
         );
       }
     }
@@ -675,9 +748,10 @@
   }
 
   function heatColor(t) {
-    // t in 0..1 — accent blue intensity over panel background
+    // t in 0..1 — accent intensity over panel background
     const a = 0.12 + t * 0.88;
-    return `rgba(86, 196, 245, ${a.toFixed(3)})`;
+    const rgb = themeChrome().accRgb;
+    return `rgba(${rgb}, ${a.toFixed(3)})`;
   }
 
   function renderHeatmap(cells, tz) {
