@@ -168,7 +168,13 @@ specifically because this box can't get additional ports opened.
   Player/Multiview **CC** uses `nexvue-captions.js` + SSE (not WHEP text
   tracks).
 - Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +
-  allowlisted sudo wrappers. Phase 1 LAN-trust — not for DMZ without auth.
+ allowlisted sudo wrappers. Phase 1 LAN-trust — not for DMZ without auth.
+- Channel `.env` files are SOURCED by bash (`nexvue-encode@.service`
+ ExecStart), so values with spaces MUST be double-quoted —
+ `CHANNEL_ALIAS=TVU 35` unquoted runs `35` as a command and truncates the
+ alias to `TVU` (journal tell: `N.env: line NN: 35: command not found`).
+ `nexvue-ops-env-update.py` quotes on write and unquotes on read; non-alias
+ values reject quote characters so the quoting can't be broken.
 - Production-ready code only: no placeholders, no TODOs. Unit tests for new
   or changed logic (`test/`). Complete file rewrites over accumulated diffs.
 - Architecture decisions confirmed with the owner before code.

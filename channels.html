@@ -7,6 +7,7 @@
 <!--
   Ops: edit /etc/nexvue/channels/<N>.env — single channel or bulk patch.
   Saves write files only; restart is an explicit confirm. Phase 1 LAN-trust.
+  Editor and bulk edit open in modals; the channel list is the page body.
 -->
 <style>
   :root {
@@ -46,6 +47,15 @@
   button:hover { border-color: var(--acc); }
   button.primary { background: var(--acc); color: #08131a; border-color: var(--acc); font-weight: 600; }
   button:disabled { opacity: .4; cursor: not-allowed; }
+  button:disabled:hover { border-color: var(--edge); }
+  button.icon-close {
+    background: transparent; border: none; color: var(--dim);
+    font-size: 20px; line-height: 1; padding: 4px 8px; border-radius: 4px;
+  }
+  button.icon-close:hover { color: var(--text); border-color: transparent; background: var(--bg); }
+  input:focus, select:focus, button:focus-visible {
+    outline: 2px solid var(--acc); outline-offset: 1px;
+  }
   .panel {
     background: var(--panel); border: 1px solid var(--edge); border-radius: 6px;
     padding: 12px; margin-bottom: 16px;
@@ -63,25 +73,115 @@
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--dim); }
   .dot.ok { background: var(--ok); }
   .dot.bad { background: var(--bad); }
-  .form-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;
-  }
-  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim); }
-  label.ro input { opacity: .7; }
-  .bulk-keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
-  .bulk-key {
-    display: flex; gap: 8px; align-items: center; padding: 6px 8px;
-    border: 1px solid var(--edge); border-radius: 4px; background: var(--bg);
-  }
-  .bulk-key input[type="checkbox"] { flex-shrink: 0; }
-  .bulk-key input[type="text"], .bulk-key select { flex: 1; min-width: 0; }
   #state { color: var(--dim); margin-left: auto; }
+
   dialog {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge);
-    border-radius: 6px; padding: 16px; max-width: 420px;
+    border-radius: 8px; padding: 0; max-width: 420px; width: calc(100% - 32px);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, .45);
   }
-  dialog::backdrop { background: rgba(0,0,0,.55); }
-  dialog .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+  dialog::backdrop {
+    background: rgba(0, 0, 0, .55);
+    backdrop-filter: blur(2px);
+  }
+  dialog.modal-sheet {
+    max-width: 720px;
+    max-height: 85vh;
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  dialog.modal-sheet[open] { display: flex; }
+  dialog.modal-sheet.confirm-dlg {
+    max-width: 420px;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    dialog.modal-sheet[open] {
+      animation: modal-in .16s ease-out;
+    }
+  }
+  @keyframes modal-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .modal-header {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 16px 16px 12px; border-bottom: 1px solid var(--edge);
+    flex-shrink: 0;
+  }
+  .modal-header .titles { flex: 1; min-width: 0; }
+  .modal-header h2 {
+    margin: 0; font-size: 15px; font-weight: 600; color: var(--text);
+    text-transform: none; letter-spacing: 0;
+  }
+  .modal-header .sub {
+    margin: 4px 0 0; font-size: 12px; color: var(--dim);
+    word-break: break-word;
+  }
+  .modal-body {
+    padding: 16px; overflow: auto; flex: 1; min-height: 0;
+  }
+  .modal-footer {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    justify-content: flex-end;
+    padding: 12px 16px; border-top: 1px solid var(--edge);
+    flex-shrink: 0; background: var(--panel);
+  }
+  .modal-footer .msg {
+    margin-right: auto; font-size: 12px; color: var(--dim); max-width: 50%;
+  }
+  .modal-footer .msg.err { color: var(--bad); }
+  .modal-footer .msg.ok { color: var(--ok); }
+  dialog.confirm-dlg .modal-body { padding: 16px; }
+  dialog.confirm-dlg .modal-footer { border-top: none; padding-top: 0; }
+
+  .identity {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px 16px; padding: 10px 12px; margin-bottom: 16px;
+    background: var(--bg); border: 1px solid var(--edge); border-radius: 6px;
+  }
+  .identity .item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .identity .k {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim);
+  }
+  .identity .v {
+    font-size: 13px; color: var(--text); word-break: break-all;
+  }
+
+  .form-section { margin-bottom: 18px; }
+  .form-section:last-child { margin-bottom: 0; }
+  .form-section h3 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--dim); margin: 0 0 10px; font-weight: 600;
+    padding-bottom: 6px; border-bottom: 1px solid var(--edge);
+  }
+  .form-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px;
+  }
+  .field {
+    display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim);
+    min-width: 0;
+  }
+  .field > span.label-row {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .field input[type="text"], .field select {
+    width: 100%; background: var(--bg);
+  }
+  .bulk-field {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 8px 10px; border: 1px solid var(--edge); border-radius: 6px;
+    background: var(--bg); min-width: 0;
+  }
+  .bulk-field .label-row {
+    display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim);
+  }
+  .bulk-field .label-row input[type="checkbox"] { flex-shrink: 0; margin: 0; }
+  .bulk-field .label-row .key { flex: 1; min-width: 0; word-break: break-all; }
+  .bulk-field input[type="text"], .bulk-field select { width: 100%; }
+  .bulk-field:not(.enabled) input[type="text"],
+  .bulk-field:not(.enabled) select { opacity: .55; }
+
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
     background: rgba(0,0,0,.6); align-items: center; justify-content: center; padding: 16px;
@@ -113,7 +213,7 @@
   <a href="/channels.html" class="active">Channels</a>
 </nav>
 
-<p class="warn">Edits <code>/etc/nexvue/channels/*.env</code>. MediaMTX path stays <code>chN</code>; set <code>CHANNEL_ALIAS</code> for a friendly label. Restart is optional after save.</p>
+<p class="warn">Edits <code>/etc/nexvue/channels/*.env</code>. MediaMTX path stays <code>chN</code>; set <code>CHANNEL_ALIAS</code> for a friendly label. Restart is optional after save. Click a row to edit; select rows for bulk edit.</p>
 
 <div class="panel">
   <h2>Channel list</h2>
@@ -121,6 +221,7 @@
     <button type="button" id="reload">Reload</button>
     <button type="button" id="select-all">Select all</button>
     <button type="button" id="select-none">Select none</button>
+    <button type="button" class="primary" id="bulk-open" disabled>Bulk edit</button>
     <span id="state">loading…</span>
   </div>
   <table>
@@ -134,27 +235,49 @@
   </table>
 </div>
 
-<div class="panel" id="bulk-panel">
-  <h2>Bulk edit selected</h2>
-  <p style="color:var(--dim); margin:0 0 10px; font-size:12px">Check parameters to apply, set values, then Apply to all checked channels. Does not change DEVICE_NUMBER / CHANNEL_PATH.</p>
-  <div class="bulk-keys" id="bulk-keys"></div>
-  <div class="bar" style="margin-top:12px">
-    <button type="button" class="primary" id="bulk-apply" disabled>Apply to selected</button>
+<dialog id="edit-dlg" class="modal-sheet" aria-labelledby="edit-heading">
+  <div class="modal-header">
+    <div class="titles">
+      <h2 id="edit-heading"><span class="dot" id="edit-dot"></span><span id="edit-title">Edit channel</span></h2>
+      <p class="sub" id="edit-sub"></p>
+    </div>
+    <button type="button" class="icon-close" id="edit-x" aria-label="Close">&times;</button>
   </div>
-</div>
-
-<div class="panel" id="editor-panel" style="display:none">
-  <h2>Edit channel <span id="edit-title"></span></h2>
-  <div class="form-grid" id="edit-form"></div>
-  <div class="bar" style="margin-top:12px">
+  <div class="modal-body" id="edit-body"></div>
+  <div class="modal-footer">
+    <span class="msg" id="edit-msg" aria-live="polite"></span>
+    <button type="button" id="edit-cancel">Cancel</button>
     <button type="button" class="primary" id="save-one">Save channel</button>
-    <button type="button" id="cancel-edit">Close</button>
   </div>
-</div>
+</dialog>
 
-<dialog id="restart-dlg">
-  <p id="restart-msg">Restart encoder unit(s) now so changes take effect?</p>
-  <div class="actions">
+<dialog id="bulk-dlg" class="modal-sheet" aria-labelledby="bulk-heading">
+  <div class="modal-header">
+    <div class="titles">
+      <h2 id="bulk-heading">Bulk edit</h2>
+      <p class="sub" id="bulk-sub">Check parameters to apply. Does not change DEVICE_NUMBER / CHANNEL_PATH.</p>
+    </div>
+    <button type="button" class="icon-close" id="bulk-x" aria-label="Close">&times;</button>
+  </div>
+  <div class="modal-body" id="bulk-body"></div>
+  <div class="modal-footer">
+    <span class="msg" id="bulk-msg" aria-live="polite"></span>
+    <button type="button" id="bulk-cancel">Cancel</button>
+    <button type="button" class="primary" id="bulk-apply" disabled>Apply</button>
+  </div>
+</dialog>
+
+<dialog id="restart-dlg" class="modal-sheet confirm-dlg" aria-labelledby="restart-heading">
+  <div class="modal-header">
+    <div class="titles">
+      <h2 id="restart-heading">Restart encoders?</h2>
+    </div>
+    <button type="button" class="icon-close" id="restart-x" aria-label="Close">&times;</button>
+  </div>
+  <div class="modal-body">
+    <p id="restart-msg" style="margin:0">Restart encoder unit(s) now so changes take effect?</p>
+  </div>
+  <div class="modal-footer">
     <button type="button" id="restart-skip">Skip</button>
     <button type="button" class="primary" id="restart-go">Restart now</button>
   </div>
@@ -178,12 +301,20 @@
 (() => {
   const tbody = document.getElementById("tbody");
   const stateEl = document.getElementById("state");
-  const editPanel = document.getElementById("editor-panel");
-  const editForm = document.getElementById("edit-form");
+  const editDlg = document.getElementById("edit-dlg");
+  const editBody = document.getElementById("edit-body");
   const editTitle = document.getElementById("edit-title");
-  const bulkKeysEl = document.getElementById("bulk-keys");
+  const editSub = document.getElementById("edit-sub");
+  const editDot = document.getElementById("edit-dot");
+  const editMsg = document.getElementById("edit-msg");
+  const bulkDlg = document.getElementById("bulk-dlg");
+  const bulkBody = document.getElementById("bulk-body");
+  const bulkHeading = document.getElementById("bulk-heading");
+  const bulkSub = document.getElementById("bulk-sub");
+  const bulkMsg = document.getElementById("bulk-msg");
   const bulkApply = document.getElementById("bulk-apply");
-  const dlg = document.getElementById("restart-dlg");
+  const bulkOpen = document.getElementById("bulk-open");
+  const restartDlg = document.getElementById("restart-dlg");
   const restartMsg = document.getElementById("restart-msg");
 
   let channels = [];
@@ -212,6 +343,28 @@
     LO_FPS: { label: "LO_FPS", type: "text" },
   };
 
+  const FIELD_GROUPS = [
+    { id: "general", title: "General", keys: ["CHANNEL_ALIAS"] },
+    {
+      id: "video",
+      title: "Video",
+      keys: [
+        "BITRATE_KBPS", "GOP_FRAMES", "DEINT_FIELDS", "VIDEO_ENCODER",
+        "EXTRA_ENC_ARGS", "DECKLINK_BUFFER_FRAMES", "MAX_DEVICES",
+      ],
+    },
+    {
+      id: "audio",
+      title: "Audio",
+      keys: ["ENABLE_AUDIO", "AUDIO_FRAME_MS", "AUDIO_BITRATE_BPS", "AUDIO_CHANNELS"],
+    },
+    {
+      id: "lo",
+      title: "Low-res rendition",
+      keys: ["LO_ENABLE", "LO_PRESET", "LO_WIDTH", "LO_HEIGHT", "LO_BITRATE_KBPS", "LO_FPS"],
+    },
+  ];
+
   async function api(action, body) {
     const res = await fetch("nexvue-ops.php", {
       method: "POST",
@@ -228,44 +381,70 @@
   }
 
   function updateBulkEnable() {
-    bulkApply.disabled = checkedIds().length === 0;
+    const n = checkedIds().length;
+    bulkOpen.disabled = n === 0;
+    bulkOpen.textContent = n ? `Bulk edit (${n})` : "Bulk edit";
   }
 
-  function buildBulkKeys(keys) {
-    bulkKeysEl.innerHTML = "";
-    for (const key of keys) {
-      const meta = FIELD_META[key] || { label: key, type: "text" };
-      const row = document.createElement("div");
-      row.className = "bulk-key";
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.dataset.key = key;
-      cb.className = "bulk-enable";
-      let control;
-      if (meta.type === "select") {
-        control = document.createElement("select");
-        control.dataset.key = key;
-        for (const opt of meta.options) {
-          const o = document.createElement("option");
-          o.value = opt; o.textContent = opt;
-          control.appendChild(o);
-        }
-      } else {
-        control = document.createElement("input");
-        control.type = "text";
-        control.dataset.key = key;
-        control.placeholder = meta.label;
-      }
-      const lab = document.createElement("span");
-      lab.style.flex = "0 0 110px";
-      lab.style.color = "var(--dim)";
-      lab.style.fontSize = "11px";
-      lab.textContent = key;
-      row.appendChild(cb);
-      row.appendChild(lab);
-      row.appendChild(control);
-      bulkKeysEl.appendChild(row);
+  function groupedKeys(keys) {
+    const set = new Set(keys);
+    const sections = [];
+    const used = new Set();
+    for (const g of FIELD_GROUPS) {
+      const present = g.keys.filter(k => set.has(k));
+      if (!present.length) continue;
+      present.forEach(k => used.add(k));
+      sections.push({ title: g.title, keys: present });
     }
+    const other = keys.filter(k => !used.has(k));
+    if (other.length) sections.push({ title: "Other", keys: other });
+    return sections;
+  }
+
+  function makeControl(key, value, { blankUnset = false } = {}) {
+    const meta = FIELD_META[key] || { label: key, type: "text" };
+    let control;
+    if (meta.type === "select") {
+      control = document.createElement("select");
+      control.dataset.key = key;
+      if (blankUnset) {
+        const blank = document.createElement("option");
+        blank.value = "";
+        blank.textContent = "(unset)";
+        control.appendChild(blank);
+      }
+      for (const opt of meta.options) {
+        const o = document.createElement("option");
+        o.value = opt;
+        o.textContent = opt;
+        if (String(value) === opt) o.selected = true;
+        control.appendChild(o);
+      }
+    } else {
+      control = document.createElement("input");
+      control.type = "text";
+      control.dataset.key = key;
+      control.value = value == null ? "" : String(value);
+      control.placeholder = meta.label || key;
+    }
+    return control;
+  }
+
+  function wireBackdropClose(dlg) {
+    dlg.addEventListener("click", e => {
+      if (e.target !== dlg) return;
+      const rect = dlg.getBoundingClientRect();
+      const inside =
+        e.clientX >= rect.left && e.clientX <= rect.right &&
+        e.clientY >= rect.top && e.clientY <= rect.bottom;
+      if (!inside) dlg.close();
+    });
+  }
+
+  function setMsg(el, text, kind) {
+    el.textContent = text || "";
+    el.classList.toggle("err", kind === "err");
+    el.classList.toggle("ok", kind === "ok");
   }
 
   function renderTable() {
@@ -273,16 +452,19 @@
       const alias = c.CHANNEL_ALIAS || "—";
       const lo = c.LO_ENABLE === "true" ? (c.LO_PRESET || "on") : "off";
       const dot = c.active ? "ok" : "bad";
+      const esc = s => String(s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
       return `<tr class="row" data-id="${c.id}">
         <td><input type="checkbox" class="sel" value="${c.id}"></td>
         <td><span class="dot ${dot}"></span>${c.id}</td>
-        <td>${c.CHANNEL_PATH || ("ch" + c.id)}</td>
-        <td>${alias}</td>
-        <td>${c.BITRATE_KBPS || "—"}</td>
-        <td>${c.DEINT_FIELDS || "—"}</td>
-        <td>${c.ENABLE_AUDIO || "—"}</td>
-        <td>${lo}</td>
-        <td>${c.state || "—"}</td>
+        <td>${esc(c.CHANNEL_PATH || ("ch" + c.id))}</td>
+        <td>${esc(alias)}</td>
+        <td>${esc(c.BITRATE_KBPS || "—")}</td>
+        <td>${esc(c.DEINT_FIELDS || "—")}</td>
+        <td>${esc(c.ENABLE_AUDIO || "—")}</td>
+        <td>${esc(lo)}</td>
+        <td>${esc(c.state || "—")}</td>
       </tr>`;
     }).join("");
     tbody.querySelectorAll("tr.row").forEach(tr => {
@@ -304,7 +486,6 @@
       const data = await api("channels_list", {});
       channels = data.channels || [];
       editableKeys = data.editable_keys || Object.keys(FIELD_META);
-      buildBulkKeys(editableKeys);
       renderTable();
       stateEl.textContent = `${channels.length} channel(s)`;
     } catch (err) {
@@ -312,74 +493,196 @@
     }
   }
 
-  function fieldControl(key, value, readonly) {
-    const meta = FIELD_META[key] || { label: key, type: "text" };
-    const wrap = document.createElement("label");
-    if (readonly) wrap.classList.add("ro");
-    wrap.textContent = "";
-    const title = document.createElement("span");
-    title.textContent = meta.label || key;
-    wrap.appendChild(title);
-    let control;
-    if (!readonly && meta.type === "select") {
-      control = document.createElement("select");
-      control.dataset.key = key;
-      const blank = document.createElement("option");
-      blank.value = ""; blank.textContent = "(unset)";
-      control.appendChild(blank);
-      for (const opt of meta.options) {
-        const o = document.createElement("option");
-        o.value = opt; o.textContent = opt;
-        if (String(value) === opt) o.selected = true;
-        control.appendChild(o);
-      }
-    } else {
-      control = document.createElement("input");
-      control.type = "text";
-      control.dataset.key = key;
-      control.value = value == null ? "" : String(value);
-      if (readonly) control.readOnly = true;
+  function buildIdentityStrip(keys) {
+    const strip = document.createElement("div");
+    strip.className = "identity";
+    for (const rk of ["DEVICE_NUMBER", "CHANNEL_PATH", "RTSP_URL"]) {
+      const item = document.createElement("div");
+      item.className = "item";
+      const k = document.createElement("span");
+      k.className = "k";
+      k.textContent = rk;
+      const v = document.createElement("span");
+      v.className = "v";
+      v.textContent = keys[rk] || "—";
+      item.appendChild(k);
+      item.appendChild(v);
+      strip.appendChild(item);
     }
-    wrap.appendChild(control);
-    return wrap;
+    return strip;
+  }
+
+  function buildEditSections(keys, keyList) {
+    const frag = document.createDocumentFragment();
+    frag.appendChild(buildIdentityStrip(keys));
+    for (const section of groupedKeys(keyList)) {
+      const wrap = document.createElement("section");
+      wrap.className = "form-section";
+      const h = document.createElement("h3");
+      h.textContent = section.title;
+      wrap.appendChild(h);
+      const grid = document.createElement("div");
+      grid.className = "form-grid";
+      for (const key of section.keys) {
+        const meta = FIELD_META[key] || { label: key, type: "text" };
+        const field = document.createElement("label");
+        field.className = "field";
+        const title = document.createElement("span");
+        title.className = "label-row";
+        title.textContent = meta.label || key;
+        field.appendChild(title);
+        field.appendChild(makeControl(key, keys[key] || "", { blankUnset: true }));
+        grid.appendChild(field);
+      }
+      wrap.appendChild(grid);
+      frag.appendChild(wrap);
+    }
+    return frag;
+  }
+
+  function buildBulkSections(keyList) {
+    const frag = document.createDocumentFragment();
+    for (const section of groupedKeys(keyList)) {
+      const wrap = document.createElement("section");
+      wrap.className = "form-section";
+      const h = document.createElement("h3");
+      h.textContent = section.title;
+      wrap.appendChild(h);
+      const grid = document.createElement("div");
+      grid.className = "form-grid";
+      for (const key of section.keys) {
+        const meta = FIELD_META[key] || { label: key, type: "text" };
+        const row = document.createElement("div");
+        row.className = "bulk-field";
+        const labelRow = document.createElement("label");
+        labelRow.className = "label-row";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.dataset.key = key;
+        cb.className = "bulk-enable";
+        const lab = document.createElement("span");
+        lab.className = "key";
+        lab.textContent = meta.label || key;
+        labelRow.appendChild(cb);
+        labelRow.appendChild(lab);
+        const control = makeControl(key, "", { blankUnset: false });
+        control.addEventListener("input", () => {
+          if (!cb.checked) {
+            cb.checked = true;
+            row.classList.add("enabled");
+          }
+        });
+        control.addEventListener("change", () => {
+          if (!cb.checked) {
+            cb.checked = true;
+            row.classList.add("enabled");
+          }
+        });
+        cb.addEventListener("change", () => {
+          row.classList.toggle("enabled", cb.checked);
+        });
+        row.appendChild(labelRow);
+        row.appendChild(control);
+        grid.appendChild(row);
+      }
+      wrap.appendChild(grid);
+      frag.appendChild(wrap);
+    }
+    return frag;
   }
 
   async function openEditor(id) {
     selectedId = id;
+    setMsg(editMsg, "");
     tbody.querySelectorAll("tr.row").forEach(tr => {
       tr.classList.toggle("selected", parseInt(tr.dataset.id, 10) === id);
     });
+    const summary = channels.find(c => c.id === id);
     try {
       const data = await api("channel_get", { id });
       const keys = data.keys || {};
-      editTitle.textContent = `#${id} (${keys.CHANNEL_PATH || "ch" + id})`;
-      editForm.innerHTML = "";
-      for (const rk of ["DEVICE_NUMBER", "CHANNEL_PATH", "RTSP_URL"]) {
-        editForm.appendChild(fieldControl(rk, keys[rk] || "", true));
-      }
-      for (const key of (data.editable_keys || editableKeys)) {
-        editForm.appendChild(fieldControl(key, keys[key] || "", false));
-      }
-      editPanel.style.display = "block";
-      editPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      const path = keys.CHANNEL_PATH || ("ch" + id);
+      const alias = keys.CHANNEL_ALIAS || "";
+      editTitle.textContent = `Channel #${id}`;
+      editSub.textContent = alias
+        ? `${path} · ${alias}`
+        : path;
+      editDot.className = "dot " + (summary && summary.active ? "ok" : "bad");
+      editBody.innerHTML = "";
+      editBody.appendChild(buildEditSections(keys, data.editable_keys || editableKeys));
+      if (!editDlg.open) editDlg.showModal();
     } catch (err) {
+      selectedId = null;
       alert(err.message);
     }
+  }
+
+  function closeEditor() {
+    if (editDlg.open) editDlg.close();
+    selectedId = null;
+    tbody.querySelectorAll("tr.row.selected").forEach(tr => tr.classList.remove("selected"));
+    setMsg(editMsg, "");
+  }
+
+  function openBulk() {
+    const ids = checkedIds();
+    if (!ids.length) return;
+    setMsg(bulkMsg, "");
+    bulkHeading.textContent = `Bulk edit — ${ids.length} channel${ids.length === 1 ? "" : "s"}`;
+    bulkSub.textContent = `Channels ${ids.join(", ")}. Check parameters to apply. Does not change DEVICE_NUMBER / CHANNEL_PATH.`;
+    bulkBody.innerHTML = "";
+    bulkBody.appendChild(buildBulkSections(editableKeys));
+    bulkApply.disabled = false;
+    bulkApply.textContent = `Apply to ${ids.length} channel${ids.length === 1 ? "" : "s"}`;
+    if (!bulkDlg.open) bulkDlg.showModal();
+  }
+
+  function closeBulk() {
+    if (bulkDlg.open) bulkDlg.close();
+    setMsg(bulkMsg, "");
   }
 
   function askRestart(units) {
     pendingRestart = units || [];
     if (!pendingRestart.length) return;
     restartMsg.textContent = `Restart ${pendingRestart.join(", ")} now so changes take effect?`;
-    dlg.showModal();
+    if (!restartDlg.open) restartDlg.showModal();
   }
 
-  document.getElementById("restart-skip").addEventListener("click", () => dlg.close());
+  wireBackdropClose(editDlg);
+  wireBackdropClose(bulkDlg);
+  wireBackdropClose(restartDlg);
+
+  editDlg.addEventListener("cancel", e => {
+    e.preventDefault();
+    closeEditor();
+  });
+  bulkDlg.addEventListener("cancel", e => {
+    e.preventDefault();
+    closeBulk();
+  });
+  restartDlg.addEventListener("cancel", () => {
+    pendingRestart = [];
+  });
+
+  document.getElementById("edit-x").addEventListener("click", closeEditor);
+  document.getElementById("edit-cancel").addEventListener("click", closeEditor);
+  document.getElementById("bulk-x").addEventListener("click", closeBulk);
+  document.getElementById("bulk-cancel").addEventListener("click", closeBulk);
+  document.getElementById("restart-x").addEventListener("click", () => {
+    pendingRestart = [];
+    restartDlg.close();
+  });
+  document.getElementById("restart-skip").addEventListener("click", () => {
+    pendingRestart = [];
+    restartDlg.close();
+  });
   document.getElementById("restart-go").addEventListener("click", async () => {
     try {
       await api("restart", { units: pendingRestart });
-      dlg.close();
+      restartDlg.close();
       stateEl.textContent = `restarted ${pendingRestart.length} unit(s)`;
+      pendingRestart = [];
       load();
     } catch (err) {
       alert(err.message);
@@ -388,51 +691,52 @@
 
   document.getElementById("save-one").addEventListener("click", async () => {
     if (selectedId == null) return;
+    setMsg(editMsg, "");
     const patch = {};
-    editForm.querySelectorAll("[data-key]").forEach(el => {
-      if (el.readOnly) return;
+    editBody.querySelectorAll("[data-key]").forEach(el => {
       const key = el.dataset.key;
-      if (!editableKeys.includes(key) && !(FIELD_META[key])) return;
+      if (!editableKeys.includes(key) && !FIELD_META[key]) return;
       patch[key] = el.value;
     });
     try {
       const data = await api("channel_put", { id: selectedId, patch });
       stateEl.textContent = `saved channel ${selectedId}`;
+      setMsg(editMsg, "Saved", "ok");
+      closeEditor();
       await load();
       askRestart(data.restart_units || []);
     } catch (err) {
-      alert(err.message);
+      setMsg(editMsg, err.message, "err");
     }
   });
 
-  document.getElementById("cancel-edit").addEventListener("click", () => {
-    editPanel.style.display = "none";
-    selectedId = null;
-  });
+  bulkOpen.addEventListener("click", openBulk);
 
   bulkApply.addEventListener("click", async () => {
     const ids = checkedIds();
     if (!ids.length) return;
     const patch = {};
-    bulkKeysEl.querySelectorAll(".bulk-key").forEach(row => {
+    bulkBody.querySelectorAll(".bulk-field").forEach(row => {
       const cb = row.querySelector(".bulk-enable");
-      if (!cb.checked) return;
+      if (!cb || !cb.checked) return;
       const key = cb.dataset.key;
       const control = row.querySelector("[data-key='" + key + "']");
       if (control) patch[key] = control.value;
     });
     if (!Object.keys(patch).length) {
-      alert("Check at least one parameter to apply.");
+      setMsg(bulkMsg, "Check at least one parameter to apply.", "err");
       return;
     }
     if (!confirm(`Apply ${Object.keys(patch).length} parameter(s) to channels ${ids.join(", ")}?`)) return;
+    setMsg(bulkMsg, "");
     try {
       const data = await api("channels_bulk", { ids, patch });
       stateEl.textContent = `updated ${data.updated.length} channel(s)`;
+      closeBulk();
       await load();
       askRestart(data.restart_units || []);
     } catch (err) {
-      alert(err.message);
+      setMsg(bulkMsg, err.message, "err");
     }
   });
 

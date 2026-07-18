@@ -285,9 +285,10 @@ Then from a LAN machine:
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
   (near `tail -f`). LAN-trust ops.
-- **Channels:** top nav → Channels — edit `/etc/nexvue/channels/<N>.env`
-  (single or bulk). Optional `CHANNEL_ALIAS` for friendly labels; path stays
-  `chN`. Save asks before restarting encoders.
+- **Channels:** top nav → Channels — channel list; click a row (or use Bulk
+  edit) to open a modal editor for `/etc/nexvue/channels/<N>.env`. Optional
+  `CHANNEL_ALIAS` for friendly labels; path stays `chN`. Save asks before
+  restarting encoders.
 
 ### Chromecast / Cast (custom WHEP receiver)
 
@@ -780,6 +781,13 @@ Services/Channels).
   as part of the value and break arithmetic checks. `nexvue-encode.sh` also
   defensively strips inline comments itself (`strip_inline()`), so this is
   safe even if the script is ever invoked outside the unit.
+- **Values with spaces must be shell-quoted** for the same reason (the file is
+  sourced by bash): an unquoted `CHANNEL_ALIAS=TVU 35` runs `35` as a command
+  and silently truncates the alias to `TVU` (journal tell:
+  `<N>.env: line NN: 35: command not found`). Write
+  `CHANNEL_ALIAS="TVU 35"`. The Channels page writer
+  (`nexvue-ops-env-update.py`) quotes such values automatically and reads
+  quoted values back correctly.
 - **`index.html` / `multiview.html` auto-discover the edge host** from
   `location.hostname` — load them via Apache at any address and WHEP/API/status
   all target that same host on their fixed ports (8889/9997/9998). Protocol

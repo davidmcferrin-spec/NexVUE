@@ -42,6 +42,18 @@ class TestParse(unittest.TestCase):
         keys = mod.parse_env_text("BITRATE_KBPS=4000   # note\n")
         self.assertEqual(keys["BITRATE_KBPS"], "4000")
 
+    def test_unquotes_double_quoted_value(self):
+        keys = mod.parse_env_text('CHANNEL_ALIAS="TVU 35"\n')
+        self.assertEqual(keys["CHANNEL_ALIAS"], "TVU 35")
+
+    def test_unquotes_single_quoted_value(self):
+        keys = mod.parse_env_text("CHANNEL_ALIAS='Cam 1 (Main)'\n")
+        self.assertEqual(keys["CHANNEL_ALIAS"], "Cam 1 (Main)")
+
+    def test_hash_inside_quotes_is_not_a_comment(self):
+        keys = mod.parse_env_text('CHANNEL_ALIAS="Feed #2 west"\n')
+        self.assertEqual(keys["CHANNEL_ALIAS"], "Feed #2 west")
+
 
 class TestApplyPatch(unittest.TestCase):
     def test_rewrites_active_key(self):
@@ -56,9 +68,12 @@ class TestApplyPatch(unittest.TestCase):
         self.assertNotIn("#LO_ENABLE=", out)
 
     def test_appends_missing_key(self):
+        # Values with spaces MUST be quoted: the systemd unit sources the env
+        # file through bash, where `CHANNEL_ALIAS=Prompter A` runs `A` as a
+        # command and drops the alias (the "TVU 35" field incident).
         out = mod.apply_patch(SAMPLE, {"CHANNEL_ALIAS": "Prompter A"})
         self.assertIn("# --- Ops UI ---", out)
-        self.assertIn("CHANNEL_ALIAS=Prompter A", out)
+        self.assertIn('CHANNEL_ALIAS="Prompter A"', out)
 
     def test_rejects_non_editable(self):
         with self.assertRaises(ValueError):
@@ -70,9 +85,41 @@ class TestApplyPatch(unittest.TestCase):
 
     def test_alias_sanitized(self):
         out = mod.apply_patch(SAMPLE, {"CHANNEL_ALIAS": "Cam 1 (Main)"})
-        self.assertIn("CHANNEL_ALIAS=Cam 1 (Main)", out)
+        self.assertIn('CHANNEL_ALIAS="Cam 1 (Main)"', out)
         with self.assertRaises(ValueError):
             mod.apply_patch(SAMPLE, {"CHANNEL_ALIAS": "bad`tick"})
+
+    def test_simple_values_stay_unquoted(self):
+        out = mod.apply_patch(SAMPLE, {"BITRATE_KBPS": "2500", "LO_FPS": "30000/1001"})
+        self.assertIn("BITRATE_KBPS=2500\n", out)
+        self.assertIn("LO_FPS=30000/1001\n", out)
+
+    def test_rejects_quotes_in_non_alias_values(self):
+        with self.assertRaises(ValueError):
+            mod.apply_patch(SAMPLE, {"EXTRA_ENC_ARGS": 'ref-frames="2"'})
+
+    def test_quoted_alias_roundtrip_and_bash_source(self):
+        out = mod.apply_patch(SAMPLE, {"CHANNEL_ALIAS": "TVU 35"})
+        self.assertIn('CHANNEL_ALIAS="TVU 35"', out)
+        keys = mod.parse_env_text(out)
+        self.assertEqual(keys["CHANNEL_ALIAS"], "TVU 35")
+        # The file must actually source cleanly in bash (how the systemd unit
+        # consumes it) and yield the alias intact.
+        import shutil
+        import subprocess
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash not available")
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "0.env"
+            p.write_text(out, encoding="utf-8")
+            r = subprocess.run(
+                [bash, "-c", 'set -a; . "$1"; printf %s "$CHANNEL_ALIAS"', "_", str(p)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout, "TVU 35")
+            self.assertEqual(r.stderr, "")
 
     def test_roundtrip_file(self):
         with tempfile.TemporaryDirectory() as td:

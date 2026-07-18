@@ -53,6 +53,24 @@ ASSIGN_RE = re.compile(
 
 ALIAS_SAFE_RE = re.compile(r"^[\w .:/()+#@&'*-]{0,64}$")
 
+# Values matching this need no quoting when written. Anything else (spaces,
+# parens, '#', ...) is double-quoted: the encoder unit SOURCES the env file
+# through bash, so an unquoted `CHANNEL_ALIAS=TVU 35` runs `35` as a command
+# with CHANNEL_ALIAS=TVU in its environment — the alias is silently lost.
+UNQUOTED_SAFE_RE = re.compile(r"^[A-Za-z0-9_./:+=,-]+$")
+
+
+def format_assignment_value(value: str) -> str:
+    """Quote a value for a bash-sourced env file when required.
+
+    Double quotes are safe because sanitize_value rejects every character
+    that bash treats specially inside them ($ ` \\ " and, for non-alias
+    keys, ' as well).
+    """
+    if value == "" or UNQUOTED_SAFE_RE.match(value):
+        return value
+    return f'"{value}"'
+
 
 def channel_path(n: int) -> Path:
     if not isinstance(n, int) or n < 0 or n > 7:
@@ -70,11 +88,16 @@ def parse_env_text(text: str) -> dict[str, str]:
         _indent, hashmark, _sp, key, value = m.groups()
         if hashmark:
             continue
-        # Strip a trailing inline comment only when preceded by whitespace
-        # (shell-sourced files on live boxes sometimes have them).
-        if " #" in value:
-            value = value.split(" #", 1)[0]
-        out[key] = value.strip()
+        value = value.strip()
+        # Quoted value (as written by format_assignment_value, or by hand):
+        # take the quoted content verbatim — a '#' inside is NOT a comment.
+        if len(value) >= 2 and value[0] in "\"'" and value[0] == value[-1]:
+            value = value[1:-1]
+        elif " #" in value:
+            # Strip a trailing inline comment only when preceded by whitespace
+            # (shell-sourced files on live boxes sometimes have them).
+            value = value.split(" #", 1)[0].strip()
+        out[key] = value
     return out
 
 
@@ -89,7 +112,8 @@ def sanitize_value(key: str, value: str) -> str:
             )
         return value
     # Everything else: alphanumeric-ish ops values; reject shell metacharacters
-    if re.search(r"[`$;&|<>\\]", value):
+    # (quotes included, so format_assignment_value's double-quoting is safe).
+    if re.search(r"[`$;&|<>\\\"']", value):
         raise ValueError(f"{key}: disallowed characters in value")
     return value
 
@@ -131,7 +155,7 @@ def apply_patch(text: str, patch: dict[str, str]) -> str:
         indent, hashmark, _sp, key, _old = m.groups()
         ending = line_ending(line)
         if key in pending and not hashmark and key not in updated_active:
-            val = pending.pop(key)
+            val = format_assignment_value(pending.pop(key))
             updated_active.add(key)
             new_lines.append(f"{indent}{key}={val}{ending}")
             continue
@@ -149,7 +173,7 @@ def apply_patch(text: str, patch: dict[str, str]) -> str:
             continue
         indent, _hashmark, _sp, k, _old = m.groups()
         ending = line_ending(line)
-        val = pending.pop(key)
+        val = format_assignment_value(pending.pop(key))
         new_lines[idx] = f"{indent}{k}={val}{ending}"
 
     # Append anything still missing.
@@ -161,7 +185,7 @@ def apply_patch(text: str, patch: dict[str, str]) -> str:
                 new_lines.append("\n")
             new_lines.append("# --- Ops UI ---\n")
         for key, val in pending.items():
-            new_lines.append(f"{key}={val}\n")
+            new_lines.append(f"{key}={format_assignment_value(val)}\n")
 
     return "".join(new_lines)
 
