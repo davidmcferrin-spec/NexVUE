@@ -113,8 +113,9 @@ specifically because this box can't get additional ports opened.
   `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` knob.
   Remaining before Phase 1 is formally "done" (hardware/operator, not more
   code): Quad 2 bring-up (`MAX_DEVICES=8`, intended connectors Input,
-  `nexvue-encode@0..N`), 72h soak with all intended channels hot, deploy
-  current UI + metrics (Temperature chart). On the edge:
+  enable `nexvue-encode@N` only for patched ports — disable empty ones to
+  stop restart storms), 72h soak on locked channels, deploy current UI +
+  metrics (Temperature chart). On the edge:
   `sudo ./nexvue-phase1-closeout.sh`. Glass-to-glass latency photos remain
   deferred until on-site/bench access.
 - **Phase 1.5 (next): Python supervisor** — persistent RTSP session with
@@ -136,6 +137,10 @@ specifically because this box can't get additional ports opened.
 
 ## Known open items / risks
 
+- Empty Quad ports with `nexvue-encode@N` still enabled restart-loop
+  (`RestartSec=3`) until Phase 1.5 slate — enable encoders only for patched
+  Input connectors; closeout script warns and prints `disable --now` when it
+  sees unlocked+active storms.
 - Glass-to-glass latency still unmeasured with a burnt-in clock (datacenter
   deployment — no co-located source monitor). RTT-based estimate recorded in
   README; re-measure on bench when possible. Duo 2 connector-direction notes

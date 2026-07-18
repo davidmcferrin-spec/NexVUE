@@ -403,19 +403,34 @@ latency than the test player shows.
 
 ### 72-hour soak
 
-Leave all populated channels running for 72h before calling Phase 1 done.
-On the edge box, from the repo root:
+Leave **only populated** channels running for 72h before calling Phase 1 done.
+**Do not enable `nexvue-encode@N` on empty Quad ports** — with no lock,
+`Restart=always` / `RestartSec=3` restart-loops the unit (thousands of
+`Started` lines in journalctl) until the Phase 1.5 slate supervisor lands.
+Disable empty channels:
 
 ```bash
-sudo ./nexvue-phase1-closeout.sh              # units, lock, restarts, captions
-# or after a shorter bench soak:
-sudo ./nexvue-phase1-closeout.sh --since 24h
-journalctl -u 'nexvue-encode@*' --since -72h | grep -ci restart   # want 0
+# example: devices 4–7 unlocked / unpatched
+sudo systemctl disable --now nexvue-encode@{4,5,6,7}
 ```
 
-Watch for iGPU thermal throttling (`intel_gpu_top`) with all channels hot
-(8 on Quad 2, 4 on Duo 2). Confirm HI/LO both play and CC overlay stays live
-on a captioned feed for the soak window.
+On the edge box, from the repo root (or `/usr/local/bin` after `setup.sh`):
+
+```bash
+sudo ./nexvue-phase1-closeout.sh              # units, lock, per-instance Started
+# or after a shorter bench soak / after stopping a storm:
+sudo ./nexvue-phase1-closeout.sh --since 1h
+sudo ./nexvue-phase1-closeout.sh --since 24h
+```
+
+The closeout script counts `Started` **per** `nexvue-encode@N`, fails only when
+a **locked** input is storming, and warns (with a `disable --now` hint) when an
+unlocked port still has an encoder enabled. After stopping a storm, start a
+**clean** soak clock — the prior 72h journal stays polluted.
+
+Watch for iGPU thermal throttling (`intel_gpu_top`) with all *intended*
+channels hot (up to 8 on Quad 2). Confirm HI/LO both play and CC overlay stays
+live on a captioned feed for the soak window.
 
 ### Phase 1 closeout checklist
 
@@ -425,11 +440,13 @@ more code). Current hardware: **DeckLink Quad 2**.
 1. **Quad 2 connectors → Input** for every intended capture BNC
    (`BlackmagicDesktopVideoSetup`). Confirm with `decklink-status` (lock +
    mode per device; order is not guaranteed sequential). Set
-   `MAX_DEVICES=8`; enable `nexvue-encode@0..N` for populated inputs.
+   `MAX_DEVICES=8`; enable `nexvue-encode@N` **only** for patched inputs
+   (leave empty BNCs disabled until Phase 1.5 or a feed is present).
 2. **Latency:** RTT-based estimate recorded above (~200 ms). Glass-to-glass
    photo deferred (remote rack) — not a Phase 1 blocker.
-3. **72h soak** with all intended `nexvue-encode@N` up; closeout script green
-   (or only expected warnings); restart count ~0 beyond initial enable.
+3. **72h soak** with intended (locked) `nexvue-encode@N` up; closeout script
+   green (or only expected warnings on empty ports); locked channels show
+   Started ≤ 2 in a clean window after any storm remediation.
 4. **Deploy current web UI** (`setup.sh` or manual `cp` of player / multiview /
    metrics / ops pages into the Apache docroot). Restart `nexvue-metrics` so
    Temperature columns migrate; confirm Metrics Temperature chart.

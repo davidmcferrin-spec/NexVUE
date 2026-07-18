@@ -6,7 +6,7 @@
 # summary for the remaining Phase 1 gate items that can be automated:
 #   - DeckLink inputs locked / modes (connector direction sanity)
 #   - encode / MediaMTX / status / metrics units active
-#   - encoder restart count over the last 72h (soak)
+#   - per-instance encoder Started counts over the soak window
 #   - caption JSON freshness per channel (when CAPTIONS_ENABLE)
 #   - iGPU sample presence in metrics DB (optional)
 #
@@ -14,9 +14,13 @@
 #   sudo ./nexvue-phase1-closeout.sh
 #   sudo ./nexvue-phase1-closeout.sh --since 24h   # shorter soak window
 #
+# Only enable nexvue-encode@N for patched Input connectors. Empty Quad ports
+# left enabled restart-loop (RestartSec=3) until Phase 1.5 slate supervisor.
+#
 # Manual items this script cannot finish:
 #   - confirm Quad 2 connectors are Input (BlackmagicDesktopVideoSetup)
 #   - glass-to-glass latency photos (deferred on remote datacenter; see README)
+#   - disable empty-channel units (script prints the command when needed)
 ###############################################################################
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
@@ -28,6 +32,9 @@ ok()   { echo "${GREEN}[ OK ]${RESET} $*"; PASS+=("$*"); }
 warn() { echo "${YELLOW}[WARN]${RESET} $*"; WARN+=("$*"); }
 fail() { echo "${RED}[FAIL]${RESET} $*"; FAIL+=("$*"); }
 PASS=(); WARN=(); FAIL=()
+
+# Fresh enable + one heal is normal; above this on a locked input = storm.
+STARTED_OK_MAX=2
 
 SINCE="72h"
 while [ $# -gt 0 ]; do
@@ -45,6 +52,24 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+read_device_number() {
+  local n=$1 f="/etc/nexvue/channels/${n}.env" v=""
+  if [ -f "$f" ]; then
+    v="$(grep -E '^[[:space:]]*DEVICE_NUMBER=' "$f" 2>/dev/null | tail -1 \
+      | cut -d= -f2- || true)"
+    v="${v%%#*}"
+    v="${v//\"/}"
+    v="${v//\'/}"
+    v="${v// /}"
+    v="${v//$'\t'/}"
+  fi
+  if [[ "${v}" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$v"
+  else
+    printf '%s' "$n"
+  fi
+}
+
 echo "=== NexVUE Phase 1 closeout ($(date -Is)) since=${SINCE} ==="
 
 # ---- Units ------------------------------------------------------------------
@@ -57,9 +82,11 @@ for u in mediamtx nexvue-status nexvue-metrics; do
 done
 
 ENC_ACTIVE=0
+ACTIVE_NS=()
 for n in 0 1 2 3 4 5 6 7; do
   if systemctl is-active --quiet "nexvue-encode@${n}"; then
     ENC_ACTIVE=$((ENC_ACTIVE + 1))
+    ACTIVE_NS+=("$n")
     ok "encoder active: nexvue-encode@${n}"
   elif [ -f "/etc/nexvue/channels/${n}.env" ]; then
     warn "env present but encoder inactive: nexvue-encode@${n}"
@@ -70,6 +97,8 @@ if [ "$ENC_ACTIVE" -eq 0 ]; then
 fi
 
 # ---- DeckLink status --------------------------------------------------------
+STATUS_JSON=""
+declare -A LOCKED_BY_IDX=()
 if [ -x /usr/local/bin/decklink-status ]; then
   if command -v jq >/dev/null 2>&1; then
     STATUS_JSON="$(/usr/local/bin/decklink-status 2>/dev/null || true)"
@@ -78,35 +107,77 @@ if [ -x /usr/local/bin/decklink-status ]; then
       TOTAL="$(printf '%s' "$STATUS_JSON" | jq -r '.devices|length')"
       ok "decklink-status: ${LOCKED}/${TOTAL} inputs locked"
       printf '%s' "$STATUS_JSON" | jq -r '.devices[]? | "  device \(.index): locked=\(.input_locked) mode=\(.input_mode // "-")"'
-      # Hint: unlocked rows with no mode often mean Output direction or unpatched.
+      while IFS=$'\t' read -r idx locked; do
+        [ -n "$idx" ] || continue
+        LOCKED_BY_IDX["$idx"]="$locked"
+      done < <(printf '%s' "$STATUS_JSON" | jq -r '.devices[]? | "\(.index)\t\(.input_locked)"')
       UNLOCKED="$(printf '%s' "$STATUS_JSON" | jq -r '[.devices[]? | select(.input_locked!=true)] | length')"
       if [ "${UNLOCKED:-0}" -gt 0 ]; then
-        warn "unlocked inputs present — confirm Quad 2 connectors are Input (BlackmagicDesktopVideoSetup) and cables patched"
+        warn "unlocked inputs present — empty BNC or not Input (BlackmagicDesktopVideoSetup); do not leave encode@N enabled on empty ports (restart loop until Phase 1.5)"
       fi
     else
       fail "decklink-status returned no JSON"
     fi
   else
-    warn "jq missing — install jq to summarize decklink-status"
+    warn "jq missing — install jq to summarize decklink-status and correlate soak restarts"
   fi
 else
   warn "decklink-status not installed — player dots stay gray; make DECKLINK_SDK=... && sudo make install"
 fi
 
-# ---- Soak: encoder restarts -------------------------------------------------
+# ---- Soak: per-instance encoder Started counts ------------------------------
+DISABLE_CANDIDATES=()
 if command -v journalctl >/dev/null 2>&1; then
-  # Count systemd "Started" lines for encode instances in the window.
-  RESTARTS="$(journalctl -u 'nexvue-encode@*' --since "-${SINCE}" --no-pager 2>/dev/null \
-    | grep -ciE 'Started NexVUE|Started nexvue-encode' || true)"
-  RESTARTS="${RESTARTS//$'\r'/}"
-  if [ "${RESTARTS:-0}" -eq 0 ]; then
-    ok "encode restarts in last ${SINCE}: 0"
-  elif [ "${RESTARTS:-0}" -le "$ENC_ACTIVE" ]; then
-    # One "Started" per currently-running instance is expected if soak began
-    # with a fresh enable — not proof of crash loops.
-    warn "encode Started lines in last ${SINCE}: ${RESTARTS} (≈ active count; inspect journal for crash loops)"
+  if [ "${#ACTIVE_NS[@]}" -eq 0 ]; then
+    warn "no active encoders — skip soak Started counts"
   else
-    fail "encode Started lines in last ${SINCE}: ${RESTARTS} (want ~0 beyond initial enable)"
+    echo
+    echo "Encode soak (Started lines in last ${SINCE}):"
+    printf '  %-18s %-8s %-8s %-8s %s\n' "unit" "device" "locked" "Started" "verdict"
+    for n in "${ACTIVE_NS[@]}"; do
+      unit="nexvue-encode@${n}"
+      dev="$(read_device_number "$n")"
+      started="$(journalctl -u "$unit" --since "-${SINCE}" --no-pager 2>/dev/null \
+        | grep -ciE 'Started NexVUE|Started nexvue-encode' || true)"
+      started="${started//$'\r'/}"
+      started="${started:-0}"
+
+      locked_raw="${LOCKED_BY_IDX[$dev]:-unknown}"
+      case "$locked_raw" in
+        true)  locked="true" ;;
+        false) locked="false" ;;
+        *)     locked="unknown" ;;
+      esac
+
+      if [ "$started" -le "$STARTED_OK_MAX" ]; then
+        verdict="ok"
+        printf '  %-18s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$verdict"
+        ok "${unit}: Started=${started} (device ${dev}, locked=${locked})"
+      elif [ "$locked" = "true" ]; then
+        verdict="FAIL storm on locked input"
+        printf '  %-18s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$verdict"
+        fail "${unit}: Started=${started} on locked device ${dev} (want ≤${STARTED_OK_MAX}; inspect journal)"
+      elif [ "$locked" = "false" ]; then
+        verdict="WARN empty/unlocked — disable or Phase 1.5"
+        printf '  %-18s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$verdict"
+        warn "${unit}: Started=${started} on unlocked device ${dev} — disable until signal or Phase 1.5 slate"
+        DISABLE_CANDIDATES+=("$n")
+      else
+        verdict="WARN lock unknown — inspect"
+        printf '  %-18s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$verdict"
+        warn "${unit}: Started=${started} (device ${dev}, lock unknown) — inspect journalctl -u ${unit}"
+      fi
+    done
+
+    if [ "${#DISABLE_CANDIDATES[@]}" -gt 0 ]; then
+      # Brace expansion: nexvue-encode@{4,5,6,7}
+      joined="$(IFS=,; echo "${DISABLE_CANDIDATES[*]}")"
+      echo
+      echo "Remediation (empty / unlocked BNCs still encoding — stop the restart storm):"
+      echo "  sudo systemctl disable --now nexvue-encode@{${joined}}"
+      echo "  sudo nexvue-phase1-closeout.sh --since 1h"
+      echo "  # then start a clean soak clock on locked channels only (24h → 72h)"
+    fi
   fi
 else
   warn "journalctl unavailable"
@@ -147,9 +218,11 @@ echo
 echo "Manual Phase 1 gates (not automatable here):"
 echo "  1. Quad 2: every intended connector set to Input (BlackmagicDesktopVideoSetup);"
 echo "     MAX_DEVICES=8; map BNCs → device-number via decklink-status"
-echo "  2. Latency: RTT-based ~200 ms estimate is accepted for remote datacenter;"
+echo "  2. Only enable nexvue-encode@N for patched Input ports — empty ports restart-loop"
+echo "     until Phase 1.5; after disabling empties, re-soak locked channels (clean journal window)"
+echo "  3. Latency: RTT-based ~200 ms estimate is accepted for remote datacenter;"
 echo "     glass-to-glass photo deferred (see README) — not a Phase 1 blocker"
-echo "  3. Confirm soak window with all intended channels hot, then re-run this script"
+echo "  4. Confirm soak window with all intended (locked) channels hot, then re-run this script"
 
 echo
 echo "=== Summary: ${#PASS[@]} ok, ${#WARN[@]} warn, ${#FAIL[@]} fail ==="
