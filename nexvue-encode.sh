@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 ###############################################################################
-# nexvue-encode.sh — one DeckLink input -> H.264/Opus -> MediaMTX (RTSP)
+# nexvue-encode.sh — reference / debug DeckLink → H.264/Opus → MediaMTX (RTSP)
 #
-# Invoked by systemd template unit nexvue-encode@<n>.service with environment
-# loaded from /etc/nexvue/channels/<n>.env
+# Production ExecStart is nexvue-supervisor.py (Phase 1.5). This script remains
+# as a hand-invocable gst-launch pipeline for bring-up and assembly tests.
+#
+# Invoked historically by systemd with environment from
+# /etc/nexvue/channels/<n>.env (plus optional /etc/nexvue/nexvue.env).
 #
 # v3: adds optional LO rendition ("poor man's ABR").
 #   LO_ENABLE=true adds a second, lower-bitrate encode of the SAME capture via

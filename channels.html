@@ -491,11 +491,6 @@
       type: "text",
       tip: "Friendly label shown in Player, Multiview, and Settings. Does not change the MediaMTX path — WHEP still uses CHANNEL_PATH (ch0, ch1, …). Spaces are fine (quoted on write). Blank = UIs show the path only.",
     },
-    MAX_DEVICES: {
-      label: "MAX_DEVICES",
-      type: "text",
-      tip: "Installed card channel count used to validate DEVICE_NUMBER. Duo 2 / Duo 2 Mini = 4, Quad 2 = 8, original Duo = 2. Set 4 on a Duo so a typo'd device number fails fast. Range typically 2–8. Blank = 8 (Quad 2 default).",
-    },
     DEINT_FIELDS: {
       label: "DEINT_FIELDS",
       type: "select",
@@ -581,6 +576,21 @@
       type: "text",
       tip: "LO framerate as a GStreamer fraction (e.g. 30000/1001 ≈ 29.97p, cellular-friendly). Blank = 30000/1001.",
     },
+    SIGNAL_LOSS_DEBOUNCE_S: {
+      label: "SIGNAL_LOSS_DEBOUNCE_S",
+      type: "text",
+      tip: "Seconds of continuous DeckLink unlock before switching LIVE → NO SIGNAL slate. Keep generous so brief hiccups heal as black frames without a slate flash (matches the stable Phase 1 healing behavior). Default 15. Typical range 5–30.",
+    },
+    SIGNAL_ACQUIRE_DEBOUNCE_S: {
+      label: "SIGNAL_ACQUIRE_DEBOUNCE_S",
+      type: "text",
+      tip: "Seconds of continuous lock + valid video before promoting SLATE → LIVE. Prevents flapping on intermittent reconnect. Default 1.",
+    },
+    DECKLINK_RETRY_S: {
+      label: "DECKLINK_RETRY_S",
+      type: "text",
+      tip: "Seconds to wait before rebuilding a DeckLink capture branch after a hard ERROR/EOS. Slate keeps publishing in the meantime. Default 3.",
+    },
   };
 
   const FIELD_GROUPS = [
@@ -590,7 +600,7 @@
       title: "Video",
       keys: [
         "BITRATE_KBPS", "GOP_FRAMES", "DEINT_FIELDS", "VIDEO_ENCODER",
-        "EXTRA_ENC_ARGS", "DECKLINK_BUFFER_FRAMES", "MAX_DEVICES",
+        "EXTRA_ENC_ARGS", "DECKLINK_BUFFER_FRAMES",
       ],
     },
     {
@@ -602,6 +612,11 @@
       id: "lo",
       title: "Low-res rendition",
       keys: ["LO_ENABLE", "LO_PRESET", "LO_WIDTH", "LO_HEIGHT", "LO_BITRATE_KBPS", "LO_FPS"],
+    },
+    {
+      id: "supervisor",
+      title: "Signal / slate (Phase 1.5)",
+      keys: ["SIGNAL_LOSS_DEBOUNCE_S", "SIGNAL_ACQUIRE_DEBOUNCE_S", "DECKLINK_RETRY_S"],
     },
   ];
 

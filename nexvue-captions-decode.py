@@ -69,6 +69,16 @@ class Cea608Cc1:
     MAX_LINES = 2
 
     def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        """Fully clear all decoder state: displayed/non-displayed memory,
+        cursor position, mode, and the last-emitted text. Used both at
+        construction and on an explicit CLEAR control command (the Phase 1.5
+        supervisor sends one once on entering SLATE) — a stale caption from
+        the last live segment must never survive a DeckLink <-> slate
+        switch, so this is a full reset, not just an erase-displayed-memory
+        (EDM) like the 608 control code."""
         self._displayed = [["" for _ in range(self.COLS)] for _ in range(self.ROWS)]
         self._written = [["" for _ in range(self.COLS)] for _ in range(self.ROWS)]
         self._row = 14  # 0-based; PAC row 15
@@ -320,8 +330,24 @@ def atomic_write_json(path: Path, obj: dict) -> None:
     os.replace(str(tmp), str(path))
 
 
+def _open_control_fd(control_fifo: Path) -> int | None:
+    """Open the control FIFO's read end, non-blocking. O_NONBLOCK on the
+    read side of a FIFO always succeeds immediately (unlike the write
+    side), regardless of whether a writer is currently connected — the
+    caller distinguishes "no writer yet" from real data purely by what a
+    subsequent read() returns (see decode_stream)."""
+    try:
+        return os.open(str(control_fifo), os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+
+
 def decode_stream(
-    fifo: Path, state_path: Path, channel: str, idle_erase_s: float = 16.0
+    fifo: Path,
+    state_path: Path,
+    channel: str,
+    idle_erase_s: float = 16.0,
+    control_fifo: Path | None = None,
 ) -> None:
     dec = Cea608Cc1()
     seq = 0
@@ -341,6 +367,20 @@ def decode_stream(
             },
         )
 
+    # The control FIFO (Phase 1.5 supervisor) carries out-of-band commands —
+    # today just "CLEAR", sent once on entering SLATE so the overlay blanks
+    # immediately instead of waiting out idle_erase_s. On Linux a FIFO read
+    # end with zero connected writers reads as EOF (0 bytes) even if a
+    # writer connects again later, so losing the writer is never treated as
+    # fatal here (unlike the DATA fifo below): close, wait out
+    # _CONTROL_REOPEN_S, try again. Bounds the reopen rate so a persistently
+    # writerless control FIFO (e.g. captions disabled downstream, or the
+    # supervisor hasn't written a CLEAR yet) never becomes a busy-loop.
+    _CONTROL_REOPEN_S = 1.0
+    control_fd = _open_control_fd(control_fifo) if control_fifo is not None else None
+    control_buf = b""
+    last_control_reopen = time.monotonic()
+
     # Open blocks until the encode pipeline opens the write end.
     with open(fifo, "rb", buffering=0) as fh:
         fd = fh.fileno()
@@ -349,38 +389,77 @@ def decode_stream(
         # pairs at frame rate, so raw bytes keep flowing even when nothing
         # is being captioned — the idle-erase timer must key off real data.
         last_activity = time.monotonic()
-        while True:
-            ready, _, _ = select.select([fd], [], [], 1.0)
-            now = time.monotonic()
-            if ready:
-                chunk = fh.read(256)
-                if not chunk:
-                    # Writer closed (encoder restart) — exit; encode respawns us.
-                    break
-                buf += chunk
-                while len(buf) >= 2:
-                    b1, b2 = buf[0], buf[1]
-                    buf = buf[2:]
-                    if (b1 & 0x7F) or (b2 & 0x7F):
-                        last_activity = now
-                    # A malformed pair must never kill this process: the FIFO
-                    # would lose its reader, filesink would EPIPE, and the
-                    # WHOLE encode pipeline (video included) would restart.
+        try:
+            while True:
+                watch = [fd]
+                if control_fd is not None:
+                    watch.append(control_fd)
+                ready, _, _ = select.select(watch, [], [], 1.0)
+                now = time.monotonic()
+
+                if control_fd is not None and control_fd in ready:
                     try:
-                        text = dec.feed_pair(b1, b2)
-                    except Exception as e:  # noqa: BLE001
-                        print(
-                            f"[nexvue-captions-decode] decode error "
-                            f"(pair {b1:#04x},{b2:#04x}): {e}",
-                            file=sys.stderr,
-                        )
-                        continue
+                        chunk = os.read(control_fd, 256)
+                    except OSError:
+                        chunk = b""
+                    if not chunk:
+                        try:
+                            os.close(control_fd)
+                        except OSError:
+                            pass
+                        control_fd = None
+                        last_control_reopen = now
+                    else:
+                        control_buf += chunk
+                        while b"\n" in control_buf:
+                            line, control_buf = control_buf.split(b"\n", 1)
+                            if line.strip() == b"CLEAR":
+                                dec.reset()
+                                write_state("")
+
+                if (
+                    control_fd is None
+                    and control_fifo is not None
+                    and (now - last_control_reopen) >= _CONTROL_REOPEN_S
+                ):
+                    control_fd = _open_control_fd(control_fifo)
+                    last_control_reopen = now
+
+                if fd in ready:
+                    chunk = fh.read(256)
+                    if not chunk:
+                        # Writer closed (encoder restart) — exit; encode respawns us.
+                        break
+                    buf += chunk
+                    while len(buf) >= 2:
+                        b1, b2 = buf[0], buf[1]
+                        buf = buf[2:]
+                        if (b1 & 0x7F) or (b2 & 0x7F):
+                            last_activity = now
+                        # A malformed pair must never kill this process: the FIFO
+                        # would lose its reader, filesink would EPIPE, and the
+                        # WHOLE encode pipeline (video included) would restart.
+                        try:
+                            text = dec.feed_pair(b1, b2)
+                        except Exception as e:  # noqa: BLE001
+                            print(
+                                f"[nexvue-captions-decode] decode error "
+                                f"(pair {b1:#04x},{b2:#04x}): {e}",
+                                file=sys.stderr,
+                            )
+                            continue
+                        if text is not None:
+                            write_state(text)
+                if idle_erase_s > 0 and (now - last_activity) >= idle_erase_s:
+                    text = dec.idle_clear()
                     if text is not None:
                         write_state(text)
-            if idle_erase_s > 0 and (now - last_activity) >= idle_erase_s:
-                text = dec.idle_clear()
-                if text is not None:
-                    write_state(text)
+        finally:
+            if control_fd is not None:
+                try:
+                    os.close(control_fd)
+                except OSError:
+                    pass
 
 
 def _env_float(name: str, default: float) -> float:
@@ -394,6 +473,13 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="NexVUE CEA-608/CC1 caption decoder")
     p.add_argument("--channel", required=True, help="MediaMTX path, e.g. ch0")
     p.add_argument("--fifo", required=True, help="Path to raw CEA-608 FIFO")
+    p.add_argument(
+        "--control-fifo",
+        default=None,
+        help="Optional control FIFO (Phase 1.5 supervisor). A 'CLEAR' line "
+        "fully resets the decoder and immediately writes an empty/cleared "
+        "state, instead of waiting out --idle-erase-s.",
+    )
     p.add_argument(
         "--state-dir",
         default="/run/nexvue/captions",
@@ -430,8 +516,12 @@ def main(argv: list[str] | None = None) -> int:
         },
     )
 
+    control_fifo = Path(args.control_fifo) if args.control_fifo else None
+
     try:
-        decode_stream(fifo, state_path, channel, idle_erase_s=args.idle_erase_s)
+        decode_stream(
+            fifo, state_path, channel, idle_erase_s=args.idle_erase_s, control_fifo=control_fifo
+        )
     except KeyboardInterrupt:
         return 0
     except OSError as e:

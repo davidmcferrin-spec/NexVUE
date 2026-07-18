@@ -144,12 +144,19 @@ class TestApplyPatch(unittest.TestCase):
             p = Path(td) / "0.env"
             p.write_text(SAMPLE, encoding="utf-8")
             text = p.read_text(encoding="utf-8")
-            new = mod.apply_patch(text, {"MAX_DEVICES": "8", "ENABLE_AUDIO": "false"})
+            new = mod.apply_patch(text, {
+                "ENABLE_AUDIO": "false",
+                "SIGNAL_LOSS_DEBOUNCE_S": "15",
+            })
             p.write_text(new, encoding="utf-8")
             keys = mod.parse_env_text(p.read_text(encoding="utf-8"))
-            self.assertEqual(keys["MAX_DEVICES"], "8")
             self.assertEqual(keys["ENABLE_AUDIO"], "false")
+            self.assertEqual(keys["SIGNAL_LOSS_DEBOUNCE_S"], "15")
             self.assertEqual(keys["CHANNEL_PATH"], "ch0")
+
+    def test_max_devices_not_channel_editable(self):
+        with self.assertRaises(ValueError):
+            mod.apply_patch(SAMPLE, {"MAX_DEVICES": "4"})
 
 
 if __name__ == "__main__":

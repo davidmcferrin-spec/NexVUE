@@ -111,19 +111,40 @@ specifically because this box can't get additional ports opened.
   stayed empty on real hardware even though interactive `intel_gpu_top`
   worked. `NEXVUE_INTEL_GPU_TOP_PERIOD_MS` (default 1000) replaced the old
   `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` knob.
-  Remaining before Phase 1 is formally "done" (hardware/operator, not more
-  code): Quad 2 bring-up (`MAX_DEVICES=8`, intended connectors Input,
-  enable `nexvue-encode@N` only for patched ports — disable empty ones to
-  stop restart storms), 72h soak on locked channels, deploy current UI +
-  metrics (Temperature chart). On the edge:
-  `sudo ./nexvue-phase1-closeout.sh`. Glass-to-glass latency photos remain
-  deferred until on-site/bench access.
-- **Phase 1.5 (next): Python supervisor** — persistent RTSP session with
-  DeckLink/slate input switching ("NO SIGNAL" burn-in) so no-signal-at-boot
-  serves a slate instead of a restart loop. Full spec in README
-  ("Phase 1.5 supervisor — specification"); **owner must confirm** switch
-  mechanism, lock-signal source, and apt GI deps before any code.
-  Must keep the caption extract branch (or clear cues) when leaving DeckLink.
+  Remaining before Phase 1 soak is formally "done" (hardware/operator):
+  Quad 2 inputs + 72h soak with supervisor; deploy current UI. Station-wide
+  `MAX_DEVICES` lives in `/etc/nexvue/nexvue.env`. Glass-to-glass latency
+  photos remain deferred until on-site/bench access.
+- **Phase 1.5: implemented (`nexvue-supervisor.py`)** — persistent RTSP
+ session with DeckLink/slate input switching ("NO SIGNAL" burn-in) so
+ no-signal-at-boot serves a slate instead of a restart loop.
+ `nexvue-encode@.service` ExecStart now execs the supervisor directly
+ (`nexvue-encode.sh` stays as a standalone reference/debug pipeline, still
+ covered by its own `test/test-pipeline-assembly.sh`). Architecture: one
+ persistent `input-selector` each for video/audio with a permanent "slate"
+ pad (videotestsrc+textoverlay / silent audiotestsrc) and a dynamically
+ added/removed "DeckLink" pad — both sides normalize to identical caps so
+ flipping `active-pad` never renegotiates the encoder or drops the
+ RTSP/WHEP session. A pure-Python `StateMachine`
+ (LIVE/SLATE/RECOVERING, injectable clock, no GI dependency) drives the
+ switch: LIVE→SLATE needs `SIGNAL_LOSS_DEBOUNCE_S` (default 15s — generous
+ on purpose, hiccups already ride through as black frames) of continuous
+ no-signal; SLATE→LIVE needs the `decklinkvideosrc` `signal` property AND a
+ real non-GAP buffer held for `SIGNAL_ACQUIRE_DEBOUNCE_S` (default 1s) — a
+ parameter lock alone is not proof frames are flowing. A GStreamer
+ ERROR/EOS on the DeckLink branch only (never the shared RTSP/encode path)
+ tears down and rebuilds just that capture bin after `DECKLINK_RETRY_S`
+ (default 3s); a common-path error exits non-zero for systemd `Restart=`.
+ Captions: `output-cc`/`ccextractor` stay attached to the DeckLink branch
+ continuously (even while SLATE is selected); entering SLATE sends one
+ `CLEAR` line over a new control FIFO to `nexvue-captions-decode.py`
+ (`Cea608Cc1.reset()` — a full reset, not just erase-displayed-memory) so
+ the overlay blanks immediately instead of waiting out the idle-erase
+ timer. New apt deps (never pip): `python3-gi gir1.2-glib-2.0
+ gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0`, added to `setup.sh`.
+ The module is import-safe with zero GI installed (`GST_AVAILABLE` guard) —
+ `load_config()` and `StateMachine` are unit-tested without GStreamer at
+ all (`test/test_nexvue_supervisor.py`).
 - **Phase 2: PHP portal** — channel catalog, local bcrypt + JWT issuance,
   MediaMTX JWKS auth. Open decision: publisher auth pattern (long-lived
   publish JWT vs authMethod:http with loopback exemption) — see mediamtx.yml.
@@ -137,11 +158,13 @@ specifically because this box can't get additional ports opened.
 
 ## Known open items / risks
 
-- Empty Quad ports with `nexvue-encode@N` still enabled restart-loop
- (`RestartSec=3`) until Phase 1.5 slate — enable encoders only for patched
- Input connectors; closeout script warns and prints `disable --now` when it
- sees unlocked+active storms. Parking is now also doable from the Services
- page Enable/Disable toggle (encoder units only).
+- Empty Quad ports no longer restart-loop now that Phase 1.5's
+ `nexvue-supervisor.py` serves a "NO SIGNAL" slate instead — but there is
+ still no reason to run an encoder against an unpatched port, so still
+ enable `nexvue-encode@N` only for patched Input connectors; closeout
+ script warns and prints `disable --now` for unlocked+active channels.
+ Parking is also doable from the Services page Enable/Disable toggle
+ (encoder units only).
 - Glass-to-glass latency still unmeasured with a burnt-in clock (datacenter
   deployment — no co-located source monitor). RTT-based estimate recorded in
   README; re-measure on bench when possible. Duo 2 connector-direction notes

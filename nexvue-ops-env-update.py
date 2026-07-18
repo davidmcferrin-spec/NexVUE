@@ -24,7 +24,6 @@ CHANNELS_DIR = Path("/etc/nexvue/channels")
 # identity/derived and stay read-only in the API.
 EDITABLE_KEYS = frozenset({
     "CHANNEL_ALIAS",
-    "MAX_DEVICES",
     "DEINT_FIELDS",
     "BITRATE_KBPS",
     "GOP_FRAMES",
@@ -41,6 +40,9 @@ EDITABLE_KEYS = frozenset({
     "LO_HEIGHT",
     "LO_BITRATE_KBPS",
     "LO_FPS",
+    "SIGNAL_LOSS_DEBOUNCE_S",
+    "SIGNAL_ACQUIRE_DEBOUNCE_S",
+    "DECKLINK_RETRY_S",
 })
 
 READONLY_KEYS = frozenset({"DEVICE_NUMBER", "CHANNEL_PATH", "RTSP_URL"})

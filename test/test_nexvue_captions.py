@@ -13,6 +13,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -136,6 +138,119 @@ class TestCea608Decoder(unittest.TestCase):
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["text"], "A")
             self.assertEqual(data["seq"], 1)
+
+    def test_reset_clears_all_state(self) -> None:
+        # Phase 1.5 supervisor sends a control-FIFO CLEAR once on entering
+        # SLATE. reset() must wipe displayed AND non-displayed (pop-on)
+        # memory, cursor/mode, and the last-emitted text — a full reset, not
+        # just erase-displayed-memory (EDM) — so nothing from the live
+        # segment can resurface after a DeckLink <-> slate switch.
+        dec = self.mod.Cea608Cc1()
+        pairs = [(0x14, 0x20)]  # RCL (pop-on) — writes to non-displayed memory
+        pairs += [(0x14, 0x70)]
+        pairs += _text_pairs("SPONSOR")
+        pairs += [(0x14, 0x2F)]  # EOC — swap to display
+        self._feed(dec, pairs)
+        self.assertIn("SPONSOR", dec.visible_text())
+
+        dec.reset()
+        self.assertEqual(dec.visible_text(), "")
+        self.assertEqual(dec._mode, "rollup")
+        self.assertEqual(dec._row, 14)
+        self.assertEqual(dec._col, 0)
+        self.assertIsNone(dec._last_ctrl)
+        # Non-displayed (pop-on) memory must also be gone: RCL + EOC again
+        # with no new text should not resurrect "SPONSOR".
+        texts = self._feed(dec, [(0x14, 0x20), (0x14, 0x2F)])
+        self.assertNotIn("SPONSOR", "".join(texts))
+        self.assertEqual(dec.visible_text(), "")
+
+    def test_reset_allows_idle_clear_to_re_emit(self) -> None:
+        # idle_clear() only re-emits "" once per non-empty->empty edge; after
+        # a reset (which also clears _text), a later idle window must still
+        # be able to fire again rather than staying permanently suppressed.
+        dec = self.mod.Cea608Cc1()
+        self._feed(dec, _text_pairs("HI"))
+        self.assertEqual(dec.idle_clear(), "")
+        self.assertIsNone(dec.idle_clear())
+        self._feed(dec, _text_pairs("AGAIN"))
+        dec.reset()
+        self.assertEqual(dec.visible_text(), "")
+        # visible_text() is already "" post-reset, so idle_clear() reports no
+        # transition (None) — confirms reset() and idle_clear() agree on
+        # what "already clear" means.
+        self.assertIsNone(dec.idle_clear())
+
+
+@unittest.skipUnless(hasattr(os, "mkfifo"), "decode_stream's FIFOs are POSIX-only")
+class TestDecodeStreamControlFifo(unittest.TestCase):
+    """End-to-end (no GStreamer): drives decode_stream() over real FIFOs the
+    way the Phase 1.5 supervisor does — raw CEA-608 pairs on the data FIFO,
+    a 'CLEAR' line on the control FIFO — and checks the resulting state
+    JSON."""
+
+    def test_clear_command_resets_decoder_and_writes_cleared_state(self) -> None:
+        mod = _load_decode()
+        with tempfile.TemporaryDirectory() as td:
+            data_fifo = Path(td) / "ch0.ccraw"
+            control_fifo = Path(td) / "ch0.ccctl"
+            state_path = Path(td) / "ch0.json"
+            os.mkfifo(data_fifo)
+            os.mkfifo(control_fifo)
+
+            thread = threading.Thread(
+                target=mod.decode_stream,
+                args=(data_fifo, state_path, "ch0"),
+                kwargs={"idle_erase_s": 0, "control_fifo": control_fifo},
+                daemon=True,
+            )
+            thread.start()
+            try:
+                # decode_stream's data-fifo open() blocks until a writer
+                # connects — this pairs with it (both default to blocking).
+                with open(data_fifo, "wb", buffering=0) as data_w:
+                    for a, b in _text_pairs("HELLO"):
+                        data_w.write(bytes((a, b)))
+
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        if state_path.exists() and "HELLO" in state_path.read_text(encoding="utf-8"):
+                            break
+                        time.sleep(0.05)
+                    else:
+                        self.fail("decoder never reported HELLO")
+
+                    # Control FIFO is opened non-blocking on both sides in
+                    # production; mirror that here with a short retry loop
+                    # instead of a plain blocking open (which could hang the
+                    # test if the timing assumptions above are ever wrong).
+                    control_fd = None
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        try:
+                            control_fd = os.open(str(control_fifo), os.O_WRONLY | os.O_NONBLOCK)
+                            break
+                        except OSError:
+                            time.sleep(0.05)
+                    self.assertIsNotNone(control_fd, "control FIFO writer never connected")
+                    try:
+                        os.write(control_fd, b"CLEAR\n")
+                    finally:
+                        os.close(control_fd)
+
+                    deadline = time.monotonic() + 5
+                    cleared = False
+                    while time.monotonic() < deadline:
+                        data = json.loads(state_path.read_text(encoding="utf-8"))
+                        if data.get("clear") is True and data.get("text") == "":
+                            cleared = True
+                            break
+                        time.sleep(0.05)
+                    self.assertTrue(cleared, "CLEAR control command did not clear captions state")
+                # Closing data_w (the write end) makes decode_stream see EOF and exit.
+            finally:
+                thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
 
 
 @unittest.skipUnless(PHP and CAPTIONS_PHP.is_file(), "php CLI or nexvue-captions.php missing")

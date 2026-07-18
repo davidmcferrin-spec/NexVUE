@@ -48,7 +48,7 @@ done
 # ---- Required repo files (verify before touching the system) ---------------------
 REQUIRED_FILES=(
   mediamtx.yml mediamtx.service
-  nexvue-encode.sh nexvue-encode@.service
+  nexvue-encode.sh nexvue-supervisor.py nexvue-encode@.service
   nexvue-status-server.py nexvue-status.service
   nexvue-metrics-server.py nexvue-metrics.service
   nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js
@@ -62,6 +62,7 @@ REQUIRED_FILES=(
   nexvue-ops-env-read.sh nexvue-ops-env-write.sh nexvue-ops-restart.sh
   nexvue-ops-enable.sh
   channels-example.env
+  nexvue-example.env
 )
 if ! $CHECK_ONLY; then
   for f in "${REQUIRED_FILES[@]}"; do
@@ -87,8 +88,9 @@ apt-get install -y -qq \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
   intel-media-va-driver-non-free vainfo intel-gpu-tools \
   build-essential curl ca-certificates jq \
-  php-sqlite3
-ok "apt packages installed (python: stdlib only — no pip; php-sqlite3 for metrics.php)"
+  php-sqlite3 \
+  python3-gi gir1.2-glib-2.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0
+ok "apt packages installed (python: stdlib + apt-only python3-gi for the Phase 1.5 supervisor — never pip; php-sqlite3 for metrics.php)"
 
 # Allow the metrics collector (user nexvue) to read iGPU PMU without root.
 # AmbientCapabilities on the unit also requests CAP_PERFMON; setcap covers
@@ -126,6 +128,52 @@ fi
 mkdir -p /etc/nexvue/channels
 ok "/etc/nexvue/channels ready"
 
+# Station-wide /etc/nexvue/nexvue.env (MAX_DEVICES etc.). Never overwrite a live
+# file. When absent, migrate a consistent legacy MAX_DEVICES from channel envs,
+# or install the example default (8). Conflicting legacy values → warn and
+# leave absent so legacy channel copies keep working until the operator picks.
+if [ -f /etc/nexvue/nexvue.env ]; then
+  ok "/etc/nexvue/nexvue.env exists — left untouched"
+else
+  migrate_val=""
+  migrate_conflict=false
+  for f in /etc/nexvue/channels/*.env; do
+    [ -f "$f" ] || continue
+    v="$(grep -E '^[[:space:]]*MAX_DEVICES=' "$f" 2>/dev/null | tail -1 \
+      | cut -d= -f2- || true)"
+    v="${v%%#*}"
+    v="${v//\"/}"
+    v="${v//\'/}"
+    v="${v// /}"
+    v="${v//$'\t'/}"
+    [ -n "$v" ] || continue
+    if ! [[ "$v" =~ ^[1-8]$ ]]; then
+      warn "legacy MAX_DEVICES='${v}' in ${f} is invalid — ignoring for migration"
+      continue
+    fi
+    if [ -z "$migrate_val" ]; then
+      migrate_val="$v"
+    elif [ "$migrate_val" != "$v" ]; then
+      migrate_conflict=true
+    fi
+  done
+  if $migrate_conflict; then
+    warn "conflicting legacy MAX_DEVICES across channel envs — not creating /etc/nexvue/nexvue.env; set MAX_DEVICES=N there manually (1–8)"
+  else
+    if [ -z "$migrate_val" ]; then
+      install -m 644 "${REPO_DIR}/nexvue-example.env" /etc/nexvue/nexvue.env
+      ok "installed /etc/nexvue/nexvue.env (MAX_DEVICES=8 default)"
+    else
+      {
+        echo "# Migrated from channel .env by setup.sh ($(date -Is))"
+        echo "MAX_DEVICES=${migrate_val}"
+      } > /etc/nexvue/nexvue.env
+      chmod 644 /etc/nexvue/nexvue.env
+      ok "migrated MAX_DEVICES=${migrate_val} into /etc/nexvue/nexvue.env"
+    fi
+  fi
+fi
+
 step "4/5 NexVUE files"
 # Config: never clobber a live config — install only if absent.
 if [ -f /etc/nexvue/mediamtx.yml ]; then
@@ -135,6 +183,7 @@ else
   ok "installed mediamtx.yml"
 fi
 install -m 755 "${REPO_DIR}/nexvue-encode.sh" /usr/local/bin/nexvue-encode.sh
+install -m 755 "${REPO_DIR}/nexvue-supervisor.py" /usr/local/bin/nexvue-supervisor.py
 install -m 755 "${REPO_DIR}/nexvue-status-server.py" /usr/local/bin/nexvue-status-server.py
 install -m 755 "${REPO_DIR}/nexvue-metrics-server.py" /usr/local/bin/nexvue-metrics-server.py
 install -m 755 "${REPO_DIR}/nexvue-captions-decode.py" /usr/local/bin/nexvue-captions-decode.py
@@ -255,6 +304,17 @@ done
 [ -x /usr/local/bin/nexvue-captions-decode.py ] \
   && ok "nexvue-captions-decode.py present" \
   || warn "nexvue-captions-decode.py missing — CC side channel will stay off"
+
+# Phase 1.5 supervisor: PyGObject/GStreamer GI bindings. Stdlib-only policy
+# still holds — python3-gi is an apt package, never pip (see setup.sh step 1).
+[ -x /usr/local/bin/nexvue-supervisor.py ] \
+  && ok "nexvue-supervisor.py present" \
+  || warn "nexvue-supervisor.py missing — nexvue-encode@N will not start (ExecStart targets it directly)"
+if python3 -c "import gi; gi.require_version('Gst','1.0'); from gi.repository import Gst" >/dev/null 2>&1; then
+  ok "PyGObject GStreamer bindings importable (python3-gi + gir1.2-gstreamer-1.0)"
+else
+  warn "python3 cannot import gi/Gst — nexvue-supervisor.py will exit 69 at startup; apt install python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0"
+fi
 
 # MediaMTX + units
 [ -x /usr/local/bin/mediamtx ] && ok "mediamtx binary present" || warn "mediamtx binary missing"

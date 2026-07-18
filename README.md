@@ -5,7 +5,8 @@ gateway (sibling of NexAlert). One edge node per station:
 DeckLink capture card (4 or 8x 3G-SDI in) -> GStreamer (deinterlace +
 Quick Sync H.264 + Opus) -> MediaMTX -> WHEP (WebRTC) to any browser.
 
-Supported capture cards (channel count set by `MAX_DEVICES` per channel env):
+Supported capture cards (channel count set by station-wide `MAX_DEVICES` in
+`/etc/nexvue/nexvue.env`):
 DeckLink Quad 2 (8 ch), Duo 2 / Duo 2 Mini (4 ch), original Duo (2 ch). The
 code is card-agnostic — you enable one `nexvue-encode@N` service per input and
 stop; a Duo 2 uses instances 0-3.
@@ -32,9 +33,10 @@ SDI 1080i59.94 (4 or 8) --> [DeckLink card]
 - **Second 16GB DIMM** — the stock 1x16GB is single-channel; the iGPU media
   engine shares that bandwidth with 8-channel deinterlace. Cheap insurance.
 - Blackmagic DeckLink Quad 2 in the PCIe 4.0 x16 slot (card is Gen2 x8).
-  **Duo 2 (4 ch)** works identically — set `MAX_DEVICES=4` and enable only
-  `nexvue-encode@0..3`. The Duo 2 Mini (low-profile) is the pick if the
-  chassis only takes half-height cards (e.g. an SFF box).
+  **Duo 2 (4 ch)** works identically — set `MAX_DEVICES=4` in
+  `/etc/nexvue/nexvue.env` and enable only `nexvue-encode@0..3`. The Duo 2 Mini
+  (low-profile) is the pick if the chassis only takes half-height cards
+  (e.g. an SFF box).
 - DIN 1.0/2.3-to-BNC breakout cables, one per channel (8 for Quad 2, 4 for
   Duo 2) — the cards have mini connectors, NOT full-size BNC; easy to leave
   off the PO, painful to be missing
@@ -123,19 +125,21 @@ sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin nexvue
 
 sudo mkdir -p /etc/nexvue/channels
 sudo cp mediamtx.yml /etc/nexvue/
-sudo cp nexvue-encode.sh /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-encode.sh
+sudo cp nexvue-encode.sh nexvue-supervisor.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-encode.sh /usr/local/bin/nexvue-supervisor.py
 sudo cp nexvue-status-server.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-status-server.py
 sudo cp nexvue-captions-decode.py nexvue-captions-probe.sh /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-captions-decode.py /usr/local/bin/nexvue-captions-probe.sh
 sudo cp nexvue-metrics-server.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-metrics-server.py
 sudo cp mediamtx.service nexvue-encode@.service \
        nexvue-status.service nexvue-metrics.service /etc/systemd/system/
 
+# Station-wide card size (install only if absent — setup.sh also migrates):
+sudo cp -n nexvue-example.env /etc/nexvue/nexvue.env   # MAX_DEVICES=8; Duo 2 → 4
+
 # One env file per channel you want live (see channels-example.env):
 sudo cp channels-example.env /etc/nexvue/channels/0.env
 sudo nano /etc/nexvue/channels/0.env
 #   (inline '# comments' and whitespace in the env file are fine —
 #    the unit sources it through a shell)   # set DEVICE_NUMBER=0, CHANNEL_PATH=ch0
-                                       # (Duo 2: also set MAX_DEVICES=4)
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now mediamtx nexvue-status nexvue-metrics nexvue-encode@0
@@ -412,10 +416,10 @@ latency than the test player shows.
 ### 72-hour soak
 
 Leave **only populated** channels running for 72h before calling Phase 1 done.
-**Do not enable `nexvue-encode@N` on empty Quad ports** — with no lock,
-`Restart=always` / `RestartSec=3` restart-loops the unit (thousands of
-`Started` lines in journalctl) until the Phase 1.5 slate supervisor lands.
-Disable empty channels:
+**Prefer disabling `nexvue-encode@N` on empty Quad ports rather than leaving
+it running against nothing** — the Phase 1.5 supervisor now serves a NO
+SIGNAL slate instead of restart-looping, but an encoder with no intended
+feed is still needless load and journal noise. Disable empty channels:
 
 ```bash
 # example: devices 4–7 unlocked / unpatched
@@ -453,7 +457,9 @@ more code). Current hardware: **DeckLink Quad 2**.
    (`BlackmagicDesktopVideoSetup`). Confirm with `decklink-status` (lock +
    mode per device; order is not guaranteed sequential). Set
    `MAX_DEVICES=8`; enable `nexvue-encode@N` **only** for patched inputs
-   (leave empty BNCs disabled until Phase 1.5 or a feed is present).
+   (leave empty BNCs disabled until a feed is present — Phase 1.5 means an
+   enabled-but-unpatched port now shows a slate instead of restart-looping,
+   but there is still no reason to run it).
 2. **Latency:** RTT-based estimate recorded above (~200 ms). Glass-to-glass
    photo deferred (remote rack) — not a Phase 1 blocker.
 3. **72h soak** with intended (locked) `nexvue-encode@N` up; closeout script
@@ -907,8 +913,10 @@ Services/Settings).
 - **Closed captions are a side channel**, not MediaMTX tracks. Encode writes
   `/run/nexvue/captions/<path>.json`; Apache serves SSE via
   `nexvue-captions.php`. HI/LO reconnect keeps the same channel subscription.
-  Phase 1.5 supervisor must keep `output-cc` / `ccextractor` when switching
-  DeckLink ↔ slate.
+  The Phase 1.5 supervisor keeps `output-cc` / `ccextractor` running on the
+  DeckLink branch continuously (even while SLATE is the selected output) and
+  sends a control-FIFO `CLEAR` on every SLATE entry so the overlay blanks
+  immediately rather than waiting out the decoder's own idle-erase timeout.
 - **Input status & reference:** the `nexvue-status` daemon (port 9998) polls the
   DeckLink Status API via the `decklink-status` helper and serves JSON
   (per-input signal lock + detected format, genlock reference lock + mode).
@@ -926,17 +934,60 @@ Services/Settings).
   59.94p + 8 LO on the Arrow Lake media engine. Verify in the soak.
 - **Self-healing model:** constant output caps mean input format changes never
   drop viewer sessions; the watchdog turns capture hangs into clean systemd
-  restarts; black frames ride through signal loss. Remaining known gap: a
-  channel with no signal at boot serves nothing (restart loop) rather than a
-  slate — closing that is the Phase 1.5 Python supervisor (persistent RTSP
-  session, DeckLink/slate input switching, "NO SIGNAL" burn-in).
+  restarts; black frames ride through signal loss. A channel with no signal
+  at boot (or that loses lock later) now serves a generated "NO SIGNAL"
+  slate instead of restarting or showing nothing — the Phase 1.5
+  `nexvue-supervisor.py` (persistent RTSP session, DeckLink/slate input
+  switching via `input-selector`).
 - **Signal-present alarming** belongs in CheckMK (Phase 4): the status daemon
   JSON is the data source (local check or HTTP agent), alongside the
   MediaMTX API (`/v3/paths/list`) for stream/session state.
 - **Format changes:** normalized away — output caps are constant per channel.
 - **No Docker, no Node** — two binaries, two scripts, systemd.
 
-## Phase 1.5 supervisor — specification (review before code)
+## Phase 1.5 supervisor — implemented (`nexvue-supervisor.py`)
+
+`nexvue-encode@.service`'s ExecStart now execs `/usr/local/bin/nexvue-supervisor.py`
+directly (sourced channel env unchanged). `nexvue-encode.sh` remains in the repo
+as a standalone, hand-invocable reference/debug pipeline (and its own unit
+test, `test/test-pipeline-assembly.sh`, keeps covering the gst-launch string
+it builds) but is no longer what systemd runs.
+
+Decisions taken (the three "open decisions" below were resolved this way):
+
+1. **Switch mechanism:** a persistent `input-selector` (video) + `input-selector`
+   (audio) pair, each with a permanent "slate" sink pad and a **dynamically
+   added/removed** "DeckLink" sink pad. Selector output caps never change
+   (both branches normalize to the same NV12/48kHz caps), so flipping
+   `active-pad` never renegotiates the encoder or drops the RTSP/WHEP
+   session. The DeckLink capture branch itself is torn down and rebuilt
+   (not just re-selected) only on a hard GStreamer ERROR/EOS — normal
+   signal loss/acquire never touches the pipeline graph, only `active-pad`.
+2. **Lock signal source:** `decklinkvideosrc`'s read-only `signal` GObject
+   property (via `notify::signal`), corroborated by a buffer pad probe that
+   requires at least one real (non-`GAP`) buffer before promoting to LIVE —
+   a parameter lock alone is not proof frames are flowing. The status
+   daemon's existing "fast status-flag fallback for inputs held by a
+   running encoder" already coexists with the supervisor holding the
+   device open; no changes needed there.
+3. **Apt GI stack:** `python3-gi gir1.2-glib-2.0 gir1.2-gstreamer-1.0
+   gir1.2-gst-plugins-base-1.0` (added to `setup.sh` step 1). Still zero
+   pip, per project policy — these are apt-only GObject Introspection
+   bindings.
+
+Testable without hardware or GI installed: `load_config()` (env validation)
+and `StateMachine` (LIVE/SLATE/RECOVERING, injectable clock) are pure
+Python behind a try/import GI guard — `test/test_nexvue_supervisor.py`
+covers both; `test/test_nexvue_captions.py` covers the new captions
+control-FIFO CLEAR command and `Cea608Cc1.reset()`.
+
+**Hiccup tolerance:** `SIGNAL_LOSS_DEBOUNCE_S` defaults to **15 seconds**.
+Brief unlocks stay on the DeckLink pad (black frames, same as Phase 1) and
+do not flash the NO SIGNAL slate. Tune per channel in Settings if needed.
+
+<details>
+<summary>Original specification (historical reference)</summary>
+
 
 **Goal:** eliminate the no-signal-at-boot restart loop. Today
 `nexvue-encode@N` fails (or spins) when DeckLink has no lock at start.
@@ -1041,14 +1092,17 @@ so DeckLink ↔ slate never renegotiates encoder or WHEP.
 3. **Apt GI stack:** confirm `python3-gi` + GStreamer typelibs on the
    Arrow Lake image before writing code.
 
-**Do not implement until the three decisions above are confirmed.**
+~~Do not implement until the three decisions above are confirmed.~~ Resolved
+and implemented — see the decisions list above the collapsed spec.
+
+</details>
 
 ## Phase roadmap (agreed architecture)
 
 | Phase | Scope |
 |---|---|
 | 1 (this) | Single edge, LAN WHEP, no auth. Prove stability + latency. |
-| 1.5 | Python supervisor: DeckLink ↔ NO SIGNAL slate, persistent RTSP, captions preserved/cleared. Spec above — review before code. |
+| 1.5 | **Implemented** — `nexvue-supervisor.py`: DeckLink ↔ NO SIGNAL slate via a persistent `input-selector` pipeline, signal+buffer debounce state machine, captions preserved/cleared via a control FIFO. See "Phase 1.5 supervisor" below. |
 | 2 | PHP portal: channel catalog, local bcrypt auth, JWT issuance, MediaMTX JWKS integration. Decide publisher-auth pattern (see comment in `mediamtx.yml`). |
 | 3 | DMZ exposure: TLS on 443, `webrtcAdditionalHosts` = public FQDN, single UDP 8189 rule + ICE-TCP fallback, Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
 | 4 | Fleet rollout: per-station config management, CheckMK checks (encoder-alive, signal-present, session counts), portal ops dashboard fed by outbound edge heartbeats. |

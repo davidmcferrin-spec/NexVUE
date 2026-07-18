@@ -113,7 +113,7 @@ if [ -x /usr/local/bin/decklink-status ]; then
       done < <(printf '%s' "$STATUS_JSON" | jq -r '.devices[]? | "\(.index)\t\(.input_locked)"')
       UNLOCKED="$(printf '%s' "$STATUS_JSON" | jq -r '[.devices[]? | select(.input_locked!=true)] | length')"
       if [ "${UNLOCKED:-0}" -gt 0 ]; then
-        warn "unlocked inputs present — empty BNC or not Input (BlackmagicDesktopVideoSetup); do not leave encode@N enabled on empty ports (restart loop until Phase 1.5)"
+        warn "unlocked inputs present — empty BNC or not Input; Phase 1.5 supervisor serves NO SIGNAL slate when encode@N is left enabled"
       fi
     else
       fail "decklink-status returned no JSON"
@@ -126,6 +126,8 @@ else
 fi
 
 # ---- Soak: per-instance encoder Started counts ------------------------------
+# Phase 1.5: an unlocked active encoder is healthy if it is NOT restarting
+# (supervisor holds slate). Fail only when Started storms regardless of lock.
 DISABLE_CANDIDATES=()
 if command -v journalctl >/dev/null 2>&1; then
   if [ "${#ACTIVE_NS[@]}" -eq 0 ]; then
@@ -150,34 +152,25 @@ if command -v journalctl >/dev/null 2>&1; then
       esac
 
       if [ "$started" -le "$STARTED_OK_MAX" ]; then
-        verdict="ok"
+        if [ "$locked" = "false" ]; then
+          verdict="ok (slate / unlocked)"
+        else
+          verdict="ok"
+        fi
         printf '  %-18s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$verdict"
         ok "${unit}: Started=${started} (device ${dev}, locked=${locked})"
       elif [ "$locked" = "true" ]; then
         verdict="FAIL storm on locked input"
         printf '  %-18s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$verdict"
         fail "${unit}: Started=${started} on locked device ${dev} (want ≤${STARTED_OK_MAX}; inspect journal)"
-      elif [ "$locked" = "false" ]; then
-        verdict="WARN empty/unlocked — disable or Phase 1.5"
-        printf '  %-18s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$verdict"
-        warn "${unit}: Started=${started} on unlocked device ${dev} — disable until signal or Phase 1.5 slate"
-        DISABLE_CANDIDATES+=("$n")
       else
-        verdict="WARN lock unknown — inspect"
+        # Unlocked + storming: still a problem (supervisor should hold slate
+        # without systemd cycling). Fail so the soak catches it.
+        verdict="FAIL storm while unlocked/slate"
         printf '  %-18s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$verdict"
-        warn "${unit}: Started=${started} (device ${dev}, lock unknown) — inspect journalctl -u ${unit}"
+        fail "${unit}: Started=${started} while unlocked (supervisor should slate without restarting)"
       fi
     done
-
-    if [ "${#DISABLE_CANDIDATES[@]}" -gt 0 ]; then
-      # Brace expansion: nexvue-encode@{4,5,6,7}
-      joined="$(IFS=,; echo "${DISABLE_CANDIDATES[*]}")"
-      echo
-      echo "Remediation (empty / unlocked BNCs still encoding — stop the restart storm):"
-      echo "  sudo systemctl disable --now nexvue-encode@{${joined}}"
-      echo "  sudo nexvue-phase1-closeout.sh --since 1h"
-      echo "  # then start a clean soak clock on locked channels only (24h → 72h)"
-    fi
   fi
 else
   warn "journalctl unavailable"
@@ -215,14 +208,12 @@ fi
 
 # ---- Manual gate reminder ---------------------------------------------------
 echo
-echo "Manual Phase 1 gates (not automatable here):"
-echo "  1. Quad 2: every intended connector set to Input (BlackmagicDesktopVideoSetup);"
-echo "     MAX_DEVICES=8; map BNCs → device-number via decklink-status"
-echo "  2. Only enable nexvue-encode@N for patched Input ports — empty ports restart-loop"
-echo "     until Phase 1.5; after disabling empties, re-soak locked channels (clean journal window)"
+echo "Manual Phase 1 / 1.5 gates (not automatable here):"
+echo "  1. Quad 2: intended connectors Input; MAX_DEVICES in /etc/nexvue/nexvue.env"
+echo "  2. Supervisor: unlocked encode@N should publish NO SIGNAL slate without restarting"
 echo "  3. Latency: RTT-based ~200 ms estimate is accepted for remote datacenter;"
 echo "     glass-to-glass photo deferred (see README) — not a Phase 1 blocker"
-echo "  4. Confirm soak window with all intended (locked) channels hot, then re-run this script"
+echo "  4. Confirm soak window, then re-run this script"
 
 echo
 echo "=== Summary: ${#PASS[@]} ok, ${#WARN[@]} warn, ${#FAIL[@]} fail ==="
