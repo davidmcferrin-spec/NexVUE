@@ -122,6 +122,7 @@ grep -q "ccextractor name=cc" <<<"$out" || fail "T18 ccextractor missing"
 grep -q "cc.caption" <<<"$out" || fail "T18 caption pad branch missing"
 grep -q "ccconverter" <<<"$out" || fail "T18 ccconverter missing"
 grep -q "closedcaption/x-cea-608,format=raw" <<<"$out" || fail "T18 raw 608 caps missing"
+grep -q "filesink location=/dev/null buffer-mode=unbuffered" <<<"$out" || fail "T18 filesink must be unbuffered (64KB default buffer starves the FIFO)"
 grep -qE "cc708overlay|cea708overlay|cea608overlay" <<<"$out" && fail "T18 must not burn-in overlays"
 
 # T19: CAPTIONS_ENABLE=false omits caption elements

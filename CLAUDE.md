@@ -80,6 +80,11 @@ specifically because this box can't get additional ports opened.
   `nexvue-captions-decode.py` + `nexvue-captions.php` + player **CC** toggle
   (`localStorage.nexvue-captions-on`); Cast payload carries `captions`.
   Probe feeds with `nexvue-captions-probe.sh` before assuming 608-in-708.
+ The FIFO `filesink` MUST be `buffer-mode=unbuffered`: the default mode
+ accumulates ~64KB before flushing and raw 608 arrives at ~60-120 B/s, so
+ buffered output starved `nexvue-captions-decode.py` and the browser CC
+ overlay stayed empty (same block-buffering class of bug as the
+ intel_gpu_top one-shot below).
   iGPU sampling reads a PERSISTENT `intel_gpu_top -J` child (background
   reader thread keeps newest sample, 30s restart backoff, stderr tail
   logged) — never a run-and-kill one-shot: the tool block-buffers stdout on

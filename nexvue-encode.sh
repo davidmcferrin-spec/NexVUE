@@ -281,10 +281,14 @@ fi
 if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
   # cc.caption is a separate pad; convert CDP/608 metas to raw CEA-608 pairs
   # for nexvue-captions-decode.py. filesink to a FIFO (decoder already reading).
+  # buffer-mode=unbuffered is MANDATORY: filesink's default mode accumulates
+  # ~64KB before flushing, and raw 608 trickles in at ~60-120 B/s — buffered,
+  # the decoder would see nothing for 10+ minutes (same block-buffering trap
+  # as the intel_gpu_top one-shot; see CLAUDE.md).
   PIPELINE+=" cc.caption ! queue max-size-buffers=8 leaky=downstream"
   PIPELINE+=" ! ccconverter"
   PIPELINE+=" ! closedcaption/x-cea-608,format=raw"
-  PIPELINE+=" ! filesink location=${CAPTIONS_FIFO} sync=false append=false"
+  PIPELINE+=" ! filesink location=${CAPTIONS_FIFO} buffer-mode=unbuffered sync=false append=false"
 fi
 
 log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) audio=${ENABLE_AUDIO} captions=${CAPTIONS_ACTIVE} enc=${VIDEO_ENCODER}"

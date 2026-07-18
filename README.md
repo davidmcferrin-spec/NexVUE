@@ -331,7 +331,11 @@ does not convert captions to a text track. NexVUE therefore extracts captions
 inside the existing encode pipeline and delivers timed text over Apache:
 
 1. `decklinkvideosrc output-cc=true` → `ccextractor` → `ccconverter` → raw
-   CEA-608 pairs on a FIFO under `/run/nexvue/captions/`.
+   CEA-608 pairs on a FIFO under `/run/nexvue/captions/`. The `filesink`
+   feeding the FIFO runs `buffer-mode=unbuffered` — its default mode holds
+   ~64KB before flushing, and 608 trickles in at ~60–120 bytes/s, so a
+   buffered sink starves the decoder for 10+ minutes and the overlay never
+   shows anything.
 2. `nexvue-captions-decode.py` (CC1) writes `<channel>.json` atomically.
 3. `nexvue-captions.php` streams cues as Server-Sent Events (same origin; no
    new port). `?once=1` returns a JSON snapshot for debugging.
