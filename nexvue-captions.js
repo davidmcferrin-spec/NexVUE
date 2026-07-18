@@ -1,5 +1,5 @@
 /**
- * nexvue-captions.js — shared CC preference + SSE client for Player / Multiview / Cast.
+ * nexvue-captions.js — shared CC preference + SSE client for Player / Multiview.
  * Captions arrive via same-origin nexvue-captions.php (not MediaMTX / WHEP).
  */
 (function (global) {

@@ -53,9 +53,9 @@ REQUIRED_FILES=(
   nexvue-metrics-server.py nexvue-metrics.service
   nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js
   nexvue-qr.js chart.umd.min.js metrics.html index.html multiview.html
-  cast-receiver.html
   nexvue-ops.php services.html channels.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
+  nexvue-phase1-closeout.sh
   nexvue-ops-env-update.py nexvue-ops.sudoers
   nexvue-ops-status.sh nexvue-ops-journal.sh
   nexvue-ops-env-read.sh nexvue-ops-env-write.sh nexvue-ops-restart.sh
@@ -137,6 +137,7 @@ install -m 755 "${REPO_DIR}/nexvue-status-server.py" /usr/local/bin/nexvue-statu
 install -m 755 "${REPO_DIR}/nexvue-metrics-server.py" /usr/local/bin/nexvue-metrics-server.py
 install -m 755 "${REPO_DIR}/nexvue-captions-decode.py" /usr/local/bin/nexvue-captions-decode.py
 install -m 755 "${REPO_DIR}/nexvue-captions-probe.sh" /usr/local/bin/nexvue-captions-probe.sh
+install -m 755 "${REPO_DIR}/nexvue-phase1-closeout.sh" /usr/local/bin/nexvue-phase1-closeout.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-env-update.py" /usr/local/bin/nexvue-ops-env-update.py
 install -m 755 "${REPO_DIR}/nexvue-ops-status.sh" /usr/local/bin/nexvue-ops-status.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-journal.sh" /usr/local/bin/nexvue-ops-journal.sh
@@ -164,7 +165,7 @@ if command -v visudo >/dev/null; then
     install -m 440 "${REPO_DIR}/nexvue-ops.sudoers" /etc/sudoers.d/nexvue-ops
     ok "sudoers drop-in installed: /etc/sudoers.d/nexvue-ops"
   else
-    warn "nexvue-ops.sudoers failed visudo -cf — NOT installed; Services/Channels pages will not work until fixed"
+    warn "nexvue-ops.sudoers failed visudo -cf — NOT installed; Services/Settings pages will not work until fixed"
   fi
   rm -f "${TMP_SUDOERS}"
 else
@@ -178,7 +179,6 @@ if [ -d "${WEBROOT}" ]; then
   install -m 644 "${REPO_DIR}/index.html" \
                  "${REPO_DIR}/multiview.html" \
                  "${REPO_DIR}/metrics.html" \
-                 "${REPO_DIR}/cast-receiver.html" \
                  "${REPO_DIR}/nexvue-metrics.php" \
                  "${REPO_DIR}/nexvue-status.php" \
                  "${REPO_DIR}/nexvue-captions.php" \
@@ -189,9 +189,9 @@ if [ -d "${WEBROOT}" ]; then
                  "${REPO_DIR}/channels.html" \
                  "${REPO_DIR}/nexvue-ops.php" \
                  "${WEBROOT}/"
-  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / cast / captions)"
+  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / captions)"
 else
-  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
+  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
 fi
 
 step "5/5 decklink-status helper"
@@ -257,7 +257,7 @@ else
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 if [ -d "${WEBROOT}" ]; then
-  for f in index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php; do
+  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js chart.umd.min.js services.html channels.html nexvue-ops.php; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
 else
@@ -266,14 +266,15 @@ fi
 
 # Ops wrappers + sudoers
 for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
-         nexvue-ops-env-write.sh nexvue-ops-restart.sh nexvue-ops-env-update.py; do
+         nexvue-ops-env-write.sh nexvue-ops-restart.sh nexvue-ops-env-update.py \
+         nexvue-phase1-closeout.sh; do
   [ -x "/usr/local/bin/$w" ] || [ -f "/usr/local/bin/$w" ] \
     && ok "ops helper: $w" || warn "ops helper missing: /usr/local/bin/$w"
 done
 if [ -f /etc/sudoers.d/nexvue-ops ]; then
   ok "sudoers drop-in: /etc/sudoers.d/nexvue-ops"
 else
-  warn "sudoers drop-in missing — Services/Channels need /etc/sudoers.d/nexvue-ops"
+  warn "sudoers drop-in missing — Services/Settings need /etc/sudoers.d/nexvue-ops"
 fi
 
 # decklink-status

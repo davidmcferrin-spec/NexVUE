@@ -83,6 +83,24 @@ class TestApplyPatch(unittest.TestCase):
         with self.assertRaises(ValueError):
             mod.apply_patch(SAMPLE, {"EXTRA_ENC_ARGS": "x;rm"})
 
+    def test_extra_enc_args_rejects_pipeline_separator(self):
+        # Independent of env-file shell-quoting: EXTRA_ENC_ARGS flows
+        # UNQUOTED into a live gst-launch-1.0 pipeline description (see
+        # nexvue-encode.sh). A literal '!' there splices in a whole new
+        # GStreamer element/branch after the encoder — the env-file
+        # double-quoting fix does not (and cannot) protect against this,
+        # since it's a downstream, separate use of the same value.
+        with self.assertRaises(ValueError):
+            mod.sanitize_value(
+                "EXTRA_ENC_ARGS",
+                "cpb-size=2000 ! filesink location=/tmp/evil",
+            )
+        # Legitimate multi-property tuning must still work.
+        self.assertEqual(
+            mod.sanitize_value("EXTRA_ENC_ARGS", "cpb-size=2000 vbv-init=0.9"),
+            "cpb-size=2000 vbv-init=0.9",
+        )
+
     def test_alias_sanitized(self):
         out = mod.apply_patch(SAMPLE, {"CHANNEL_ALIAS": "Cam 1 (Main)"})
         self.assertIn('CHANNEL_ALIAS="Cam 1 (Main)"', out)

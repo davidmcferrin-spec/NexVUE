@@ -193,7 +193,7 @@
   <a href="/multiview.html">Multiview</a>
   <a href="/metrics.html">Metrics</a>
   <a href="/services.html">Services</a>
-  <a href="/channels.html">Channels</a>
+  <a href="/channels.html">Settings</a>
 </nav>
 
 <div class="frame">
@@ -213,7 +213,6 @@
   <button id="flip" class="tgl" title="Reflect top-bottom (inverted mounts)">Flip ↕</button>
   <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
   <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip)">⛶ Fullscreen</button>
-  <button id="cast" class="tgl" disabled title="Cast to Chromecast / Cast device (requires Cast App ID — see README)">Cast</button>
 </div>
 
 <div class="stage">
@@ -268,29 +267,11 @@
 
 <script src="nexvue-qr.js"></script>
 <script src="nexvue-captions.js"></script>
-<!-- Cast Web Sender requires __onGCastApiAvailable before cast_sender.js loads. -->
-<script>
-window.__onGCastApiAvailable = function (isAvailable) {
-  if (typeof window.__nexvueInitCast === "function") {
-    window.__nexvueInitCast(!!isAvailable);
-  } else {
-    window.__nexvueCastPending = !!isAvailable;
-  }
-};
-</script>
-<script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 <script>
 "use strict";
 (() => {
   const $ = id => document.getElementById(id);
   const video = $("video"), stateEl = $("state");
-
-  // Chromecast custom receiver App ID from Google Cast Developer Console.
-  // Replace after registering https://<edge>/cast-receiver.html as the receiver URL.
-  // Override at runtime: localStorage.setItem("nexvue-cast-app-id", "YOUR_APP_ID")
-  // then reload the player.
-  const CAST_APP_ID_DEFAULT = "";
-  const CAST_NS = "urn:x-cast:com.nexvue.whep";
 
   // ---- Session / quality state -------------------------------------------------
   let pc = null, statsTimer = null, apiTimer = null;
@@ -856,13 +837,6 @@ window.__onGCastApiAvailable = function (isAvailable) {
     NexVueCaptions.setPref(captionsOn);
     ccBtn.classList.toggle("active", captionsOn);
     paintCaptions();
-    // Refresh Cast payload if a session is already up.
-    try {
-      if (castReady && cast.framework) {
-        const session = cast.framework.CastContext.getInstance().getCurrentSession();
-        if (session && currentBase) sendCastLaunch(session);
-      }
-    } catch { /* cast not ready */ }
   });
 
   // Fullscreen the WRAPPER (not the video element), so the video's inline
@@ -886,165 +860,6 @@ window.__onGCastApiAvailable = function (isAvailable) {
       applyTransform();
     });
   }
-
-  // ---- Chromecast (custom WHEP receiver) ---------------------------------------------
-  // Cast cannot play video.srcObject (WebRTC). The STB loads cast-receiver.html
-  // and opens its own WHEP session to the edge.
-  // Google requires window.__onGCastApiAvailable before cast_sender.js (see head).
-  const castBtn = $("cast");
-  let castReady = false;
-  let castInitStarted = false;
-
-  function castAppId() {
-    try {
-      const stored = localStorage.getItem("nexvue-cast-app-id");
-      if (stored && stored.trim()) return stored.trim();
-    } catch { /* private mode */ }
-    return CAST_APP_ID_DEFAULT;
-  }
-
-  function castDisabledHint() {
-    return castAppId()
-      ? "cast: SDK unavailable (HTTPS / Chrome / gstatic)"
-      : "cast: set App ID — see README";
-  }
-
-  function castPayload() {
-    if (!currentBase) return null;
-    return {
-      whepBase: whepBase(),
-      path: currentBase,
-      rendition: rendition === "lo" && loAvailable ? "lo" : "hi",
-      captions: !!captionsOn,
-    };
-  }
-
-  function updateCastButton() {
-    const appId = castAppId();
-    if (!castReady || !appId) {
-      castBtn.disabled = true;
-      castBtn.title = appId
-        ? "Cast SDK not available (HTTPS Chrome with access to gstatic.com)"
-        : "Set Cast App ID (localStorage nexvue-cast-app-id or CAST_APP_ID_DEFAULT) — see README";
-      castBtn.classList.remove("active");
-      // Surface why Cast is gray when idle so the disabled button is not silent.
-      if (!currentBase) {
-        const cur = stateEl.textContent;
-        if (cur === "idle" || cur.startsWith("cast:")) setState(castDisabledHint());
-      }
-      return;
-    }
-    const session = cast.framework.CastContext.getInstance().getCurrentSession();
-    castBtn.disabled = false;
-    castBtn.classList.toggle("active", !!session);
-    castBtn.title = session
-      ? "Casting — click to send current channel again or stop from the Cast UI"
-      : "Cast current channel to Chromecast / Cast device";
-    if (!currentBase && !session && stateEl.textContent.startsWith("cast:")) {
-      setState("idle");
-    }
-  }
-
-  async function sendCastLaunch(session) {
-    const payload = castPayload();
-    if (!payload) {
-      setState("select a channel before casting", "bad");
-      return;
-    }
-    await session.sendMessage(CAST_NS, payload);
-    setState(`cast → ${payload.path} (${payload.rendition})`, "ok");
-  }
-
-  async function castCurrentChannel() {
-    if (!castReady || !castAppId()) return;
-    if (!currentBase) {
-      setState("select a channel before casting", "bad");
-      return;
-    }
-    const context = cast.framework.CastContext.getInstance();
-    let session = context.getCurrentSession();
-    try {
-      if (!session) {
-        await context.requestSession();
-        session = context.getCurrentSession();
-      }
-      if (!session) return;
-      await sendCastLaunch(session);
-      updateCastButton();
-    } catch (err) {
-      const msg = (err && err.message) ? String(err.message) : String(err);
-      if (msg.toLowerCase().includes("cancel")) return;
-      setState(`cast error: ${msg}`, "bad");
-    }
-  }
-
-  function initCastSender() {
-    if (castInitStarted || castReady) return;
-    const appId = castAppId();
-    if (!appId) {
-      updateCastButton();
-      return;
-    }
-    if (typeof cast === "undefined" || !cast.framework) {
-      updateCastButton();
-      return;
-    }
-    castInitStarted = true;
-    try {
-      const context = cast.framework.CastContext.getInstance();
-      context.setOptions({
-        receiverApplicationId: appId,
-        autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
-      });
-      context.addEventListener(
-        cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
-        async (event) => {
-          updateCastButton();
-          const session = context.getCurrentSession();
-          if (!session) return;
-          const st = event.sessionState;
-          if (st === cast.framework.SessionState.SESSION_STARTED ||
-              st === cast.framework.SessionState.SESSION_RESUMED) {
-            try { await sendCastLaunch(session); } catch (e) { /* may cast before channel */ }
-          }
-        }
-      );
-      castReady = true;
-    } catch (err) {
-      castInitStarted = false;
-      castReady = false;
-      const msg = (err && err.message) ? String(err.message) : String(err);
-      setState(`cast: init failed — ${msg}`, "bad");
-    }
-    updateCastButton();
-  }
-
-  window.__nexvueInitCast = (isAvailable) => {
-    if (isAvailable) initCastSender();
-    else updateCastButton();
-  };
-  if (typeof window.__nexvueCastPending === "boolean") {
-    const pending = window.__nexvueCastPending;
-    window.__nexvueCastPending = undefined;
-    window.__nexvueInitCast(pending);
-  } else if (window.chrome && chrome.cast && chrome.cast.isAvailable) {
-    initCastSender();
-  } else {
-    updateCastButton();
-  }
-  castBtn.addEventListener("click", castCurrentChannel);
-
-  const _openSession = openSession;
-  openSession = async function (path) {
-    await _openSession(path);
-    const session = castReady && typeof cast !== "undefined" && cast.framework
-      ? cast.framework.CastContext.getInstance().getCurrentSession()
-      : null;
-    if (session && currentBase) {
-      try { await sendCastLaunch(session); } catch (e) { /* ignore */ }
-    }
-    updateCastButton();
-  };
 
   // ---- Channel buttons ------------------------------------------------------------------
   // Labels use CHANNEL_ALIAS from ops API when available; WHEP path stays chN.
@@ -1090,7 +905,6 @@ window.__onGCastApiAvailable = function (isAvailable) {
   $("disconnect").addEventListener("click", () => {
     teardown();
     setState("idle");
-    updateCastButton();
   });
 
   // ---- Session metrics drawer -------------------------------------------------------

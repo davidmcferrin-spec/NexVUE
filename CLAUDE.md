@@ -19,10 +19,11 @@ media) — NexVUE mirrors that architecture, self-hosted.
 
 A `nexvue-metrics` component provides usage/analytics history (bandwidth,
 viewers, active streams, input lock/format, per-viewer IP/channel
-drill-down, Mon–Fri hour-of-day heatmap, host CPU/memory and Intel iGPU
-Video/Render engine busy % for capacity correlation) — explicitly NOT the
-health/uptime monitoring planned for CheckMK in Phase 4. Split deliberately
-across two pieces with no shared
+drill-down, Mon–Fri hour-of-day heatmap, host CPU/memory, CPU/GPU package
+temperatures from sysfs hwmon, and Intel iGPU Video/Render engine busy %
+for capacity correlation) — explicitly NOT the health/uptime monitoring
+planned for CheckMK in Phase 4. Split deliberately across two pieces with
+no shared
 network surface: `nexvue-metrics-server.py` is a background collector with
 NO listening port at all (writes to SQLite only); `nexvue-metrics.php`
 (runs inside Apache) reads that SQLite file directly, read-only, and serves
@@ -49,7 +50,7 @@ specifically because this box can't get additional ports opened.
   stream: extract CEA-608/CC1 in `nexvue-encode` (`output-cc` +
   `ccextractor`/`ccconverter` → FIFO → `nexvue-captions-decode.py` →
   `/run/nexvue/captions/<path>.json`), serve SSE via same-origin
-  `nexvue-captions.php`, overlay in Player / Multiview / Cast. MediaMTX stays
+  `nexvue-captions.php`, overlay in Player / Multiview. MediaMTX stays
   H.264+Opus only. Phase 1.5 supervisor must preserve extraction across
   DeckLink/slate switches.
 
@@ -64,28 +65,31 @@ specifically because this box can't get additional ports opened.
   component needed no such change since it was redesigned to have no port at
   all (collector writes SQLite, PHP-in-Apache reads it directly).
   Usage-metrics dashboard (bandwidth/viewers/streams/input-lock/per-viewer
-  IP-channel drill-down, custom from/to ranges, weekday heatmap, host
-  CPU/memory + iGPU Video engine % (Render % collected but not charted),
+  IP-channel drill-down with column filters — Status/IP/Channel/Duration/
+  Data/Client via plain text, `/regex/`, or `>`/`<` comparisons —
+  custom from/to ranges, weekday heatmap, host
+  CPU/memory + Temperature chart (CPU/GPU °C with 95 °C limit lines) +
+  iGPU Video engine % (Render % collected but not charted),
   `nexvue-metrics` + `nexvue-metrics.php`) landed
   ahead of schedule — separate from and not a
   substitute for the Phase 4 CheckMK health-monitoring plan below.
   Metrics reporting timezone defaults to America/New_York (heatmap buckets,
   chart labels, custom From/To); override with `NEXVUE_METRICS_TZ` only if needed.
   Metrics Kick writes a short-lived registry via `nexvue-ops.php`
-  (`kick_viewer` + `kick_check`); Player / Multiview / Cast read the WHEP
+  (`kick_viewer` + `kick_check`); Player / Multiview read the WHEP
   `ID` header (API session UUID, not Location secret), suppress self-healing,
   and show an admin disconnect message. Not a rejoin ban — Phase 2 auth owns
   enforcement.
   Selectable CC overlay (CEA-608/CC1 side channel) landed —
   `nexvue-captions-decode.py` + `nexvue-captions.php` + player **CC** toggle
-  (`localStorage.nexvue-captions-on`); Cast payload carries `captions`.
+  (`localStorage.nexvue-captions-on`).
   Probe feeds with `nexvue-captions-probe.sh` before assuming 608-in-708.
  Caption display contract: decoder emits ≤2 lines, newest at the bottom
  (608 roll-up presentation); roll-up window tracked per CEA-608 §8.4 —
  PAC base-row moves relocate the window and erase abandoned rows, and
  entering roll-up erases pop-on leftovers, so no stale line can stick.
  Overlay CSS reserves a constant two-line box (no resize jitter) in
- Player / Multiview / Cast.
+ Player / Multiview.
  Caption reliability: decoder is crash-proof per pair (a dead FIFO reader
  EPIPEs filesink and restarts the WHOLE encode pipeline — never let bad
  data kill it); ~16s idle erase (`NEXVUE_CAPTIONS_IDLE_ERASE_S`, non-null
@@ -104,12 +108,15 @@ specifically because this box can't get additional ports opened.
   stayed empty on real hardware even though interactive `intel_gpu_top`
   worked. `NEXVUE_INTEL_GPU_TOP_PERIOD_MS` (default 1000) replaced the old
   `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` knob.
-  Remaining before Phase 1 is formally "done": burnt-in-clock latency
-  measurement, flip the two Duo 2 connectors still set to Output back to
-  Input (see README "DeckLink Duo 2 connector direction"), 72h soak.
+  Remaining before Phase 1 is formally "done" (hardware/operator, not more
+  code): burnt-in-clock latency table in README, flip the two Duo 2
+  connectors still set to Output back to Input (see README "DeckLink Duo 2
+  connector direction"), 72h soak. On the edge: `sudo ./nexvue-phase1-closeout.sh`.
 - **Phase 1.5 (next): Python supervisor** — persistent RTSP session with
   DeckLink/slate input switching ("NO SIGNAL" burn-in) so no-signal-at-boot
-  serves a slate instead of a restart loop. Spec review before code.
+  serves a slate instead of a restart loop. Full spec in README
+  ("Phase 1.5 supervisor — specification"); **owner must confirm** switch
+  mechanism, lock-signal source, and apt GI deps before any code.
   Must keep the caption extract branch (or clear cues) when leaving DeckLink.
 - **Phase 2: PHP portal** — channel catalog, local bcrypt + JWT issuance,
   MediaMTX JWKS auth. Open decision: publisher auth pattern (long-lived
@@ -158,13 +165,8 @@ specifically because this box can't get additional ports opened.
 - Dark monospace UI aesthetic (see `index.html` palette) — consistent
   across the tool family (player, multiviewer, metrics, services, channels).
   Top-nav **NexVUE** brand opens a QR of the page URL; player session tiles
-  live in a collapsed bottom drawer. Player **Cast** uses a custom WHEP
-  receiver (`cast-receiver.html`) — Chromecast cannot cast WebRTC
-  `srcObject` directly. Cast stays disabled until a Google Cast Custom
-  Receiver App ID is set (`CAST_APP_ID_DEFAULT` or
-  `localStorage.nexvue-cast-app-id`) and the sender SDK loads on HTTPS
-  Chrome; idle status explains a gray button.
-  Top nav: Player / Multiview / Metrics / Services / Channels.
+  live in a collapsed bottom drawer.
+  Top nav: Player / Multiview / Metrics / Services / Settings.
   Player/Multiview **CC** uses `nexvue-captions.js` + SSE (not WHEP text
   tracks).
 - Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +

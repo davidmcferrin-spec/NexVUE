@@ -25,6 +25,8 @@ time-series samples in SQLite (stdlib `sqlite3` — no pip, no new dependency):
   - nexvue-status daemon   -> per-input signal lock, detected format,
                               reference lock/format
   - /proc/stat, meminfo, loadavg -> host CPU %, memory used/total, load1
+  - /sys/class/hwmon (+ thermal_zone fallback) -> CPU package °C and
+                              iGPU °C when the driver exposes a sensor
   - intel_gpu_top -J (optional) -> iGPU Video/Render/VideoEnhance busy %
                               and frequency (capacity correlation for
                               Metrics — not a CheckMK substitute). Read from
@@ -79,6 +81,11 @@ _prev_cpu: tuple | None = None
 # Rate-limit intel_gpu_top failure logs (seconds between warnings).
 _gpu_warn_last = 0.0
 _GPU_WARN_EVERY_S = 300.0
+# Rate-limit temperature sampling warnings (missing hwmon is common for iGPU).
+_temp_warn_last = 0.0
+_TEMP_WARN_EVERY_S = 300.0
+HWMON_ROOT = os.environ.get("NEXVUE_HWMON_ROOT", "/sys/class/hwmon")
+THERMAL_ROOT = os.environ.get("NEXVUE_THERMAL_ROOT", "/sys/class/thermal")
 INTEL_GPU_TOP = os.environ.get("NEXVUE_INTEL_GPU_TOP", "intel_gpu_top")
 # One intel_gpu_top sample period in ms. The tool streams continuously; the
 # persistent reader thread (see _GpuStream) keeps only the newest sample.
@@ -192,6 +199,130 @@ def _parse_meminfo(text: str) -> tuple[int, int]:
 def _parse_loadavg(text: str) -> float:
     """1-minute load average from /proc/loadavg."""
     return float(text.split()[0])
+
+
+def _read_millideg_c(path: Path) -> float | None:
+    """Read a sysfs *_input file in millidegrees Celsius → °C, or None."""
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+        milli = int(raw)
+    except (OSError, ValueError):
+        return None
+    # Reject nonsense (uninitialized sensors sometimes report 0 or huge values).
+    celsius = milli / 1000.0
+    if celsius < 1.0 or celsius > 150.0:
+        return None
+    return celsius
+
+
+def _hwmon_chip_dirs(hwmon_root: Path) -> list[tuple[str, Path]]:
+    """Return [(chip_name, dir), ...] for each hwmonN under hwmon_root."""
+    out: list[tuple[str, Path]] = []
+    if not hwmon_root.is_dir():
+        return out
+    try:
+        entries = sorted(hwmon_root.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return out
+    for entry in entries:
+        if not entry.name.startswith("hwmon"):
+            continue
+        name_path = entry / "name"
+        try:
+            name = name_path.read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            continue
+        if name:
+            out.append((name, entry))
+    return out
+
+
+def _read_hwmon_temp1(chip_dir: Path) -> float | None:
+    """Prefer temp1_input (package / primary); else first readable temp*_input."""
+    primary = chip_dir / "temp1_input"
+    got = _read_millideg_c(primary)
+    if got is not None:
+        return got
+    try:
+        candidates = sorted(chip_dir.glob("temp*_input"))
+    except OSError:
+        return None
+    for path in candidates:
+        got = _read_millideg_c(path)
+        if got is not None:
+            return got
+    return None
+
+
+def _read_cpu_temp_c(hwmon_root: Path, thermal_root: Path) -> float | None:
+    """CPU package temperature from coretemp hwmon, else x86_pkg_temp zone."""
+    for name, chip_dir in _hwmon_chip_dirs(hwmon_root):
+        if name == "coretemp":
+            got = _read_hwmon_temp1(chip_dir)
+            if got is not None:
+                return got
+    if not thermal_root.is_dir():
+        return None
+    try:
+        zones = sorted(thermal_root.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return None
+    for zone in zones:
+        if not zone.name.startswith("thermal_zone"):
+            continue
+        try:
+            ztype = (zone / "type").read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            continue
+        if ztype != "x86_pkg_temp":
+            continue
+        got = _read_millideg_c(zone / "temp")
+        if got is not None:
+            return got
+    return None
+
+
+def _read_gpu_temp_c(hwmon_root: Path) -> float | None:
+    """iGPU temperature from i915 or xe hwmon (None when driver has no node)."""
+    for name, chip_dir in _hwmon_chip_dirs(hwmon_root):
+        if name in ("i915", "xe"):
+            got = _read_hwmon_temp1(chip_dir)
+            if got is not None:
+                return got
+    return None
+
+
+def sample_temps(
+    hwmon_root: str | Path | None = None,
+    thermal_root: str | Path | None = None,
+) -> tuple[float | None, float | None]:
+    """
+    Return (cpu_temp_c, gpu_temp_c). Either may be None when sysfs has no
+    usable sensor — never invent a value. Paths are overridable for tests.
+    """
+    global _temp_warn_last
+    hw_root = Path(hwmon_root if hwmon_root is not None else HWMON_ROOT)
+    th_root = Path(thermal_root if thermal_root is not None else THERMAL_ROOT)
+    cpu_c: float | None = None
+    gpu_c: float | None = None
+    try:
+        cpu_c = _read_cpu_temp_c(hw_root, th_root)
+        gpu_c = _read_gpu_temp_c(hw_root)
+    except OSError as exc:
+        now = time.time()
+        if now - _temp_warn_last >= _TEMP_WARN_EVERY_S:
+            log.warning("temperature sample failed: %s", exc)
+            _temp_warn_last = now
+        return None, None
+    if cpu_c is None:
+        now = time.time()
+        if now - _temp_warn_last >= _TEMP_WARN_EVERY_S:
+            log.warning(
+                "CPU package temperature unavailable — no coretemp / x86_pkg_temp under %s",
+                hw_root,
+            )
+            _temp_warn_last = now
+    return cpu_c, gpu_c
 
 
 def sample_host() -> tuple[float | None, int, int, float]:
@@ -575,9 +706,11 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_viewer_sessions_remote ON viewer_sessions(remote_addr);
             CREATE INDEX IF NOT EXISTS idx_viewer_sessions_last_seen ON viewer_sessions(last_seen);
 
-            -- Host capacity samples (CPU/memory/load + optional iGPU engines)
-            -- for Metrics correlation. Not a health monitor — CheckMK remains
-            -- Phase 4 for that. GPU columns filled when intel_gpu_top works.
+            -- Host capacity samples (CPU/memory/load + optional iGPU engines
+            -- and package/GPU temperatures) for Metrics correlation. Not a
+            -- health monitor — CheckMK remains Phase 4 for that. GPU engine
+            -- columns filled when intel_gpu_top works; temp columns when
+            -- sysfs hwmon exposes coretemp / i915|xe sensors.
             CREATE TABLE IF NOT EXISTS host_samples (
                 ts INTEGER NOT NULL PRIMARY KEY,
                 cpu_pct REAL,
@@ -587,7 +720,9 @@ def init_db() -> None:
                 gpu_video_pct REAL,
                 gpu_render_pct REAL,
                 gpu_video_enhance_pct REAL,
-                gpu_freq_mhz REAL
+                gpu_freq_mhz REAL,
+                cpu_temp_c REAL,
+                gpu_temp_c REAL
             );
         """)
         # Safe migrations for databases created before later columns existed —
@@ -598,6 +733,8 @@ def init_db() -> None:
             "ALTER TABLE host_samples ADD COLUMN gpu_render_pct REAL",
             "ALTER TABLE host_samples ADD COLUMN gpu_video_enhance_pct REAL",
             "ALTER TABLE host_samples ADD COLUMN gpu_freq_mhz REAL",
+            "ALTER TABLE host_samples ADD COLUMN cpu_temp_c REAL",
+            "ALTER TABLE host_samples ADD COLUMN gpu_temp_c REAL",
         ):
             try:
                 conn.execute(ddl)
@@ -725,21 +862,24 @@ def poll_once() -> None:
     except (urllib.error.URLError, TimeoutError, socket.timeout, ValueError, OSError) as exc:
         log.warning("status daemon poll failed: %s", exc)
 
-    # --- Host CPU / memory / load + optional iGPU engines ---
+    # --- Host CPU / memory / load + optional iGPU engines + package/GPU temps ---
     cpu_pct, mem_used, mem_total, load1 = sample_host()
     gpu = sample_gpu()
+    cpu_temp_c, gpu_temp_c = sample_temps()
     if cpu_pct is not None:
         try:
             with _db_lock, sqlite3.connect(DB_PATH) as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO host_samples "
                     "(ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1, "
-                    " gpu_video_pct, gpu_render_pct, gpu_video_enhance_pct, gpu_freq_mhz) "
-                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    " gpu_video_pct, gpu_render_pct, gpu_video_enhance_pct, gpu_freq_mhz, "
+                    " cpu_temp_c, gpu_temp_c) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         now, cpu_pct, mem_used, mem_total, load1,
                         gpu.get("gpu_video_pct"), gpu.get("gpu_render_pct"),
                         gpu.get("gpu_video_enhance_pct"), gpu.get("gpu_freq_mhz"),
+                        cpu_temp_c, gpu_temp_c,
                     ),
                 )
                 conn.commit()

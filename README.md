@@ -153,7 +153,7 @@ Drop the UI files into Apache's docroot (same place IT already serves on
 `fetch()` paths resolve:
 
 ```bash
-sudo cp index.html multiview.html metrics.html cast-receiver.html nexvue-metrics.php \
+sudo cp index.html multiview.html metrics.html nexvue-metrics.php \
         nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js chart.umd.min.js \
         services.html channels.html nexvue-ops.php /var/www/html/
 # if PHP isn't wired into Apache yet:
@@ -171,7 +171,7 @@ sudo visudo -cf /etc/sudoers.d/nexvue-ops
 ```
 
 Then open `http://<edge-ip>/index.html` (top nav → Player / Multiview /
-Metrics / Services / Channels). **Services and Channels are LAN-trust ops
+Metrics / Services / Settings). **Services and Settings are LAN-trust ops
 pages** — do not expose them on a DMZ without Phase 2 auth.
 
 ### 6. Input status helper (signal/reference display in the player)
@@ -273,8 +273,6 @@ Then from a LAN machine:
   input, …) live in a bottom drawer — click **Session metrics** to expand
   (collapsed by default). Hover a tile title for ~2s for a short explainer.
   Click the **NexVUE** brand for a QR code of the page URL (phone scan).
-  **Cast** sends the current channel to a Chromecast
-  via a custom WHEP receiver (`cast-receiver.html`) — see "Chromecast" below.
   **CC** toggles a selectable closed-caption overlay (CEA-608/CC1 side
   channel — not burned into video; preference in `localStorage`).
 - **Multiviewer:** open `multiview.html` (top nav → Multiview). Dual or quad
@@ -285,45 +283,10 @@ Then from a LAN machine:
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
   (near `tail -f`). LAN-trust ops.
-- **Channels:** top nav → Channels — channel list; click a row (or use Bulk
+- **Settings:** top nav → Settings — channel list; click a row (or use Bulk
   edit) to open a modal editor for `/etc/nexvue/channels/<N>.env`. Optional
   `CHANNEL_ALIAS` for friendly labels; path stays `chN`. Save asks before
   restarting encoders.
-
-### Chromecast / Cast (custom WHEP receiver)
-
-Chromecast cannot play the player's live WebRTC `MediaStream`. Instead the
-player **Cast** button launches NexVUE's custom receiver
-(`cast-receiver.html`) on the STB; the receiver opens its own WHEP session
-to the edge (same H.264 + Opus path as the browser).
-
-The **Cast** button stays gray until a Cast App ID is configured and the
-Google Cast sender SDK initializes. While idle, the player status line
-explains why (`cast: set App ID — see README` or
-`cast: SDK unavailable (HTTPS / Chrome / gstatic)`). Hover the button for
-the same detail.
-
-1. In the [Google Cast Developer Console](https://cast.google.com/publish/),
-   create a **Custom Receiver** application.
-2. Set the receiver URL to `https://<edge-fqdn>/cast-receiver.html`
-   (HTTPS is required; self-signed certs are often rejected by Cast — prefer
-   a real cert or an already-trusted enterprise CA).
-3. Copy the issued **App ID** into the player, either:
-   - edit `CAST_APP_ID_DEFAULT` in `index.html`, or
-   - in the browser console on the player page:
-     `localStorage.setItem("nexvue-cast-app-id", "YOUR_APP_ID")`
-     then **reload** the player (App ID is read at init only).
-4. Open the player over **HTTPS** in Chrome (or another Cast-enabled
-   Chromium). The sender page must be a secure context; plain HTTP will
-   leave Cast gray with an SDK-unavailable status. The browser also needs
-   outbound access to `www.gstatic.com` for the Cast sender SDK.
-5. Ensure the Chromecast can reach WHEP on the LAN (`:8889`, same as a phone
-   browser). Firewall rules that only allow your PC will block the STB.
-6. Select a channel on the player, click **Cast**, pick the device.
-
-Direct receiver test (no Cast session): open
-`https://<edge>/cast-receiver.html?whepBase=https://<edge>:8889&path=ch0`
-(add `&captions=1` to enable the CC overlay).
 
 ### Closed captions (selectable overlay)
 
@@ -364,8 +327,8 @@ Reliability/latency behavior:
   buffering would batch live events), clients get `retry: 1000` for ~1s
   reconnects, and the state poll runs at 50ms (worst-case added latency
   ~50ms; negligible next to live-captioning typing lag).
-4. Player / Multiview / Cast draw a CSS overlay; **CC** persists via
-   `localStorage.nexvue-captions-on`. Cast launch payload includes `captions`.
+4. Player / Multiview draw a CSS overlay; **CC** persists via
+   `localStorage.nexvue-captions-on`.
 
 Not burned into pixels; no parallel video streams. Disable per channel with
 `CAPTIONS_ENABLE=false` in the channel `.env`. Probe a live SDI feed (stop
@@ -381,15 +344,21 @@ v1 decodes **CEA-608 / CC1** (including 608 compatibility bytes inside 708
 CDP). Native 708-only services/windows are out of scope until a decoder
 dependency is approved.
 
-Requires a Cast device that runs a Chromium-based receiver (Chromecast with
-Google TV / modern Cast hardware). Very old Cast firmware may lack WebRTC.
-
 ### Latency measurement (do this properly once)
 
 Point a channel's SDI source at a burnt-in timecode or a clock, put the WHEP
 player next to the source monitor, photograph both in one frame, subtract.
 Repeat at 59.94p and 29.97p settings, and with `ENABLE_AUDIO` on and off.
 Target: **~200 ms** on LAN with the tuning below; treat >300 ms as a bug.
+
+Record results here when measured (LAN, player hints at 0):
+
+| Mode | `DEINT_FIELDS` | `ENABLE_AUDIO` | Measured (ms) | Date | Notes |
+|------|----------------|----------------|---------------|------|-------|
+| 59.94p | all | true | _pending_ | | |
+| 59.94p | all | false | _pending_ | | |
+| 29.97p | top | true | _pending_ | | |
+| 29.97p | top | false | _pending_ | | |
 
 ### Latency budget & tuning
 
@@ -426,14 +395,35 @@ latency than the test player shows.
 
 ### 72-hour soak
 
-Leave all populated channels running for 72h before calling Phase 1 done:
+Leave all populated channels running for 72h before calling Phase 1 done.
+On the edge box, from the repo root:
 
 ```bash
+sudo ./nexvue-phase1-closeout.sh              # units, lock, restarts, captions
+# or after a shorter bench soak:
+sudo ./nexvue-phase1-closeout.sh --since 24h
 journalctl -u 'nexvue-encode@*' --since -72h | grep -ci restart   # want 0
 ```
 
 Watch for iGPU thermal throttling (`intel_gpu_top`) with all channels hot
-(8 on Quad 2, 4 on Duo 2).
+(8 on Quad 2, 4 on Duo 2). Confirm HI/LO both play and CC overlay stays live
+on a captioned feed for the soak window.
+
+### Phase 1 closeout checklist
+
+Do these on the edge before calling Phase 1 done (card config + measurement,
+not more code):
+
+1. **Duo 2 connectors → Input** for every capture BNC — see
+   [DeckLink Duo 2 connector direction](#decklink-duo-2-connector-direction).
+   Confirm with `decklink-status` (lock + mode per intended device).
+2. **Latency table** above filled; all four cells ≤300 ms on LAN (target ~200).
+3. **72h soak** with all intended `nexvue-encode@N` up; closeout script green
+   (or only expected warnings); restart count ~0 beyond initial enable.
+4. **Deploy current web UI** (`setup.sh` or manual `cp` of player / multiview /
+   metrics / ops pages into the Apache docroot).
+5. **Captions**: probe at least one live feed with `nexvue-captions-probe.sh`;
+   Player/Multiview **CC** toggles overlay.
 
 ## TLS / HTTPS (WHEP / API / status — metrics rides on Apache)
 
@@ -507,12 +497,11 @@ dots stay gray and **SDI input** shows `status unreachable`, check that
    an edit really landed, since a repo-file edit alone changes nothing until
    copied to `/etc/systemd/system/` and reloaded.
 5. **Deploy the current web UI to Apache's docroot** (`index.html`,
-   `multiview.html`, `metrics.html`, `cast-receiver.html`, `nexvue-metrics.php`,
+   `multiview.html`, `metrics.html`, `nexvue-metrics.php`,
    `nexvue-status.php`, `nexvue-qr.js`, `chart.umd.min.js`, `services.html`,
    `channels.html`, `nexvue-ops.php`) — player pages auto-detect `https:`/`http:`
    from `location.protocol`. Input-status dots use `nexvue-status.php`
-   (same-origin). Cast needs `cast-receiver.html` on HTTPS. Ops pages need
-   the sudoers drop-in from `setup.sh` as well.
+   (same-origin). Ops pages need the sudoers drop-in from `setup.sh` as well.
 6. **Self-signed cert (e.g. Ubuntu's `ssl-cert-snakeoil`, or any cert issued
    for a hostname while you're testing via bare IP): trust it on each port
    individually**, once per browser — visiting `https://<ip>/` does NOT
@@ -646,10 +635,10 @@ Open `http://<edge-ip>/metrics.html` (top nav → Metrics).
 |---|---|
 | `totals` | System-wide time series: bandwidth, viewer count, active-stream count — one row per poll cycle. Powers the three top-line charts. |
 | `channels` | **Per-channel breakdown**, aggregated over the range: avg/peak bandwidth, avg/peak viewers, % of the window the channel was `ready`. "How much bandwidth did ch0 use in the last hour" as one row. |
-| `viewers` | Per-viewer session drill-down: IP, channel, user (blank until Phase 2 auth), first/last seen, duration, bytes served, live/ended. Add `&channel=chN` to filter to one channel. |
+| `viewers` | Per-viewer session drill-down: IP, channel, user (blank until Phase 2 auth), first/last seen, duration, bytes served, live/ended. Add `&channel=chN` for an exact channel. Optional column filters (`filter_status`, `filter_ip`, `filter_channel`, `filter_duration`, `filter_data`, `filter_client`) — see below. Response includes `session_total` / `session_count` / `filters`. |
 | `inputs` | Per-DeckLink-input lock/format history as a time series. Powers the input-lock chart. |
 | `weekday_hours` | Mon–Fri × hour-of-day buckets (avg/peak bandwidth & viewers) for the heatmap. Timezone: `America/New_York` by default (`NEXVUE_METRICS_TZ` override). |
-| `host` | Host CPU %, memory used/total, load1, and (when available) iGPU Video/Render/VideoEnhance busy % + GPU freq — capacity correlation on the Metrics page, **not** a CheckMK substitute. Requires `intel-gpu-tools` / `intel_gpu_top` + CAP_PERFMON (see setup). The dashboard charts CPU, memory, and the iGPU Video engine; Render % is still collected/served but not charted. |
+| `host` | Host CPU %, memory used/total, load1, CPU package °C / iGPU °C (when sysfs exposes them), and (when available) iGPU Video/Render/VideoEnhance busy % + GPU freq — capacity correlation on the Metrics page, **not** a CheckMK substitute. Engine % requires `intel-gpu-tools` / `intel_gpu_top` + CAP_PERFMON (see setup). The dashboard charts CPU, memory, iGPU Video engine, and a **Temperature** panel (CPU/GPU °C plus a dashed 95 °C sustained-operation limit line — `TEMP_LIMIT_CPU_C` / `TEMP_LIMIT_GPU_C` in `metrics.html`). Render % is still collected/served but not charted. |
 
 `range` accepts `15m`, `1h`, `6h`, `24h`, `7d`, `30d` — matching the
 dashboard's preset buttons. For a specific day or window, pass Unix epoch
@@ -680,6 +669,16 @@ lacks PMU permission, or the kernel uses `xe` without a working
 `setup.sh` installs `intel-gpu-tools`, `setcap`s `intel_gpu_top` when
 possible, and the unit grants
 `AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN`.
+
+**Temperature chart.** Each poll also samples package/GPU temperatures from
+sysfs (no extra package): CPU from `coretemp` hwmon (`temp1_input`), with
+fallback to `thermal_zone*/type == x86_pkg_temp`; GPU from `i915` or `xe`
+hwmon when present. Values land in `host_samples.cpu_temp_c` /
+`gpu_temp_c` and the Metrics **Temperature** panel. If the iGPU driver
+exposes no temperature node (common on some iGPUs), the GPU series stays
+empty — never invent a value. After upgrading, restart the collector so
+the new columns migrate:
+`sudo systemctl restart nexvue-metrics`.
 
 ### Configuration
 
@@ -739,19 +738,50 @@ per poll cycle per viewer bloating the table. A session reads as "live" if
 seen within the PHP script's active-session window (45s — about 3 poll
 cycles); otherwise "ended."
 
+**Column filters (Metrics UI + API).** The viewer table has a filter row under
+Status, IP address, Channel, Duration, Data served, and Client. Filters are
+applied server-side in `nexvue-metrics.php` (so a 30-day window is trimmed
+before JSON leaves Apache). Syntax:
+
+| Form | Example | Notes |
+|---|---|---|
+| Plain text | `Chrome`, `203.0.113`, `live` | Case-insensitive substring |
+| Regex | `/^ch\d+$/i`, `/firefox/i` | PCRE `/pattern/flags`; invalid → HTTP 400 |
+| Duration compare | `>=10m`, `<2h`, `=90s` | Against raw seconds (`s`/`m`/`h`) |
+| Data compare | `>500MB`, `<=1.5GB` | Against raw bytes (SI: B/KB/MB/GB) |
+
+Duration/Data also accept text/regex against the same display strings the
+table shows (`10m`, `1.5h`, `50.0 MB`). Exact `channel=chN` still works and
+ANDs with `filter_channel`. Max expression length 128. The UI debounces
+input, shows `showing N of M`, and keeps filters across the 30s refresh.
+
+The table paginates client-side below the rows: page size 50 (default) /
+100 / 250 / 500 / all, with Prev/Next and a `start–end of total` readout.
+Sorting stays global (whole filtered set, not per page); changing filters,
+the channel selector, or the page size returns to page 1. Pagination is
+display-only — the API still returns the full filtered window.
+
+Examples:
+
+```
+nexvue-metrics.php?view=viewers&range=24h&filter_status=live&filter_duration=%3E%3D10m
+nexvue-metrics.php?view=viewers&range=7d&filter_ip=203.0.113&filter_data=%3E500MB
+nexvue-metrics.php?view=viewers&range=1h&channel=ch0&filter_client=/Chrome/i
+```
+
 **Kick (live sessions only).** The Metrics viewer table has a Kick button on
 live rows. It POSTs `kick_viewer` (optional `reason`) to `nexvue-ops.php`,
 which looks up the session on MediaMTX, calls
 `POST /v3/webrtcsessions/kick/{session_id}` on loopback, and records the
 session in a short-lived kick registry (temp JSON, ~10 min TTL). Metrics PHP
-stays read-only. Player / Multiview / Cast capture the WHEP `ID` response
+stays read-only. Player / Multiview capture the WHEP `ID` response
 header (MediaMTX API session UUID — not the `Location` WHEP secret) and call
 `kick_check` before self-healing reconnect — kicked viewers see a disconnect
 message and stop auto-retry. Matching is by MediaMTX WebRTC session UUID only
 (safe when many viewers share a NAT IP or the same channel). Manual rejoin
 (pick a channel again) still works;
 real rejoin enforcement is Phase 2 auth. Phase 1 LAN-trust (same as
-Services/Channels).
+Services/Settings).
 
 ### Notes
 
@@ -794,13 +824,13 @@ Services/Channels).
   (`http:`/`https:`) is auto-detected from the page's own scheme — see the TLS
   section above if that's not lining up. Top nav brand **NexVUE** (click for
   page-URL QR) /
-  Player / Multiview / Metrics / Services / Channels. Player session metrics
+  Player / Multiview / Metrics / Services / Settings. Player session metrics
   sit in a collapsed bottom drawer (`Session metrics`); hover a tile ~2s for
   an explainer.
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Player and Multiview show the alias when set;
-  WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Channels page.
-- **Ops pages (Services / Channels)** call `nexvue-ops.php`, which uses
+  WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Settings page.
+- **Ops pages (Services / Settings)** call `nexvue-ops.php`, which uses
   allowlisted sudo wrappers under `/usr/local/bin/nexvue-ops-*` (sudoers drop-in
   `/etc/sudoers.d/nexvue-ops`). Saves write env files only; restart is an
   explicit confirm. Phase 1 LAN-trust — do not DMZ-expose without auth.
@@ -846,11 +876,119 @@ Services/Channels).
 - **Format changes:** normalized away — output caps are constant per channel.
 - **No Docker, no Node** — two binaries, two scripts, systemd.
 
+## Phase 1.5 supervisor — specification (review before code)
+
+**Goal:** eliminate the no-signal-at-boot restart loop. Today
+`nexvue-encode@N` fails (or spins) when DeckLink has no lock at start.
+Phase 1.5 replaces the bare `gst-launch` ExecStart with a **Python
+supervisor** that keeps a persistent RTSP publish into MediaMTX and switches
+the *input* between DeckLink and a generated **NO SIGNAL** slate without
+dropping the RTSP/WHEP session (viewers stay up; picture changes).
+
+**Non-goals:** ABR/SFU, portal auth, DMZ bind changes, native 708 decode,
+burning captions into video.
+
+### Architecture
+
+```
+nexvue-encode@.service
+        |
+        v
+nexvue-supervisor.py  (per channel; reads /etc/nexvue/channels/N.env)
+        |
+        +-- gst pipeline (appsrc/input-selector OR rebuild-safe branch)
+        |      DeckLink video/audio  <-->  slate videotestsrc + audiotestsrc
+        |      deinterlace/normalize -> vah264enc (+ LO tee) -> RTSP
+        |      output-cc -> ccextractor -> FIFO -> nexvue-captions-decode.py
+        v
+MediaMTX (unchanged H.264+Opus paths)
+```
+
+One supervisor process per channel (same systemd template model). MediaMTX
+and the DeckLink card remain the shared components. Stdlib Python only
+(no pip); GStreamer via `gi` / PyGObject from apt (`python3-gi`,
+`gir1.2-gstreamer-1.0`) — approve apt deps in `setup.sh` before coding.
+
+### State machine
+
+| State | Input | RTSP | Captions JSON |
+|-------|-------|------|---------------|
+| `LIVE` | DeckLink | publishing | extract CC1 as today |
+| `SLATE` | generated slate | publishing (same path/caps) | clear cue (empty text) |
+| `RECOVERING` | probing DeckLink | keep last picture or slate | unchanged until decision |
+
+Transitions:
+
+1. **Boot with lock** → `LIVE`.
+2. **Boot without lock** → `SLATE` immediately (no restart loop).
+3. **`LIVE` → loss of lock** (debounce **T_loss**, default 2s) → `SLATE`;
+   write cleared caption state once.
+4. **`SLATE` → lock acquired** (debounce **T_acquire**, default 1s) →
+   `LIVE`; resume CC extract (idle-erase / stale PHP still apply).
+5. **Pipeline error** → log, attempt in-process recovery; if unrecoverable,
+   exit non-zero so systemd `Restart=` still heals the process (last resort).
+
+Output caps stay **normalized** (constant raster/rate/bitrate per channel)
+so DeckLink ↔ slate never renegotiates encoder or WHEP.
+
+### Slate
+
+- Video: black (or dark gray) 1920×1080 progressive at the channel's output
+  rate; centered burn-in text `NO SIGNAL` (+ optional `CHANNEL_ALIAS` /
+  `CHANNEL_PATH`).
+- Audio: silence (or low-level tone only if needed for A/V sync testing —
+  default silence when `ENABLE_AUDIO=true`).
+- Same HI encode path; LO tee unchanged when `LO_ENABLE=true`.
+
+### Captions contract
+
+- While `LIVE`: keep `output-cc` → FIFO → `nexvue-captions-decode.py`
+  (unbuffered `filesink` remains mandatory).
+- On enter `SLATE`: stop feeding pairs **or** keep reader alive and emit a
+  single clear (`text=""`, `clear=true`) so overlays blank; never leave a
+  dead FIFO reader (EPIPE kills encode).
+- Decoder crash-proofing and idle erase remain as today.
+- Probe tooling (`nexvue-captions-probe.sh`) stays DeckLink-oriented for
+  bring-up; supervisor does not replace it.
+
+### Systemd / packaging
+
+- `nexvue-encode@.service` ExecStart → `/usr/local/bin/nexvue-supervisor.py`
+  (or thin `nexvue-encode.sh` wrapper that exec's the supervisor).
+- Env file sourcing unchanged (`EnvironmentFile=-` / bash source pattern as
+  today — keep quoting rules for `CHANNEL_ALIAS`).
+- `setup.sh` installs supervisor + apt GI packages; units reloaded.
+- Ops UI restart still restarts `nexvue-encode@N`.
+
+### Tests (required with implementation)
+
+- Unit: state machine debounce (loss/acquire), slate-enter clears captions,
+  sanitize/env load.
+- Integration-ish (no card): mock lock signals → LIVE/SLATE transitions;
+  ensure clear JSON written.
+- No live DeckLink required in CI; hardware soak remains the real proof.
+
+### Open decisions (owner before code)
+
+1. **Switch mechanism:** GStreamer `input-selector` in one long-lived
+   pipeline vs tear-down/rebuild of the capture branch only (RTSP sink held).
+   Prefer selector if caps stay identical; rebuild if DeckLink open/close is
+   cleaner on this SDK.
+2. **Lock signal source:** poll `decklink-status` / Status API vs pad probes /
+   element messages from `decklinkvideosrc`. Prefer Status API for boot
+   (matches player dots); confirm coexistence when supervisor holds the
+   device open.
+3. **Apt GI stack:** confirm `python3-gi` + GStreamer typelibs on the
+   Arrow Lake image before writing code.
+
+**Do not implement until the three decisions above are confirmed.**
+
 ## Phase roadmap (agreed architecture)
 
 | Phase | Scope |
 |---|---|
 | 1 (this) | Single edge, LAN WHEP, no auth. Prove stability + latency. |
+| 1.5 | Python supervisor: DeckLink ↔ NO SIGNAL slate, persistent RTSP, captions preserved/cleared. Spec above — review before code. |
 | 2 | PHP portal: channel catalog, local bcrypt auth, JWT issuance, MediaMTX JWKS integration. Decide publisher-auth pattern (see comment in `mediamtx.yml`). |
 | 3 | DMZ exposure: TLS on 443, `webrtcAdditionalHosts` = public FQDN, single UDP 8189 rule + ICE-TCP fallback, Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
 | 4 | Fleet rollout: per-station config management, CheckMK checks (encoder-alive, signal-present, session counts), portal ops dashboard fed by outbound edge heartbeats. |

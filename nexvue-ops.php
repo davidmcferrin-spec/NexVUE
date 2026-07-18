@@ -12,7 +12,7 @@
  *
  * kick_viewer POSTs to MediaMTX /v3/webrtcsessions/kick/{id} on loopback
  * (no sudo), then records the session in a short-lived kick registry so
- * Player / Multiview / Cast can suppress self-healing reconnect. Used by
+ * Player / Multiview can suppress self-healing reconnect. Used by
  * Metrics → Viewer sessions. Phase 1 LAN-trust — not a rejoin ban (Phase 2 auth).
  *
  * CLI include: when PHP_SAPI is cli and NEXVUE_OPS_HTTP is unset, this file

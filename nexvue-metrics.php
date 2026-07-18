@@ -16,7 +16,19 @@
  *   range     lookback: 15m | 1h | 6h | 24h | 7d | 30d  (default 1h; ignored if from+to set)
  *   from      optional Unix epoch (seconds) — custom window start (requires to)
  *   to        optional Unix epoch (seconds) — custom window end (requires from)
- *   channel   optional — restrict "viewers" to one channel (e.g. ch0)
+ *   channel   optional — exact channel for "viewers" (e.g. ch0; alphanumeric)
+ *
+ *   Viewer column filters (view=viewers only; empty = no filter):
+ *   filter_status    live/ended — plain text or /regex/flags
+ *   filter_ip        stripped IP — plain text or /regex/flags
+ *   filter_channel   channel name — plain text or /regex/flags (AND with channel=)
+ *   filter_duration  duration — comparison (>=10m, <2h) or text/regex on display
+ *   filter_data      bytes served — comparison (>500MB, <=1.5GB) or text/regex
+ *   filter_client    user-agent — plain text or /regex/flags
+ *
+ *   Plain text is case-insensitive substring. Regex uses /pattern/flags (PCRE).
+ *   Duration units: s/m/h (and sec/min/hr…). Data units: B/KB/MB/GB (SI, 1000).
+ *   Comparisons: > >= < <= = against raw seconds / bytes.
  *
  * ---- Views -------------------------------------------------------------------
  *
@@ -25,8 +37,8 @@
  *   viewers        Per-viewer session drill-down (IP/channel/user/…).
  *   inputs         DeckLink input lock/format time series.
  *   weekday_hours  Mon–Fri × hour-of-day heatmap buckets from totals.
- *   host           Host CPU % / memory / load1 time series (capacity analytics;
- *                  not a CheckMK substitute).
+ *   host           Host CPU % / memory / load1 / CPU+GPU °C time series
+ *                  (capacity analytics; not a CheckMK substitute).
  *
  * ---- Example calls -------------------------------------------------------------
  *
@@ -34,6 +46,7 @@
  *   nexvue-metrics.php?view=channels&from=1710000000&to=1710086400
  *   nexvue-metrics.php?view=weekday_hours&range=30d
  *   nexvue-metrics.php?view=host&range=24h
+ *   nexvue-metrics.php?view=viewers&range=24h&filter_status=live&filter_duration=%3E%3D10m
  */
 
 declare(strict_types=1);
@@ -53,11 +66,252 @@ const VALID_RANGES = [
 ];
 
 const MAX_WINDOW_S = 30 * 24 * 60 * 60;
+const FILTER_MAX_LEN = 128;
+const VIEWER_ACTIVE_WINDOW_S = 45;
 
 function fail(int $status, string $message): never {
     http_response_code($status);
     echo json_encode(['error' => $message]);
     exit;
+}
+
+/** Display IP — same rule as metrics.html (first colon segment for IPv4:port). */
+function viewer_display_ip(string $remoteAddr): string {
+    $parts = explode(':', $remoteAddr, 2);
+    return $parts[0];
+}
+
+function viewer_fmt_duration(float $seconds): string {
+    if ($seconds >= 3600) {
+        return sprintf('%.1fh', $seconds / 3600.0);
+    }
+    if ($seconds >= 60) {
+        return (string)(int)round($seconds / 60.0) . 'm';
+    }
+    return (string)(int)round($seconds) . 's';
+}
+
+function viewer_fmt_data(int|float $bytes): string {
+    return sprintf('%.1f MB', ((float)$bytes) / 1.0e6);
+}
+
+/**
+ * Parse plain substring or /pattern/flags regex. Returns a matcher array.
+ * @return array{type: string, needle?: string, pattern?: string}
+ */
+function parse_text_or_regex_filter(string $expr, string $label): array {
+    if (strlen($expr) > FILTER_MAX_LEN) {
+        fail(400, "{$label} filter must be at most " . FILTER_MAX_LEN . " characters");
+    }
+    if (preg_match('/^\/(.*)\/([imsxuADSUXJ]*)$/s', $expr, $m)) {
+        $body = $m[1];
+        $flags = $m[2];
+        if ($body === '') {
+            fail(400, "{$label} filter regex must not be empty");
+        }
+        if (strlen($body) > FILTER_MAX_LEN) {
+            fail(400, "{$label} filter regex must be at most " . FILTER_MAX_LEN . " characters");
+        }
+        $pattern = '/' . $body . '/' . $flags;
+        set_error_handler(static function () {});
+        $ok = @preg_match($pattern, '');
+        restore_error_handler();
+        if ($ok === false) {
+            fail(400, "{$label} filter: invalid regex");
+        }
+        return ['type' => 'regex', 'pattern' => $pattern];
+    }
+    return ['type' => 'substr', 'needle' => $expr];
+}
+
+function match_text_or_regex(string $haystack, array $filter): bool {
+    if ($filter['type'] === 'regex') {
+        $r = preg_match($filter['pattern'], $haystack);
+        return $r === 1;
+    }
+    return stripos($haystack, $filter['needle']) !== false;
+}
+
+/**
+ * Parse ">10m" / "<=1.5GB" style comparisons. null if not a comparison form.
+ * @return array{op: string, value: float}|null
+ */
+function parse_compare_filter(string $expr, string $kind, string $label): ?array {
+    if (!preg_match('/^(>=|<=|>|<|=)\s*(.+)$/s', $expr, $m)) {
+        return null;
+    }
+    $op = $m[1];
+    $rest = trim($m[2]);
+    if ($rest === '') {
+        fail(400, "{$label} filter comparison needs a value");
+    }
+
+    if ($kind === 'duration') {
+        if (!preg_match('/^(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?$/u', $rest, $um)) {
+            fail(400, "{$label} filter: expected number with optional unit (s/m/h)");
+        }
+        $n = (float)$um[1];
+        $unit = strtolower($um[2] ?? 's');
+        $mult = match ($unit) {
+            '', 's', 'sec', 'secs', 'second', 'seconds' => 1.0,
+            'm', 'min', 'mins', 'minute', 'minutes' => 60.0,
+            'h', 'hr', 'hrs', 'hour', 'hours' => 3600.0,
+            default => null,
+        };
+        if ($mult === null) {
+            fail(400, "{$label} filter: unknown duration unit (use s, m, or h)");
+        }
+        return ['op' => $op, 'value' => $n * $mult];
+    }
+
+    if ($kind === 'data') {
+        if (!preg_match('/^(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?$/u', $rest, $um)) {
+            fail(400, "{$label} filter: expected number with optional unit (B/KB/MB/GB)");
+        }
+        $n = (float)$um[1];
+        $unit = strtoupper($um[2] ?? 'B');
+        $mult = match ($unit) {
+            '', 'B' => 1.0,
+            'KB', 'K' => 1.0e3,
+            'MB', 'M' => 1.0e6,
+            'GB', 'G' => 1.0e9,
+            'TB', 'T' => 1.0e12,
+            default => null,
+        };
+        if ($mult === null) {
+            fail(400, "{$label} filter: unknown data unit (use B, KB, MB, or GB)");
+        }
+        return ['op' => $op, 'value' => $n * $mult];
+    }
+
+    fail(400, "{$label} filter: unsupported comparison kind");
+}
+
+function match_compare(float $actual, string $op, float $threshold): bool {
+    return match ($op) {
+        '>' => $actual > $threshold,
+        '>=' => $actual >= $threshold,
+        '<' => $actual < $threshold,
+        '<=' => $actual <= $threshold,
+        '=' => abs($actual - $threshold) < 1e-9,
+        default => false,
+    };
+}
+
+/**
+ * Build compiled viewer filters from query params. Empty strings omitted.
+ * @return array<string, array>
+ */
+function parse_viewer_filters(array $get): array {
+    $keys = [
+        'filter_status' => 'status',
+        'filter_ip' => 'ip',
+        'filter_channel' => 'channel',
+        'filter_duration' => 'duration',
+        'filter_data' => 'data',
+        'filter_client' => 'client',
+    ];
+    $out = [];
+    foreach ($keys as $param => $name) {
+        if (!array_key_exists($param, $get)) {
+            continue;
+        }
+        $raw = $get[$param];
+        if (!is_string($raw) && !is_numeric($raw)) {
+            fail(400, "{$name} filter must be a string");
+        }
+        $expr = trim((string)$raw);
+        if ($expr === '') {
+            continue;
+        }
+        if (strlen($expr) > FILTER_MAX_LEN) {
+            fail(400, "{$name} filter must be at most " . FILTER_MAX_LEN . " characters");
+        }
+
+        if ($name === 'duration' || $name === 'data') {
+            $cmp = parse_compare_filter($expr, $name === 'duration' ? 'duration' : 'data', $name);
+            if ($cmp !== null) {
+                $out[$name] = ['mode' => 'compare', 'op' => $cmp['op'], 'value' => $cmp['value'], 'expr' => $expr];
+                continue;
+            }
+        }
+
+        $text = parse_text_or_regex_filter($expr, $name);
+        $out[$name] = ['mode' => 'text', 'filter' => $text, 'expr' => $expr];
+    }
+    return $out;
+}
+
+/** @param array<string, array> $filters */
+function viewer_row_matches(array $row, array $filters): bool {
+    foreach ($filters as $name => $spec) {
+        if ($name === 'status') {
+            $hay = !empty($row['active']) ? 'live' : 'ended';
+            if ($spec['mode'] === 'text' && !match_text_or_regex($hay, $spec['filter'])) {
+                return false;
+            }
+            continue;
+        }
+        if ($name === 'ip') {
+            $hay = viewer_display_ip((string)($row['remote_addr'] ?? ''));
+            if ($spec['mode'] === 'text' && !match_text_or_regex($hay, $spec['filter'])) {
+                return false;
+            }
+            continue;
+        }
+        if ($name === 'channel') {
+            $hay = (string)($row['channel'] ?? '');
+            if ($spec['mode'] === 'text' && !match_text_or_regex($hay, $spec['filter'])) {
+                return false;
+            }
+            continue;
+        }
+        if ($name === 'client') {
+            $hay = (string)($row['user_agent'] ?? '');
+            if ($spec['mode'] === 'text' && !match_text_or_regex($hay, $spec['filter'])) {
+                return false;
+            }
+            continue;
+        }
+        if ($name === 'duration') {
+            $secs = (float)($row['duration_s'] ?? 0);
+            if ($spec['mode'] === 'compare') {
+                if (!match_compare($secs, $spec['op'], (float)$spec['value'])) {
+                    return false;
+                }
+            } else {
+                $hay = viewer_fmt_duration($secs);
+                if (!match_text_or_regex($hay, $spec['filter'])) {
+                    return false;
+                }
+            }
+            continue;
+        }
+        if ($name === 'data') {
+            $bytes = (float)($row['bytes_sent'] ?? 0);
+            if ($spec['mode'] === 'compare') {
+                if (!match_compare($bytes, $spec['op'], (float)$spec['value'])) {
+                    return false;
+                }
+            } else {
+                $hay = viewer_fmt_data($bytes);
+                if (!match_text_or_regex($hay, $spec['filter'])) {
+                    return false;
+                }
+            }
+            continue;
+        }
+    }
+    return true;
+}
+
+/** Public filter exprs for JSON metadata (no compiled patterns). */
+function viewer_filters_meta(array $filters): array {
+    $meta = [];
+    foreach ($filters as $name => $spec) {
+        $meta[$name] = $spec['expr'];
+    }
+    return $meta;
 }
 
 function metrics_timezone(): DateTimeZone {
@@ -187,6 +441,8 @@ if ($view === 'channels') {
 // ---- View: viewers ---------------------------------------------------------------
 
 if ($view === 'viewers') {
+    $viewerFilters = parse_viewer_filters($_GET);
+
     $sql = 'SELECT session_id, remote_addr, channel, user, user_agent,
                    first_seen, last_seen, bytes_sent
             FROM viewer_sessions
@@ -201,11 +457,26 @@ if ($view === 'viewers') {
     $rows = queryAll($db, $sql, $params);
     foreach ($rows as &$r) {
         $r['duration_s'] = round($r['last_seen'] - $r['first_seen'], 1);
-        $r['active'] = ($now - $r['last_seen']) < 45;
+        $r['active'] = ($now - $r['last_seen']) < VIEWER_ACTIVE_WINDOW_S;
     }
     unset($r);
 
-    echo json_encode($windowMeta + ['channel_filter' => $channelFilter, 'sessions' => $rows]);
+    $sessionTotal = count($rows);
+    if ($viewerFilters !== []) {
+        $rows = array_values(array_filter(
+            $rows,
+            static fn(array $r): bool => viewer_row_matches($r, $viewerFilters)
+        ));
+    }
+
+    // Cast filters to object so empty encodes as {} not [] in JSON.
+    echo json_encode($windowMeta + [
+        'channel_filter' => $channelFilter,
+        'filters' => (object)viewer_filters_meta($viewerFilters),
+        'session_total' => $sessionTotal,
+        'session_count' => count($rows),
+        'sessions' => $rows,
+    ]);
     exit;
 }
 
@@ -303,12 +574,13 @@ if ($view === 'weekday_hours') {
     exit;
 }
 
-// ---- View: host (CPU / memory / load) --------------------------------------------
+// ---- View: host (CPU / memory / load / temps) ------------------------------------
 
 if ($view === 'host') {
     $stmt = $db->prepare(
         'SELECT ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1,
-                gpu_video_pct, gpu_render_pct, gpu_video_enhance_pct, gpu_freq_mhz
+                gpu_video_pct, gpu_render_pct, gpu_video_enhance_pct, gpu_freq_mhz,
+                cpu_temp_c, gpu_temp_c
          FROM host_samples WHERE ts >= :since AND ts <= :until ORDER BY ts ASC'
     );
     if ($stmt === false) {

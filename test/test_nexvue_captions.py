@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Unit tests for caption side channel: CEA-608 decoder, PHP helpers, and
-player DOM / Cast payload contracts.
+player DOM contracts.
 
 Run: python3 test/test_nexvue_captions.py
 """
@@ -236,15 +236,13 @@ class TestCaptionsDomContract(unittest.TestCase):
         self.assertIn("EventSource", js)
 
     def test_player_files_wire_cc(self) -> None:
-        for name in ("index.html", "multiview.html", "cast-receiver.html"):
+        for name in ("index.html", "multiview.html"):
             html = (ROOT / name).read_text(encoding="utf-8")
             self.assertIn("nexvue-captions.js", html, name)
             self.assertIn("cc-overlay" if name != "multiview.html" else "pane-cc", html, name)
             if name == "index.html":
                 self.assertIn('id="cc"', html)
-                self.assertIn("captions:", html)
-            if name == "cast-receiver.html":
-                self.assertIn("captions", html)
+                self.assertIn("NexVueCaptions", html)
             if name == "multiview.html":
                 self.assertIn('id="cc"', html)
 
@@ -255,6 +253,7 @@ class TestCaptionsDomContract(unittest.TestCase):
             "nexvue-captions.js",
             "nexvue-captions-decode.py",
             "ccextractor",
+            "nexvue-phase1-closeout.sh",
         ):
             self.assertIn(needle, setup)
 

@@ -90,6 +90,89 @@ class TestHostSampling(unittest.TestCase):
         self.assertAlmostEqual(nms._parse_loadavg("1.25 0.80 0.50 1/200 1234\n"), 1.25)
 
 
+class TestTemperatureSampling(unittest.TestCase):
+    """hwmon / thermal_zone parsers against a fake sysfs tree (no live /sys)."""
+
+    def _write(self, path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def _make_hwmon(self, root: Path, index: int, name: str, milli_c: int | None) -> Path:
+        chip = root / f"hwmon{index}"
+        self._write(chip / "name", name + "\n")
+        if milli_c is not None:
+            self._write(chip / "temp1_input", f"{milli_c}\n")
+        return chip
+
+    def test_coretemp_and_i915(self):
+        with tempfile.TemporaryDirectory() as td:
+            hw = Path(td) / "hwmon"
+            th = Path(td) / "thermal"
+            hw.mkdir()
+            th.mkdir()
+            self._make_hwmon(hw, 0, "coretemp", 55_000)
+            self._make_hwmon(hw, 1, "i915", 62_500)
+            cpu, gpu = nms.sample_temps(hw, th)
+            self.assertAlmostEqual(cpu, 55.0)
+            self.assertAlmostEqual(gpu, 62.5)
+
+    def test_xe_gpu_chip(self):
+        with tempfile.TemporaryDirectory() as td:
+            hw = Path(td) / "hwmon"
+            th = Path(td) / "thermal"
+            hw.mkdir()
+            th.mkdir()
+            self._make_hwmon(hw, 0, "coretemp", 48_000)
+            self._make_hwmon(hw, 2, "xe", 71_000)
+            cpu, gpu = nms.sample_temps(hw, th)
+            self.assertAlmostEqual(cpu, 48.0)
+            self.assertAlmostEqual(gpu, 71.0)
+
+    def test_missing_gpu_node_returns_none(self):
+        with tempfile.TemporaryDirectory() as td:
+            hw = Path(td) / "hwmon"
+            th = Path(td) / "thermal"
+            hw.mkdir()
+            th.mkdir()
+            self._make_hwmon(hw, 0, "coretemp", 50_000)
+            # No i915/xe chip — GPU temp must stay None (never invent a value).
+            cpu, gpu = nms.sample_temps(hw, th)
+            self.assertAlmostEqual(cpu, 50.0)
+            self.assertIsNone(gpu)
+
+    def test_thermal_zone_pkg_fallback(self):
+        with tempfile.TemporaryDirectory() as td:
+            hw = Path(td) / "hwmon"
+            th = Path(td) / "thermal"
+            hw.mkdir()
+            th.mkdir()
+            # No coretemp; only x86_pkg_temp thermal zone.
+            zone = th / "thermal_zone0"
+            self._write(zone / "type", "x86_pkg_temp\n")
+            self._write(zone / "temp", "53000\n")
+            cpu, gpu = nms.sample_temps(hw, th)
+            self.assertAlmostEqual(cpu, 53.0)
+            self.assertIsNone(gpu)
+
+    def test_garbage_values_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            hw = Path(td) / "hwmon"
+            th = Path(td) / "thermal"
+            hw.mkdir()
+            th.mkdir()
+            self._make_hwmon(hw, 0, "coretemp", 0)          # below 1 °C
+            self._make_hwmon(hw, 1, "i915", 999_000_000)    # absurd
+            cpu, gpu = nms.sample_temps(hw, th)
+            self.assertIsNone(cpu)
+            self.assertIsNone(gpu)
+
+    def test_read_millideg_c_rejects_non_numeric(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "temp1_input"
+            p.write_text("not-a-number\n", encoding="utf-8")
+            self.assertIsNone(nms._read_millideg_c(p))
+
+
 class TestIntelGpuTopParse(unittest.TestCase):
     SAMPLE = """
 {
@@ -263,8 +346,38 @@ class TestSchemaAndRetention(unittest.TestCase):
             [
                 "ts", "cpu_pct", "mem_used_bytes", "mem_total_bytes", "load1",
                 "gpu_video_pct", "gpu_render_pct", "gpu_video_enhance_pct", "gpu_freq_mhz",
+                "cpu_temp_c", "gpu_temp_c",
             ],
         )
+
+    def test_temp_columns_migration_idempotent(self):
+        # Re-run init against a DB that already has the temp columns — ALTER
+        # must not raise and must not duplicate columns.
+        nms.init_db()
+        nms.init_db()
+        with sqlite3.connect(self.db_path) as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(host_samples)")]
+        self.assertEqual(cols.count("cpu_temp_c"), 1)
+        self.assertEqual(cols.count("gpu_temp_c"), 1)
+
+    def test_temp_columns_added_to_legacy_host_samples(self):
+        # Simulate a pre-temperature DB: drop and recreate host_samples without
+        # the new columns, then re-init so the ALTER TABLE migration runs.
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DROP TABLE host_samples")
+            conn.execute(
+                "CREATE TABLE host_samples ("
+                "ts INTEGER NOT NULL PRIMARY KEY, "
+                "cpu_pct REAL, mem_used_bytes INTEGER, mem_total_bytes INTEGER, "
+                "load1 REAL, gpu_video_pct REAL, gpu_render_pct REAL, "
+                "gpu_video_enhance_pct REAL, gpu_freq_mhz REAL)"
+            )
+            conn.commit()
+        nms.init_db()
+        with sqlite3.connect(self.db_path) as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(host_samples)")]
+        self.assertIn("cpu_temp_c", cols)
+        self.assertIn("gpu_temp_c", cols)
 
     def test_pruning_removes_old_host_samples(self):
         now = int(time.time())

@@ -3,7 +3,7 @@
  * nexvue-captions.php — same-origin Server-Sent Events for caption cues.
  *
  * The encode pipeline writes /run/nexvue/captions/<channel>.json (CEA-608/CC1
- * text). This script streams those updates to Player / Multiview / Cast over
+ * text). This script streams those updates to Player / Multiview over
  * Apache — no new port, no MediaMTX involvement.
  *
  *   GET nexvue-captions.php?channel=ch0          → text/event-stream (SSE)
