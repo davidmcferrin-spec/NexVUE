@@ -217,9 +217,18 @@
     return m ? m[1] : "";
   }
 
+  function nearBottom() {
+    return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+  }
+
+  function scrollToBottom() {
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
   async function pollJournal(full) {
     if (!selected) return;
     try {
+      const stick = full || nearBottom();
       const body = { unit: selected, lines: full || !sinceCursor ? 150 : 80 };
       if (!full && sinceCursor) body.since = sinceCursor;
       const data = await api("journal", body);
@@ -231,6 +240,7 @@
       }
       if (full || !logEl.textContent) {
         logEl.textContent = text;
+        if (stick) scrollToBottom();
       } else {
         // Append only lines after lastLine
         let start = 0;
@@ -241,7 +251,7 @@
         const add = lines.slice(start).join("\n");
         if (add) {
           logEl.textContent += (logEl.textContent.endsWith("\n") ? "" : "\n") + add + "\n";
-          logEl.scrollTop = logEl.scrollHeight;
+          if (stick) scrollToBottom();
         }
       }
       lastLine = lines[lines.length - 1];
@@ -275,7 +285,7 @@
 
   refreshServices();
   setInterval(refreshServices, 2000);
-  setInterval(() => { if (follow && selected) pollJournal(false); }, 1000);
+  setInterval(() => { if (follow && selected) pollJournal(false); }, 5000);
 })();
 </script>
 

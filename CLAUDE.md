@@ -65,7 +65,8 @@ specifically because this box can't get additional ports opened.
   all (collector writes SQLite, PHP-in-Apache reads it directly).
   Usage-metrics dashboard (bandwidth/viewers/streams/input-lock/per-viewer
   IP-channel drill-down, custom from/to ranges, weekday heatmap, host
-  CPU/memory + iGPU Video/Render %, `nexvue-metrics` + `nexvue-metrics.php`) landed
+  CPU/memory + iGPU Video engine % (Render % collected but not charted),
+  `nexvue-metrics` + `nexvue-metrics.php`) landed
   ahead of schedule — separate from and not a
   substitute for the Phase 4 CheckMK health-monitoring plan below.
   Metrics reporting timezone defaults to America/New_York (heatmap buckets,

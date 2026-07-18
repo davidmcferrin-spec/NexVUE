@@ -92,6 +92,24 @@
   th { color: var(--dim); text-transform: uppercase; font-size: 11px; letter-spacing: .04em;
        cursor: pointer; user-select: none; }
   th:hover { color: var(--text); }
+  /* Input lock timeline — per-device green/red bands (replaces the old line chart) */
+  .lock-timeline { display: flex; flex-direction: column; gap: 8px; padding: 6px 0 2px; }
+  .lock-row { display: flex; align-items: center; gap: 10px; }
+  .lock-label { color: var(--dim); font-size: 11px; min-width: 46px; text-align: right; white-space: nowrap; }
+  .lock-strip {
+    position: relative; flex: 1; height: 18px; border-radius: 3px; overflow: hidden;
+    background: #2c3542; /* shows through as "no data" */
+  }
+  .lock-seg { position: absolute; top: 0; bottom: 0; }
+  .lock-seg.locked { background: var(--ok); }
+  .lock-seg.unlocked { background: var(--bad); }
+  .lock-axis { display: flex; justify-content: space-between; color: var(--dim); font-size: 10px; padding-left: 56px; }
+  .lock-legend { display: flex; gap: 16px; color: var(--dim); font-size: 11px; margin-top: 8px; }
+  .lock-legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .lock-key { display: inline-block; width: 14px; height: 9px; border-radius: 2px; }
+  .lock-key.locked { background: var(--ok); }
+  .lock-key.unlocked { background: var(--bad); }
+  .lock-key.nodata { background: #2c3542; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
   .dot.live { background: var(--ok); }
   .dot.ended { background: var(--dim); }
@@ -151,11 +169,19 @@
   <div class="panel"><h2>Total bandwidth</h2><canvas id="c-bw"></canvas></div>
   <div class="panel"><h2>Viewers connected</h2><canvas id="c-viewers"></canvas></div>
   <div class="panel"><h2>Active streams</h2><canvas id="c-streams"></canvas></div>
-  <div class="panel"><h2>Input lock status</h2><canvas id="c-inputs"></canvas></div>
+  <div class="panel">
+    <h2>Input lock timeline</h2>
+    <div id="inputs-timeline" class="lock-timeline"></div>
+    <div class="lock-legend" id="inputs-legend" style="display:none">
+      <span><i class="lock-key locked"></i>locked</span>
+      <span><i class="lock-key unlocked"></i>unlocked</span>
+      <span><i class="lock-key nodata"></i>no data</span>
+    </div>
+    <div id="inputs-empty" style="display:none; color:var(--dim); padding:12px 0;">No input samples in this range.</div>
+  </div>
   <div class="panel"><h2>Host CPU</h2><canvas id="c-cpu"></canvas></div>
   <div class="panel"><h2>Host memory</h2><canvas id="c-mem"></canvas></div>
   <div class="panel"><h2>iGPU Video engine</h2><canvas id="c-gpu-video"></canvas></div>
-  <div class="panel"><h2>iGPU Render engine</h2><canvas id="c-gpu-render"></canvas></div>
 </div>
 
 <div class="panel">
@@ -399,11 +425,6 @@
     };
   }
   function tooltipLabel(item) {
-    const pt = item.raw;
-    if (pt && pt.mode !== undefined) {
-      const state = pt.y === 1 ? "locked" : "unlocked";
-      return `${item.dataset.label}: ${state}${pt.mode ? " (" + pt.mode + ")" : ""}`;
-    }
     return `${item.dataset.label}: ${item.formattedValue}`;
   }
   function chartOptions(yScaleConfig) {
@@ -467,7 +488,7 @@
       if (tzFromApi) reportTz = tzFromApi;
       renderTotals(totals.totals);
       renderChannels(channels.channels);
-      renderInputs(inputs.inputs);
+      renderInputs(inputs.inputs, inputs.from, inputs.to);
       renderViewers(viewers.sessions);
       renderHeatmap(weekday.weekday_hours || [], weekday.timezone || reportTz);
       renderHost(host.host || []);
@@ -531,11 +552,6 @@
       data: rows.filter(t => t.gpu_video_enhance_pct != null).map(t => ({ x: t.ts * 1000, y: t.gpu_video_enhance_pct })),
       borderColor: palette[3], backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, tension: 0.15
     }], defaultYScale("%"));
-    makeChart("c-gpu-render", [{
-      label: "Render/3D %",
-      data: rows.filter(t => t.gpu_render_pct != null).map(t => ({ x: t.ts * 1000, y: t.gpu_render_pct })),
-      borderColor: palette[7], backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, tension: 0.15
-    }], defaultYScale("%"));
   }
 
   function heatValue(cell) {
@@ -597,21 +613,94 @@
     table.innerHTML = html;
   }
 
-  function renderInputs(rows) {
-    const byDevice = {};
-    for (const r of rows) {
-      (byDevice[r.device_index] ||= []).push({ x: r.ts * 1000, y: r.input_locked, mode: r.input_mode });
+  function renderInputs(rows, fromTs, toTs) {
+    const wrap = document.getElementById("inputs-timeline");
+    const legend = document.getElementById("inputs-legend");
+    const empty = document.getElementById("inputs-empty");
+    wrap.innerHTML = "";
+    if (!rows || rows.length === 0) {
+      legend.style.display = "none";
+      empty.style.display = "block";
+      return;
     }
+    empty.style.display = "none";
+    legend.style.display = "flex";
+
+    const byDevice = {};
+    for (const r of rows) (byDevice[r.device_index] ||= []).push(r);
     const keys = Object.keys(byDevice).sort((a, b) => a - b);
-    const datasets = keys.map((idx, i) => ({
-      label: `Input ${idx}`, data: byDevice[idx], borderColor: palette[i % palette.length],
-      backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, stepped: true
-    }));
-    makeChart("c-inputs", datasets, {
-      min: -0.1, max: 1.1,
-      ticks: { color: "#7d8a99", stepSize: 1, callback: v => (v === 1 ? "locked" : v === 0 ? "unlocked" : "") },
-      grid: { color: "#2c3542" }
-    });
+
+    const fromMs = (fromTs != null ? fromTs : rows[0].ts) * 1000;
+    const toMs = (toTs != null ? toTs : rows[rows.length - 1].ts) * 1000;
+    const spanMs = Math.max(1, toMs - fromMs);
+
+    for (const idx of keys) {
+      const samples = byDevice[idx].slice().sort((a, b) => a.ts - b.ts);
+
+      // Gap threshold: 3x the median sample interval (collector default 15s),
+      // min 60s — beyond that the strip shows "no data" background instead
+      // of stretching the last sample's state across a collector outage.
+      const deltas = [];
+      for (let i = 1; i < samples.length; i++) deltas.push(samples[i].ts - samples[i - 1].ts);
+      deltas.sort((a, b) => a - b);
+      const median = deltas.length ? deltas[Math.floor(deltas.length / 2)] : 15;
+      const gapS = Math.max(60, median * 3);
+
+      // Merge consecutive same-state samples into segments.
+      const segs = [];
+      for (const s of samples) {
+        const state = s.input_locked ? "locked" : "unlocked";
+        const startMs = s.ts * 1000;
+        const endMs = startMs + gapS * 1000; // provisional; trimmed below
+        const prev = segs[segs.length - 1];
+        if (prev && prev.state === state && startMs - prev.rawEndMs <= gapS * 1000) {
+          prev.rawEndMs = startMs;
+          prev.endMs = endMs;
+          if (s.input_mode) prev.mode = s.input_mode;
+        } else {
+          if (prev) prev.endMs = Math.min(prev.endMs, startMs);
+          segs.push({ state, startMs, rawEndMs: startMs, endMs, mode: s.input_mode || "" });
+        }
+      }
+      // Trim the final segment's provisional tail to the window end.
+      if (segs.length) {
+        const last = segs[segs.length - 1];
+        last.endMs = Math.min(last.endMs, toMs);
+      }
+
+      const row = document.createElement("div");
+      row.className = "lock-row";
+      const label = document.createElement("span");
+      label.className = "lock-label";
+      label.textContent = `SDI ${idx}`;
+      const strip = document.createElement("div");
+      strip.className = "lock-strip";
+
+      for (const seg of segs) {
+        const el = document.createElement("span");
+        el.className = `lock-seg ${seg.state}`;
+        const left = Math.max(0, (seg.startMs - fromMs) / spanMs * 100);
+        const width = Math.max(0.15, (seg.endMs - seg.startMs) / spanMs * 100);
+        el.style.left = `${left.toFixed(3)}%`;
+        el.style.width = `${Math.min(width, 100 - left).toFixed(3)}%`;
+        el.title = `${seg.state}${seg.mode ? ` (${seg.mode})` : ""}\n${fmtTime(seg.startMs)} – ${fmtTime(seg.endMs)}`;
+        strip.appendChild(el);
+      }
+
+      row.appendChild(label);
+      row.appendChild(strip);
+      wrap.appendChild(row);
+    }
+
+    const axis = document.createElement("div");
+    axis.className = "lock-axis";
+    const a0 = document.createElement("span");
+    a0.textContent = fmtTime(fromMs);
+    const a1 = document.createElement("span");
+    a1.textContent = fmtTime(toMs);
+    axis.appendChild(a0);
+    axis.appendChild(a1);
+    wrap.appendChild(axis);
   }
 
   function renderChannels(rows) {

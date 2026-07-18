@@ -620,7 +620,7 @@ Open `http://<edge-ip>/metrics.html` (top nav → Metrics).
 | `viewers` | Per-viewer session drill-down: IP, channel, user (blank until Phase 2 auth), first/last seen, duration, bytes served, live/ended. Add `&channel=chN` to filter to one channel. |
 | `inputs` | Per-DeckLink-input lock/format history as a time series. Powers the input-lock chart. |
 | `weekday_hours` | Mon–Fri × hour-of-day buckets (avg/peak bandwidth & viewers) for the heatmap. Timezone: `America/New_York` by default (`NEXVUE_METRICS_TZ` override). |
-| `host` | Host CPU %, memory used/total, load1, and (when available) iGPU Video/Render/VideoEnhance busy % + GPU freq — capacity correlation on the Metrics page, **not** a CheckMK substitute. Requires `intel-gpu-tools` / `intel_gpu_top` + CAP_PERFMON (see setup). |
+| `host` | Host CPU %, memory used/total, load1, and (when available) iGPU Video/Render/VideoEnhance busy % + GPU freq — capacity correlation on the Metrics page, **not** a CheckMK substitute. Requires `intel-gpu-tools` / `intel_gpu_top` + CAP_PERFMON (see setup). The dashboard charts CPU, memory, and the iGPU Video engine; Render % is still collected/served but not charted. |
 
 `range` accepts `15m`, `1h`, `6h`, `24h`, `7d`, `30d` — matching the
 dashboard's preset buttons. For a specific day or window, pass Unix epoch
