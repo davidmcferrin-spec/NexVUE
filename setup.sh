@@ -59,6 +59,7 @@ REQUIRED_FILES=(
   nexvue-ops-env-update.py nexvue-ops.sudoers
   nexvue-ops-status.sh nexvue-ops-journal.sh
   nexvue-ops-env-read.sh nexvue-ops-env-write.sh nexvue-ops-restart.sh
+  nexvue-ops-enable.sh
   channels-example.env
 )
 if ! $CHECK_ONLY; then
@@ -144,6 +145,7 @@ install -m 755 "${REPO_DIR}/nexvue-ops-journal.sh" /usr/local/bin/nexvue-ops-jou
 install -m 755 "${REPO_DIR}/nexvue-ops-env-read.sh" /usr/local/bin/nexvue-ops-env-read.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-env-write.sh" /usr/local/bin/nexvue-ops-env-write.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-restart.sh" /usr/local/bin/nexvue-ops-restart.sh
+install -m 755 "${REPO_DIR}/nexvue-ops-enable.sh" /usr/local/bin/nexvue-ops-enable.sh
 # Caption JSON state (encode writes; Apache/www-data reads via nexvue-captions.php).
 install -d -m 755 -o nexvue -g nexvue /run/nexvue/captions 2>/dev/null \
   || mkdir -p /run/nexvue/captions
@@ -266,8 +268,8 @@ fi
 
 # Ops wrappers + sudoers
 for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
-         nexvue-ops-env-write.sh nexvue-ops-restart.sh nexvue-ops-env-update.py \
-         nexvue-phase1-closeout.sh; do
+         nexvue-ops-env-write.sh nexvue-ops-restart.sh nexvue-ops-enable.sh \
+         nexvue-ops-env-update.py nexvue-phase1-closeout.sh; do
   [ -x "/usr/local/bin/$w" ] || [ -f "/usr/local/bin/$w" ] \
     && ok "ops helper: $w" || warn "ops helper missing: /usr/local/bin/$w"
 done

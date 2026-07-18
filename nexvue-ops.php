@@ -8,7 +8,11 @@
  *
  * Actions (GET or POST JSON body):
  *   services | journal | channels_list | channel_get | channel_put
- *   | channels_bulk | restart | aliases | kick_viewer | kick_check
+ *   | channels_bulk | restart | set_enabled | aliases | kick_viewer | kick_check
+ *
+ * set_enabled toggles systemd enable/disable (with --now) for encoder units
+ * ONLY (nexvue-encode@0-7) via nexvue-ops-enable.sh — the LAN-trust ops page
+ * must not be able to disable mediamtx or the shared daemons.
  *
  * kick_viewer POSTs to MediaMTX /v3/webrtcsessions/kick/{id} on loopback
  * (no sudo), then records the session in a short-lived kick registry so
@@ -214,6 +218,28 @@ function kick_registry_check(?string $sessionId, ?string $clientIp = null): arra
     });
 }
 
+/** Units the ops UI may enable/disable — encoders only, never shared services. */
+function unit_enable_allowed(string $unit): bool {
+    return (bool)preg_match('/^nexvue-encode@[0-7]$/', $unit);
+}
+
+/**
+ * Parse nexvue-ops-status.sh output: "<active-state> <enabled-state>".
+ * Tolerates the old single-token format (enabled falls back to "unknown").
+ *
+ * @return array{state: string, enabled: string}
+ */
+function parse_unit_status(string $stdout): array {
+    $parts = preg_split('/\s+/', trim($stdout), -1, PREG_SPLIT_NO_EMPTY);
+    if (!is_array($parts)) {
+        $parts = [];
+    }
+    return [
+        'state' => $parts[0] ?? 'unknown',
+        'enabled' => $parts[1] ?? 'unknown',
+    ];
+}
+
 function mediamtx_api_base(): string {
     $base = getenv('NEXVUE_MEDIAMTX_API_URL');
     if (!is_string($base) || $base === '') {
@@ -353,14 +379,13 @@ if ($action === 'services') {
     $items = [];
     foreach ($units as $unit) {
         $r = sudo_run(['/usr/local/bin/nexvue-ops-status.sh', $unit]);
-        $state = trim($r['stdout']);
-        if ($state === '') {
-            $state = 'unknown';
-        }
+        $st = parse_unit_status($r['stdout']);
         $items[] = [
             'unit' => $unit,
-            'state' => $state,
-            'ok' => ($state === 'active'),
+            'state' => $st['state'],
+            'enabled' => $st['enabled'],
+            'can_toggle' => unit_enable_allowed($unit),
+            'ok' => ($st['state'] === 'active'),
         ];
     }
     echo json_encode(['ok' => true, 'services' => $items]);
@@ -438,8 +463,8 @@ if ($action === 'channels_list') {
         }
         $keys = $data['keys'] ?? [];
         $unit = "nexvue-encode@{$id}";
-        $st = sudo_run(['/usr/local/bin/nexvue-ops-status.sh', $unit]);
-        $state = trim($st['stdout']) ?: 'unknown';
+        $st = parse_unit_status(sudo_run(['/usr/local/bin/nexvue-ops-status.sh', $unit])['stdout']);
+        $state = $st['state'];
         $channels[] = [
             'id' => $id,
             'CHANNEL_PATH' => $keys['CHANNEL_PATH'] ?? "ch{$id}",
@@ -452,6 +477,7 @@ if ($action === 'channels_list') {
             'LO_PRESET' => $keys['LO_PRESET'] ?? '',
             'unit' => $unit,
             'state' => $state,
+            'enabled' => $st['enabled'],
             'active' => ($state === 'active'),
         ];
     }
@@ -590,6 +616,26 @@ if ($action === 'restart') {
         fail(500, trim($r['stderr']) ?: 'restart failed');
     }
     echo json_encode(['ok' => true, 'restarted' => $clean]);
+    exit;
+}
+
+// ---- set_enabled (encoder units only) ------------------------------------------
+
+if ($action === 'set_enabled') {
+    $unit = $body['unit'] ?? ($_GET['unit'] ?? '');
+    $enable = $body['enable'] ?? null;
+    if (!is_string($unit) || !unit_enable_allowed($unit)) {
+        fail(400, 'unit must be nexvue-encode@0-7');
+    }
+    if (!is_bool($enable)) {
+        fail(400, 'enable must be true or false');
+    }
+    $verb = $enable ? 'enable' : 'disable';
+    $r = sudo_run(['/usr/local/bin/nexvue-ops-enable.sh', $verb, $unit]);
+    if ($r['code'] !== 0) {
+        fail(500, trim($r['stderr']) ?: "{$verb} failed");
+    }
+    echo json_encode(['ok' => true, 'unit' => $unit, 'enabled' => $enable]);
     exit;
 }
 

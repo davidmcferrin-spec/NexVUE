@@ -66,6 +66,7 @@
   .unit .state { font-size: 12px; color: var(--dim); margin-top: 2px; }
   .unit .state.ok { color: var(--ok); }
   .unit .state.bad { color: var(--bad); }
+  .unit .state.off { color: var(--dim); font-style: italic; }
   .log-bar {
     display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     margin-bottom: 8px; flex-shrink: 0;
@@ -126,6 +127,7 @@
       <button type="button" id="follow" class="active" title="Poll for new lines">Follow</button>
       <button type="button" id="clear-log">Clear view</button>
       <button type="button" id="restart-unit" disabled>Restart unit…</button>
+      <button type="button" id="toggle-unit" disabled>Enable/Disable…</button>
       <span id="status">select a unit</span>
     </div>
     <pre id="log"></pre>
@@ -153,11 +155,13 @@
   const statusEl = document.getElementById("status");
   const followBtn = document.getElementById("follow");
   const restartBtn = document.getElementById("restart-unit");
+  const toggleBtn = document.getElementById("toggle-unit");
 
   let selected = null;
   let follow = true;
   let lastLine = "";
   let sinceCursor = "";
+  let lastServices = [];
 
   async function api(action, body) {
     const opts = body
@@ -170,22 +174,44 @@
     return data;
   }
 
-  function stateClass(state) {
+  function stateClass(state, enabled) {
     if (state === "active") return "ok";
-    if (state === "failed" || state === "inactive") return "bad";
+    if (state === "failed") return "bad";
+    // A deliberately disabled unit sitting inactive is parked, not broken.
+    if (state === "inactive") return enabled === "disabled" ? "off" : "bad";
     return "";
+  }
+
+  function stateText(s) {
+    const en = s.enabled && s.enabled !== "unknown" ? ` · ${s.enabled}` : "";
+    return `${s.state}${en}`;
+  }
+
+  function updateToggleBtn() {
+    const svc = lastServices.find(x => x.unit === selected);
+    if (!svc || !svc.can_toggle) {
+      toggleBtn.disabled = true;
+      toggleBtn.textContent = "Enable/Disable…";
+      delete toggleBtn.dataset.enable;
+      return;
+    }
+    const isEnabled = svc.enabled === "enabled";
+    toggleBtn.disabled = false;
+    toggleBtn.textContent = isEnabled ? "Disable unit…" : "Enable unit…";
+    toggleBtn.dataset.enable = isEnabled ? "false" : "true";
   }
 
   async function refreshServices() {
     try {
       const data = await api("services");
+      lastServices = data.services;
       const keep = selected;
       listEl.innerHTML = "";
       for (const s of data.services) {
         const b = document.createElement("button");
         b.type = "button";
         b.className = "unit" + (keep === s.unit ? " selected" : "");
-        b.innerHTML = `<div class="name">${s.unit}</div><div class="state ${stateClass(s.state)}">${s.state}</div>`;
+        b.innerHTML = `<div class="name">${s.unit}</div><div class="state ${stateClass(s.state, s.enabled)}">${stateText(s)}</div>`;
         b.addEventListener("click", () => selectUnit(s.unit));
         listEl.appendChild(b);
       }
@@ -193,6 +219,7 @@
         const still = data.services.find(x => x.unit === keep);
         restartBtn.disabled = !still;
       }
+      updateToggleBtn();
     } catch (err) {
       statusEl.textContent = `status error: ${err.message}`;
     }
@@ -207,6 +234,7 @@
       el.classList.toggle("selected", el.querySelector(".name").textContent === unit);
     });
     restartBtn.disabled = false;
+    updateToggleBtn();
     statusEl.textContent = unit;
     pollJournal(true);
   }
@@ -277,6 +305,21 @@
     try {
       await api("restart", { units: [selected] });
       statusEl.textContent = `restarted ${selected}`;
+      refreshServices();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+  toggleBtn.addEventListener("click", async () => {
+    if (!selected || !("enable" in toggleBtn.dataset)) return;
+    const enable = toggleBtn.dataset.enable === "true";
+    const detail = enable
+      ? "starts now and on every boot"
+      : "stops now and stays off across boots (clears any failed state)";
+    if (!confirm(`${enable ? "Enable" : "Disable"} ${selected}? This ${detail}.`)) return;
+    try {
+      await api("set_enabled", { unit: selected, enable });
+      statusEl.textContent = `${enable ? "enabled" : "disabled"} ${selected}`;
       refreshServices();
     } catch (err) {
       alert(err.message);

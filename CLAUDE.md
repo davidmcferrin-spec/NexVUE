@@ -138,9 +138,10 @@ specifically because this box can't get additional ports opened.
 ## Known open items / risks
 
 - Empty Quad ports with `nexvue-encode@N` still enabled restart-loop
-  (`RestartSec=3`) until Phase 1.5 slate — enable encoders only for patched
-  Input connectors; closeout script warns and prints `disable --now` when it
-  sees unlocked+active storms.
+ (`RestartSec=3`) until Phase 1.5 slate — enable encoders only for patched
+ Input connectors; closeout script warns and prints `disable --now` when it
+ sees unlocked+active storms. Parking is now also doable from the Services
+ page Enable/Disable toggle (encoder units only).
 - Glass-to-glass latency still unmeasured with a burnt-in clock (datacenter
   deployment — no co-located source monitor). RTT-based estimate recorded in
   README; re-measure on bench when possible. Duo 2 connector-direction notes
@@ -183,6 +184,12 @@ specifically because this box can't get additional ports opened.
   tracks).
 - Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +
  allowlisted sudo wrappers. Phase 1 LAN-trust — not for DMZ without auth.
+ Services shows systemd enable state (`nexvue-ops-status.sh` prints
+ `<is-active> <is-enabled>`) and an Enable/Disable toggle for
+ `nexvue-encode@0-7` ONLY (`nexvue-ops-enable.sh` + `set_enabled` action) —
+ never the shared units. Disable = `disable --now` + `reset-failed` so a
+ parked encoder doesn't show stale red "failed"; disabled+inactive renders
+ neutral, not red, on Services and Settings.
 - Channel `.env` files are SOURCED by bash (`nexvue-encode@.service`
  ExecStart), so values with spaces MUST be double-quoted —
  `CHANNEL_ALIAS=TVU 35` unquoted runs `35` as a command and truncates the

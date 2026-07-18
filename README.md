@@ -412,7 +412,11 @@ Disable empty channels:
 ```bash
 # example: devices 4–7 unlocked / unpatched
 sudo systemctl disable --now nexvue-encode@{4,5,6,7}
+sudo systemctl reset-failed 'nexvue-encode@*'   # clear stale red "failed"
 ```
+
+Or use the Services page Enable/Disable toggle, which does both steps per
+encoder unit (see the ops-pages note under Operational notes).
 
 On the edge box, from the repo root (or `/usr/local/bin` after `setup.sh`):
 
@@ -862,6 +866,16 @@ Services/Settings).
   allowlisted sudo wrappers under `/usr/local/bin/nexvue-ops-*` (sudoers drop-in
   `/etc/sudoers.d/nexvue-ops`). Saves write env files only; restart is an
   explicit confirm. Phase 1 LAN-trust — do not DMZ-expose without auth.
+  The Services page also shows each unit's systemd enable state
+  (`nexvue-ops-status.sh` prints `<is-active> <is-enabled>`) and offers an
+  Enable/Disable toggle for **encoder units only** (`nexvue-encode@0-7`, via
+  `nexvue-ops-enable.sh` + `set_enabled`) — parking an unpatched Quad port
+  from the UI instead of SSH. Core units (mediamtx, nexvue-status,
+  nexvue-metrics) can be restarted but never disabled from the page. Disable
+  runs `systemctl disable --now` **plus `reset-failed`**, so a previously
+  restart-looping encoder stops showing a stale red `failed` after being
+  parked; disabled+inactive encoders render as neutral "parked", not
+  failure-red, on both Services and Settings.
 - **Multiviewer defaults to LO** with a global HI/LO toggle (quad = up to four
   simultaneous WHEP sessions). Only one pane is unmuted at a time — click a
   pane to select audio. Switching Dual↔Quad tears down hidden panes so unused
