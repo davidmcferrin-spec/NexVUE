@@ -36,7 +36,8 @@
  *   channels       Per-channel breakdown aggregated over the window.
  *   viewers        Per-viewer session drill-down (IP/channel/user/…).
  *   inputs         DeckLink input lock/format time series.
- *   weekday_hours  Mon–Fri × hour-of-day heatmap buckets from totals.
+ *   weekday_hours  Mon–Sun × hour-of-day heatmap: equal-date averages
+ *                  of bandwidth/viewers (missing telemetry excluded).
  *   host           Host CPU % / memory / load1 / CPU+GPU °C time series
  *                  (capacity analytics; not a CheckMK substitute).
  *
@@ -493,15 +494,15 @@ if ($view === 'inputs') {
     exit;
 }
 
-// ---- View: weekday_hours (Mon–Fri × hour heatmap) --------------------------------
+// ---- View: weekday_hours (Mon–Sun × hour analytical heatmap) ---------------------
 
 if ($view === 'weekday_hours') {
     $tz = metrics_timezone();
     $tzName = $tz->getName();
 
-    // Dense 5×24 grid (Mon=1 … Fri=5). Empty cells keep zeros.
+    // Dense 7×24 grid (Mon=1 … Sun=7). Empty cells keep zeros.
     $cells = [];
-    for ($dow = 1; $dow <= 5; $dow++) {
+    for ($dow = 1; $dow <= 7; $dow++) {
         for ($hour = 0; $hour <= 23; $hour++) {
             $cells["{$dow}_{$hour}"] = [
                 'weekday' => $dow,
@@ -511,6 +512,7 @@ if ($view === 'weekday_hours') {
                 'avg_readers' => 0.0,
                 'peak_readers' => 0,
                 'sample_count' => 0,
+                'date_count' => 0,
             ];
         }
     }
@@ -521,47 +523,75 @@ if ($view === 'weekday_hours') {
         $tsParams
     );
 
-    // Accumulate in PHP so weekday/hour use America/New_York (or NEXVUE_METRICS_TZ),
-    // not the SQLite connection's UTC assumption.
-    $acc = [];
+    // Two-stage aggregation in reporting TZ (America/New_York or NEXVUE_METRICS_TZ):
+    // 1) average samples within each local calendar date + hour
+    // 2) average those per-date means equally into weekday + hour
+    // Missing telemetry (no samples that date/hour) is excluded, not zero-filled.
+    $byDateHour = [];
     foreach ($rows as $r) {
         $dt = (new DateTimeImmutable('@' . (int)$r['ts']))->setTimezone($tz);
         $dow = (int)$dt->format('N'); // 1=Mon … 7=Sun
-        if ($dow > 5) {
-            continue;
-        }
         $hour = (int)$dt->format('G');
-        $key = "{$dow}_{$hour}";
-        if (!isset($acc[$key])) {
-            $acc[$key] = [
-                'sum_bw' => 0.0, 'max_bw' => 0.0,
-                'sum_r' => 0.0, 'max_r' => 0, 'n' => 0,
+        $date = $dt->format('Y-m-d');
+        $dhKey = "{$date}_{$hour}";
+        if (!isset($byDateHour[$dhKey])) {
+            $byDateHour[$dhKey] = [
+                'weekday' => $dow,
+                'hour' => $hour,
+                'sum_bw' => 0.0,
+                'max_bw' => 0.0,
+                'sum_r' => 0.0,
+                'max_r' => 0,
+                'n' => 0,
             ];
         }
         $bw = (float)$r['total_bandwidth_bps'];
         $rd = (int)$r['total_readers'];
-        $acc[$key]['sum_bw'] += $bw;
-        $acc[$key]['max_bw'] = max($acc[$key]['max_bw'], $bw);
-        $acc[$key]['sum_r'] += $rd;
-        $acc[$key]['max_r'] = max($acc[$key]['max_r'], $rd);
-        $acc[$key]['n']++;
+        $byDateHour[$dhKey]['sum_bw'] += $bw;
+        $byDateHour[$dhKey]['max_bw'] = max($byDateHour[$dhKey]['max_bw'], $bw);
+        $byDateHour[$dhKey]['sum_r'] += $rd;
+        $byDateHour[$dhKey]['max_r'] = max($byDateHour[$dhKey]['max_r'], $rd);
+        $byDateHour[$dhKey]['n']++;
+    }
+
+    $acc = [];
+    foreach ($byDateHour as $dh) {
+        $n = $dh['n'];
+        if ($n <= 0) {
+            continue;
+        }
+        $key = "{$dh['weekday']}_{$dh['hour']}";
+        if (!isset($acc[$key])) {
+            $acc[$key] = [
+                'sum_bw' => 0.0, 'max_bw' => 0.0,
+                'sum_r' => 0.0, 'max_r' => 0,
+                'sample_count' => 0, 'date_count' => 0,
+            ];
+        }
+        $acc[$key]['sum_bw'] += $dh['sum_bw'] / $n;
+        $acc[$key]['max_bw'] = max($acc[$key]['max_bw'], $dh['max_bw']);
+        $acc[$key]['sum_r'] += $dh['sum_r'] / $n;
+        $acc[$key]['max_r'] = max($acc[$key]['max_r'], $dh['max_r']);
+        $acc[$key]['sample_count'] += $n;
+        $acc[$key]['date_count']++;
     }
 
     foreach ($acc as $key => $a) {
-        $n = $a['n'];
+        $dates = $a['date_count'];
         $cells[$key] = [
             'weekday' => (int)explode('_', $key)[0],
             'hour' => (int)explode('_', $key)[1],
-            'avg_bandwidth_bps' => $n ? $a['sum_bw'] / $n : 0.0,
+            'avg_bandwidth_bps' => $dates ? $a['sum_bw'] / $dates : 0.0,
             'peak_bandwidth_bps' => $a['max_bw'],
-            'avg_readers' => $n ? $a['sum_r'] / $n : 0.0,
+            'avg_readers' => $dates ? $a['sum_r'] / $dates : 0.0,
             'peak_readers' => $a['max_r'],
-            'sample_count' => $n,
+            'sample_count' => $a['sample_count'],
+            'date_count' => $dates,
         ];
     }
 
     $out = [];
-    for ($dow = 1; $dow <= 5; $dow++) {
+    for ($dow = 1; $dow <= 7; $dow++) {
         for ($hour = 0; $hour <= 23; $hour++) {
             $out[] = $cells["{$dow}_{$hour}"];
         }

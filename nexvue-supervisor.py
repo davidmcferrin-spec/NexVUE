@@ -116,7 +116,11 @@ class SupervisorConfig:
     audio_queue_buffers: int = 100
     audio_resample_quality: int = 9
     decklink_buffer_frames: int = 2
-    watchdog_ms: int = 3000
+    # 0 = disabled (default). The Phase 1 gst-launch pipeline used 3000 ms, but
+    # that fights SIGNAL_LOSS_DEBOUNCE_S (15s): a brief unlock would ERROR the
+    # DeckLink bin via watchdog long before the state machine could ride it
+    # out as black frames. Signal property + debounce replace the watchdog.
+    watchdog_ms: int = 0
     output_width: int = 1920
     output_height: int = 1080
     rtsp_url: str = ""
@@ -250,7 +254,7 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
     if decklink_buffer_frames < 1:
         raise ConfigError(f"DECKLINK_BUFFER_FRAMES must be a positive integer, got {decklink_buffer_frames}")
 
-    watchdog_ms = opt_int("WATCHDOG_MS", 3000)
+    watchdog_ms = opt_int("WATCHDOG_MS", 0)
     if watchdog_ms < 0:
         raise ConfigError(f"WATCHDOG_MS must be >= 0, got {watchdog_ms}")
 

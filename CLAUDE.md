@@ -19,7 +19,7 @@ media) — NexVUE mirrors that architecture, self-hosted.
 
 A `nexvue-metrics` component provides usage/analytics history (bandwidth,
 viewers, active streams, input lock/format, per-viewer IP/channel
-drill-down, Mon–Fri hour-of-day heatmap, host CPU/memory, CPU/GPU package
+drill-down, Mon–Sun day-and-hour usage heatmap (equal-date averages), host CPU/memory, CPU/GPU package
 temperatures from sysfs hwmon, and Intel iGPU Video/Render engine busy %
 for capacity correlation) — explicitly NOT the health/uptime monitoring
 planned for CheckMK in Phase 4. Split deliberately across two pieces with
@@ -70,9 +70,10 @@ specifically because this box can't get additional ports opened.
   Usage-metrics dashboard (bandwidth/viewers/streams/input-lock/per-viewer
   IP-channel drill-down with column filters — Status/IP/Channel/Duration/
   Data/Client via plain text, `/regex/`, or `>`/`<` comparisons —
-  custom from/to ranges, weekday heatmap, host
-  CPU/memory + Temperature chart (CPU/GPU °C with 95 °C limit lines) +
-  iGPU Video engine % (Render % collected but not charted),
+  custom from/to ranges, Mon–Sun day-and-hour usage heatmap
+  (equal-date averages of observed dates in range; missing telemetry
+  excluded), host CPU/memory + Temperature chart (CPU/GPU °C with 95 °C
+  limit lines) + iGPU Video engine % (Render % collected but not charted),
   `nexvue-metrics` + `nexvue-metrics.php`) landed
   ahead of schedule — separate from and not a
   substitute for the Phase 4 CheckMK health-monitoring plan below.

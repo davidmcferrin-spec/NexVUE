@@ -230,8 +230,8 @@
 </div>
 
 <div class="panel">
-  <h2>Weekday usage by hour (Mon–Fri)</h2>
-  <p class="heat-tip">Use 7d / 30d or a multi-day custom window so buckets fill in. Hours are America/New_York (or NEXVUE_METRICS_TZ).</p>
+  <h2>Usage by day and hour</h2>
+  <p class="heat-tip">Analytical heatmap: each cell averages observed dates in the range for that weekday/hour (missing telemetry excluded). Use 7d / 30d or a multi-day custom window so buckets fill in. Hours are America/New_York (or NEXVUE_METRICS_TZ).</p>
   <div class="bar" style="margin-bottom:12px">
     <span style="color:var(--dim)">metric:</span>
     <button type="button" class="heat-metric active" data-metric="bw">Bandwidth</button>
@@ -239,9 +239,9 @@
     <span id="heat-tz" style="color:var(--dim); margin-left:auto"></span>
   </div>
   <div class="heat-wrap">
-    <table class="heat" id="heat-table" aria-label="Weekday hour heatmap"></table>
+    <table class="heat" id="heat-table" aria-label="Day and hour usage heatmap"></table>
   </div>
-  <div id="heat-empty" style="display:none; color:var(--dim); padding:12px 0;">No weekday samples in this range.</div>
+  <div id="heat-empty" style="display:none; color:var(--dim); padding:12px 0;">No day/hour samples in this range.</div>
 </div>
 
 <div class="panel">
@@ -337,7 +337,7 @@
   const charts = {};
   const PALETTE_DARK = ["#56c4f5", "#4cc38a", "#e5484d", "#f5a623", "#b56cf5", "#f56ca0", "#6ce0f5", "#c3e54c"];
   const PALETTE_LIGHT = ["#0b7ea4", "#1f9d5c", "#c62828", "#b86e00", "#7b3db8", "#c2185b", "#00838f", "#558b2f"];
-  const DOW_LABELS = { 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri" };
+  const DOW_LABELS = { 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun" };
   // Sustained-operation warning lines (Arrow Lake TjMax is 105 °C). Tune here only.
   const TEMP_LIMIT_CPU_C = 95;
   const TEMP_LIMIT_GPU_C = 95;
@@ -767,7 +767,7 @@
     tzEl.textContent = lastHeatTz ? `tz: ${lastHeatTz}` : "";
 
     const cells = lastHeatCells;
-    const hasData = cells.some(c => (c.sample_count || 0) > 0);
+    const hasData = cells.some(c => (c.date_count || c.sample_count || 0) > 0);
     if (!hasData) {
       table.innerHTML = "";
       empty.style.display = "block";
@@ -784,16 +784,21 @@
     let html = "<thead><tr><th></th>";
     for (let h = 0; h < 24; h++) html += `<th>${h}</th>`;
     html += "</tr></thead><tbody>";
-    for (let dow = 1; dow <= 5; dow++) {
+    for (let dow = 1; dow <= 7; dow++) {
       html += `<tr><td class="heat-label">${DOW_LABELS[dow]}</td>`;
       for (let h = 0; h < 24; h++) {
-        const c = byKey[`${dow}_${h}`] || { sample_count: 0, avg_bandwidth_bps: 0, avg_readers: 0 };
+        const c = byKey[`${dow}_${h}`] || {
+          sample_count: 0, date_count: 0, avg_bandwidth_bps: 0, avg_readers: 0,
+        };
         const v = heatValue(c);
         const t = maxV > 0 ? v / maxV : 0;
+        const dates = c.date_count || 0;
+        const samples = c.sample_count || 0;
+        const dateWord = dates === 1 ? "date" : "dates";
         const title = heatMetric === "viewers"
-          ? `${DOW_LABELS[dow]} ${h}:00 — avg ${v.toFixed(1)} viewers (${c.sample_count || 0} samples)`
-          : `${DOW_LABELS[dow]} ${h}:00 — avg ${fmtBps(v)} (${c.sample_count || 0} samples)`;
-        const bg = (c.sample_count || 0) ? heatColor(t) : "transparent";
+          ? `${DOW_LABELS[dow]} ${h}:00 — avg ${v.toFixed(1)} viewers (${dates} ${dateWord}, ${samples} samples)`
+          : `${DOW_LABELS[dow]} ${h}:00 — avg ${fmtBps(v)} (${dates} ${dateWord}, ${samples} samples)`;
+        const bg = dates ? heatColor(t) : "transparent";
         html += `<td class="heat-cell" style="background:${bg}" title="${escAttr(title)}"></td>`;
       }
       html += "</tr>";
