@@ -56,14 +56,19 @@ TimeoutStopSec=12
 # journal stays readable.
 
 # Caption side channel state (CEA-608 decode → JSON for Apache/PHP).
+# Shared across encode@N — Preserve=yes so stopping one unit (or restart-all)
+# does not tear down /run/nexvue while siblings still write (EROFS storm).
 RuntimeDirectory=nexvue
 RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 # Hardening — encoder needs devices and loopback network, nothing else.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadOnlyPaths=/etc/nexvue
+# ProtectSystem=strict makes the tree RO; RuntimeDirectory is auto-added, but
+# keep an explicit path so captions JSON/FIFOs stay writable under /run/nexvue.
 ReadWritePaths=/run/nexvue
 
 [Install]

@@ -330,6 +330,16 @@ def atomic_write_json(path: Path, obj: dict) -> None:
     os.replace(str(tmp), str(path))
 
 
+def try_atomic_write_json(path: Path, obj: dict) -> bool:
+    """Best-effort state write — never raise (encode must not die for captions)."""
+    try:
+        atomic_write_json(path, obj)
+        return True
+    except OSError as exc:
+        print(f"[nexvue-captions-decode] state write failed ({path}): {exc}", file=sys.stderr)
+        return False
+
+
 def _open_control_fd(control_fifo: Path) -> int | None:
     """Open the control FIFO's read end, non-blocking. O_NONBLOCK on the
     read side of a FIFO always succeeds immediately (unlike the write
@@ -355,7 +365,7 @@ def decode_stream(
     def write_state(text: str) -> None:
         nonlocal seq
         seq += 1
-        atomic_write_json(
+        try_atomic_write_json(
             state_path,
             {
                 "channel": channel,
@@ -504,17 +514,27 @@ def main(argv: list[str] | None = None) -> int:
     state_path = state_dir / f"{channel}.json"
 
     # Initial empty state so PHP/SSE clients see a file immediately.
-    atomic_write_json(
-        state_path,
-        {
-            "channel": channel,
-            "text": "",
-            "clear": True,
-            "ts": time.time(),
-            "seq": 0,
-            "service": "CC1",
-        },
-    )
+    # Retry briefly: shared /run/nexvue can be briefly RO while sibling
+    # encode units restart (RuntimeDirectory teardown race).
+    empty = {
+        "channel": channel,
+        "text": "",
+        "clear": True,
+        "ts": time.time(),
+        "seq": 0,
+        "service": "CC1",
+    }
+    for attempt in range(10):
+        if try_atomic_write_json(state_path, empty):
+            break
+        time.sleep(0.5)
+    else:
+        print(
+            f"[nexvue-captions-decode] cannot write {state_path} after retries — "
+            "check ProtectSystem/ReadWritePaths and RuntimeDirectoryPreserve",
+            file=sys.stderr,
+        )
+        return 1
 
     control_fifo = Path(args.control_fifo) if args.control_fifo else None
 

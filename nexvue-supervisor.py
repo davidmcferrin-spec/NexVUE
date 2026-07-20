@@ -739,6 +739,8 @@ class CaptionsSupervisor:
         self._proc: Optional[subprocess.Popen] = None
         self._control_fd: Optional[int] = None
         self._control_warned = False
+        self._respawn_after_mono = 0.0
+        self._respawn_failures = 0
 
         if not config.captions_enable:
             return
@@ -798,10 +800,20 @@ class CaptionsSupervisor:
         if not self.enabled or self._proc is None:
             return
         rc = self._proc.poll()
-        if rc is not None:
-            self._log.warning("captions decoder exited (rc=%s) — respawning", rc)
-            self._close_control_fd()
-            self._spawn()
+        if rc is None:
+            self._respawn_failures = 0
+            return
+        now = time.monotonic()
+        if now < self._respawn_after_mono:
+            return
+        self._log.warning("captions decoder exited (rc=%s) — respawning", rc)
+        self._close_control_fd()
+        self._spawn()
+        # Back off before the next respawn if this one dies immediately
+        # (e.g. EROFS while sibling encode units restart /run/nexvue).
+        self._respawn_failures += 1
+        delay = min(30.0, 0.5 * (2 ** min(self._respawn_failures - 1, 5)))
+        self._respawn_after_mono = time.monotonic() + delay
 
     def _ensure_control_fd(self) -> Optional[int]:
         if self._control_fd is not None:

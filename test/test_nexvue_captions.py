@@ -138,6 +138,10 @@ class TestCea608Decoder(unittest.TestCase):
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["text"], "A")
             self.assertEqual(data["seq"], 1)
+            self.assertTrue(
+                self.mod.try_atomic_write_json(path, {"channel": "ch0", "text": "B", "seq": 2})
+            )
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["text"], "B")
 
     def test_reset_clears_all_state(self) -> None:
         # Phase 1.5 supervisor sends a control-FIFO CLEAR once on entering
