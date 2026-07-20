@@ -206,6 +206,9 @@ ENC_HI="$(build_enc "${BITRATE_KBPS}" "${GOP_FRAMES}" 7 hi)"
 ENC_LO="$(build_enc "${LO_BITRATE_KBPS}" "${LO_GOP_FRAMES}" "${LO_TARGET_USAGE}" lo)"
 
 # ---- Fixed output framerate (drives the normalization capsfilter) -------------
+# DEINT_FIELDS names are historical: they select OUTPUT fps only. The
+# deinterlace element always uses fields=all so progressive sources (and
+# mode=auto lock transitions) do not die with not-negotiated (-4).
 case "${DEINT_FIELDS}" in
   all) OUTPUT_FPS="60000/1001" ;;
   top) OUTPUT_FPS="30000/1001" ;;
@@ -279,7 +282,10 @@ fi
 if [ "${WATCHDOG_MS}" -gt 0 ] 2>/dev/null; then
   PIPELINE+=" ! watchdog timeout=${WATCHDOG_MS}"
 fi
-PIPELINE+=" ! deinterlace fields=${DEINT_FIELDS} method=greedyh"
+# Deinterlace always uses fields=all (handles progressive + interlaced SDI).
+# DEINT_FIELDS only selects the normalized OUTPUT_FPS via videorate below —
+# literal fields=top not-negotiates on many progressive/auto locks.
+PIPELINE+=" ! deinterlace fields=all method=greedyh"
 PIPELINE+=" ! videorate ! videoscale ! videoconvert"
 # interlace-mode=progressive: WebRTC is progressive-only; also stops the tee
 # LO branch from fighting an interleaved HI capsfilter.

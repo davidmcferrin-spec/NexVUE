@@ -516,7 +516,7 @@
       label: "DEINT_FIELDS",
       type: "select",
       options: ["all", "top"],
-      tip: "Output cadence from a 1080i59.94 source. all → 1080p59.94 full motion (program / director / talent return). top → 1080p29.97 at about half encode cost (multiview walls, prompter). Blank = all.",
+      tip: "Normalized output cadence. all → 1080p59.94 (program / director). top → 1080p29.97 (multiview / prompter, lower encode load). Deinterlace always uses fields=all so progressive SDI locks still negotiate; this setting only picks the output framerate. Blank = all.",
     },
     BITRATE_KBPS: {
       label: "BITRATE_KBPS",

@@ -52,9 +52,11 @@ out=$(DEVICE_NUMBER=1 CHANNEL_PATH=ch1 ENABLE_AUDIO=false run_encode)
 grep -q "opusenc" <<<"$out" && fail "T3 audio should be absent"
 grep -q "decklinkaudiosrc" <<<"$out" && fail "T3 audiosrc should be absent"
 
-# T4: top-field mode sets 29.97p normalization
+# T4: top-field *mode* sets 29.97p normalization; deinterlace always fields=all
 out=$(DEVICE_NUMBER=2 CHANNEL_PATH=ch2 DEINT_FIELDS=top run_encode)
 grep -q "framerate=30000/1001" <<<"$out" || fail "T4 29.97p caps"
+grep -q "deinterlace fields=all" <<<"$out" || fail "T4 deinterlace always fields=all"
+grep -q "deinterlace fields=top" <<<"$out" && fail "T4 must not use literal fields=top"
 
 # T5: invalid inputs rejected with usage exit code
 DEVICE_NUMBER=9 CHANNEL_PATH=ch9 expect_usage_64 "T5 accepted device 9"

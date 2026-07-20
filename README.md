@@ -50,7 +50,10 @@ Video engine — prefer HI-only for add-on SRT slots. Channel slots default
 to `MAX_CHANNELS=10` (0–9); DeckLink card size remains `MAX_DEVICES` (4 or 8).
 Run motion-critical channels (program, director) at 59.94p (`DEINT_FIELDS=all`)
 and monitoring channels (multiview, prompter) at 29.97p (`DEINT_FIELDS=top`) to
-stay comfortably inside it.
+cut encode load and stay comfortably inside the media-engine budget. Both
+paths deinterlace with `fields=all`; the setting only picks the normalized
+output framerate (literal `fields=top` not-negotiates on many progressive /
+`mode=auto` locks).
 
 ## Install
 
