@@ -167,12 +167,49 @@
   }
   .pane.audio-active .audio-badge { display: block; }
 
+  .stats-drawer {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+    background: var(--panel); border-top: 1px solid var(--edge);
+  }
+  .stats-drawer #stats-toggle {
+    width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
+    background: transparent; border: none; border-radius: 0; padding: 10px 16px;
+    color: var(--dim); font: inherit; cursor: pointer;
+  }
+  .stats-drawer #stats-toggle:hover { color: var(--text); }
+  .stats-drawer .caret { display: inline-block; transition: transform .15s ease; }
+  .stats-drawer.open .caret { transform: rotate(180deg); }
+  .stats-drawer .stats-panel {
+    display: none; max-height: 40vh; overflow: auto; padding: 0 16px 16px;
+  }
+  .stats-drawer.open .stats-panel { display: block; }
+  #stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px; max-width: 1280px; margin: 0 auto;
+  }
+  .stat {
+    background: var(--bg); border: 1px solid var(--edge); border-radius: 4px; padding: 8px 10px;
+    cursor: help;
+  }
+  .stat:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+  .stat .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .stat .v { font-size: 16px; margin-top: 2px; }
+  #stat-tip {
+    display: none; position: fixed; z-index: 60; max-width: 320px;
+    padding: 8px 10px; background: var(--panel); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 4px;
+    font: 12px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    box-shadow: 0 4px 16px rgba(0,0,0,.35); pointer-events: none;
+  }
+  #stat-tip.visible { display: block; }
+
   body:fullscreen .stage, body:-webkit-full-screen .stage {
     flex: 1; min-height: 0;
   }
   body:fullscreen #grid, body:-webkit-full-screen #grid { gap: 4px; }
   body:fullscreen .topnav, body:-webkit-full-screen .topnav,
-  body:fullscreen .bar, body:-webkit-full-screen .bar { display: none; }
+  body:fullscreen .bar, body:-webkit-full-screen .bar,
+  body:fullscreen .stats-drawer, body:-webkit-full-screen .stats-drawer { display: none; }
   body:fullscreen, body:-webkit-full-screen { padding: 4px; }
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
@@ -226,6 +263,32 @@
   </div>
 </div>
 
+<div id="stats-drawer" class="stats-drawer">
+  <button type="button" id="stats-toggle" aria-expanded="false" aria-controls="stats">
+    <span class="caret" aria-hidden="true">▴</span> Session metrics
+    <span id="stats-focus-hint" class="qlabel" style="font-size:12px"></span>
+  </button>
+  <div class="stats-panel" id="stats-panel">
+    <div id="stats">
+      <div class="stat" tabindex="0" data-tip="Which pane the metrics below describe. Click a pane to unmute it and focus metrics on that session."><div class="k">Focus</div><div class="v" id="s-focus">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Global HI/LO quality for all panes (Multiview has no per-pane auto-switch)."><div class="k">Rendition</div><div class="v" id="s-rend">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Frame size and frame rate of the focused pane as decoded by this browser."><div class="k">Resolution / FPS</div><div class="v" id="s-res">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Video data rate this browser is receiving for the focused pane only."><div class="k">My video bitrate</div><div class="v" id="s-vbr">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Network round-trip time between this browser and the edge server for the focused pane. Lower is better; LAN is typically under 5 ms."><div class="k">RTT (ICE)</div><div class="v" id="s-rtt">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Extra delay the browser adds to smooth out uneven packet arrival on the focused pane. Near 0 ms is ideal on a LAN."><div class="k">Jitter buffer</div><div class="v" id="s-jb">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Percentage of video packets lost over the last second on the focused pane."><div class="k">Loss (1s)</div><div class="v" id="s-loss">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Total video frames the browser discarded on the focused pane because they arrived too late to display."><div class="k">Frames dropped</div><div class="v" id="s-drop">—</div></div>
+      <div class="stat" tabindex="0" data-tip="How many viewers are connected to the focused stream path on the edge (all sessions, not just this pane)."><div class="k">Viewers (path)</div><div class="v" id="s-viewers">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Total outbound bandwidth the edge is sending for the focused channel path, across all its viewers."><div class="k">Path egress</div><div class="v" id="s-chout">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Total outbound bandwidth from the edge across every channel and viewer."><div class="k">Edge egress (all)</div><div class="v" id="s-allout">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Video format detected on the DeckLink SDI input for the focused channel, or NO SIGNAL if nothing is connected."><div class="k">SDI input</div><div class="v" id="s-input">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Genlock reference status on the capture card — locked to house sync, or free-running."><div class="k">Reference</div><div class="v" id="s-ref">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Whether the browser holds a screen wake lock so the display won't sleep during playback."><div class="k">Screen awake</div><div class="v" id="s-wake">—</div></div>
+    </div>
+  </div>
+</div>
+<div id="stat-tip" role="tooltip" aria-hidden="true"></div>
+
 <div id="qr-modal" class="qr-modal" role="dialog" aria-modal="true" aria-labelledby="qr-title" hidden>
   <div class="qr-panel">
     <h2 id="qr-title">Open on phone</h2>
@@ -251,7 +314,7 @@
   let preferFullscreen = false;
   let fsRestoreTimer = null;
 
-  const PORT = { whep: 8889 };
+  const PORT = { whep: 8889, api: 9997, status: 9998 };
   const PROTO = location.protocol === "https:" ? "https:" : "http:";
   const EDGE_HOST = (location.hostname && location.hostname.length)
     ? location.hostname : "127.0.0.1";
@@ -275,6 +338,12 @@
     paintAllCaptions();
   });
 
+  // Session metrics for the focused pane (audio-active, else first connected).
+  let prevBytes = 0, prevTs = 0;
+  let prevLost = 0, prevRecv = 0, haveLossBaseline = false;
+  let prevApi = null;
+  let statsFocusIndex = -1;
+
   // ---- Screen wake lock ---------------------------------------------------------
   // This page is explicitly for wall monitors / confidence checks — exactly
   // the case where the display must not sleep during a long unattended run.
@@ -284,12 +353,28 @@
   // loses the stay-awake behavior.
   let wakeLock = null;
 
+  function setWakeStat(text, color) {
+    const el = $("s-wake");
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = color || "";
+  }
+
   async function acquireWakeLock() {
-    if (!("wakeLock" in navigator) || wakeLock) return;
+    if (!("wakeLock" in navigator)) {
+      setWakeStat("unsupported", "var(--dim)");
+      return;
+    }
+    if (wakeLock) return;
     try {
       wakeLock = await navigator.wakeLock.request("screen");
-      wakeLock.addEventListener("release", () => { wakeLock = null; });
+      setWakeStat("on", "var(--ok)");
+      wakeLock.addEventListener("release", () => {
+        wakeLock = null;
+        setWakeStat("released", "var(--dim)");
+      });
     } catch (e) {
+      setWakeStat("failed", "var(--bad)");
       // Commonly fails if the tab isn't visible/focused yet; the
       // visibilitychange handler below re-attempts once it is.
     }
@@ -298,6 +383,7 @@
     if (wakeLock && !panes.some(p => p.base)) {
       wakeLock.release();
       wakeLock = null;
+      setWakeStat("—", "");
     }
   }
   document.addEventListener("visibilitychange", () => {
@@ -308,6 +394,10 @@
 
   function whepBase() {
     return `${PROTO}//${EDGE_HOST}:${PORT.whep}`;
+  }
+
+  function serviceBase(service) {
+    return `${PROTO}//${EDGE_HOST}:${PORT[service]}`;
   }
 
   function pathFor(base) {
@@ -612,6 +702,202 @@
       p.el.classList.toggle("audio-active", i === index && !!p.base);
       p.video.muted = i !== index;
     });
+    resetRtcBaseline();
+    updateFocusLabel();
+  }
+
+  function focusedPane() {
+    if (audioPane >= 0) {
+      const p = panes[audioPane];
+      if (p && p.base && p.pc) return p;
+    }
+    return panes.find(p => p.base && p.pc) || null;
+  }
+
+  function resetRtcBaseline() {
+    prevBytes = 0;
+    prevTs = 0;
+    prevLost = 0;
+    prevRecv = 0;
+    haveLossBaseline = false;
+  }
+
+  function clearSessionStats() {
+    for (const id of ["s-res", "s-vbr", "s-rtt", "s-jb", "s-loss", "s-drop",
+                      "s-viewers", "s-chout", "s-input", "s-ref"]) {
+      const el = $(id);
+      if (el) {
+        el.textContent = "—";
+        el.style.color = "";
+      }
+    }
+  }
+
+  function updateFocusLabel() {
+    const p = focusedPane();
+    const hint = $("stats-focus-hint");
+    if (!p) {
+      $("s-focus").textContent = "—";
+      $("s-rend").textContent = rendition.toUpperCase();
+      if (hint) hint.textContent = "";
+      clearSessionStats();
+      statsFocusIndex = -1;
+      return;
+    }
+    const label = p.select.options[p.select.selectedIndex]?.textContent || p.base;
+    $("s-focus").textContent = `Pane ${p.index + 1} · ${label}`;
+    $("s-rend").textContent = `${rendition.toUpperCase()} · ${p.path || pathFor(p.base)}`;
+    if (hint) hint.textContent = `(pane ${p.index + 1})`;
+  }
+
+  async function pollRtcStats() {
+    const pane = focusedPane();
+    updateFocusLabel();
+    if (!pane || !pane.pc) {
+      clearSessionStats();
+      statsFocusIndex = -1;
+      return;
+    }
+    if (pane.index !== statsFocusIndex) {
+      resetRtcBaseline();
+      statsFocusIndex = pane.index;
+    }
+    let report;
+    try {
+      report = await pane.pc.getStats();
+    } catch {
+      return;
+    }
+    report.forEach(s => {
+      if (s.type === "inbound-rtp" && s.kind === "video") {
+        $("s-res").textContent =
+          (s.frameWidth ? `${s.frameWidth}x${s.frameHeight}` : "—") +
+          (s.framesPerSecond ? ` @ ${s.framesPerSecond}` : "");
+        if (prevTs && s.timestamp > prevTs) {
+          const mbps = (s.bytesReceived - prevBytes) * 8 / (s.timestamp - prevTs) / 1000;
+          $("s-vbr").textContent = `${mbps.toFixed(2)} Mbps`;
+        }
+        prevBytes = s.bytesReceived;
+        prevTs = s.timestamp;
+
+        const lost = s.packetsLost ?? 0, recv = s.packetsReceived ?? 0;
+        if (haveLossBaseline) {
+          const dLost = Math.max(0, lost - prevLost);
+          const dRecv = Math.max(0, recv - prevRecv);
+          const total = dLost + dRecv;
+          const lossRate = total > 0 ? dLost / total : 0;
+          $("s-loss").textContent = `${(lossRate * 100).toFixed(1)} %`;
+        }
+        prevLost = lost;
+        prevRecv = recv;
+        haveLossBaseline = true;
+
+        $("s-drop").textContent = s.framesDropped ?? "—";
+        if (s.jitterBufferDelay && s.jitterBufferEmittedCount) {
+          const ms = s.jitterBufferDelay / s.jitterBufferEmittedCount * 1000;
+          $("s-jb").textContent = `${ms.toFixed(0)} ms`;
+        }
+      }
+      if (s.type === "candidate-pair" && s.state === "succeeded" && s.nominated &&
+          s.currentRoundTripTime !== undefined) {
+        $("s-rtt").textContent = `${(s.currentRoundTripTime * 1000).toFixed(1)} ms`;
+      }
+    });
+  }
+
+  async function pollApiStats() {
+    const pane = focusedPane();
+    const base = serviceBase("api");
+    try {
+      const res = await fetch(`${base}/v3/paths/list`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      const now = performance.now();
+      const perPath = {};
+      let total = 0;
+      for (const p of data.items || []) {
+        perPath[p.name] = p.bytesSent || 0;
+        total += p.bytesSent || 0;
+        if (pane && pane.path && p.name === pane.path) {
+          $("s-viewers").textContent = (p.readers || []).length;
+        }
+      }
+      if (!pane || !pane.path) $("s-viewers").textContent = "—";
+
+      if (prevApi) {
+        const dt = (now - prevApi.t) / 1000;
+        if (dt > 0) {
+          if (pane && pane.path && perPath[pane.path] !== undefined &&
+              prevApi.perPath[pane.path] !== undefined) {
+            const mbps = (perPath[pane.path] - prevApi.perPath[pane.path]) * 8 / dt / 1e6;
+            $("s-chout").textContent = `${mbps.toFixed(2)} Mbps`;
+          } else if (!pane) {
+            $("s-chout").textContent = "—";
+          }
+          const allMbps = (total - prevApi.total) * 8 / dt / 1e6;
+          $("s-allout").textContent = `${allMbps.toFixed(2)} Mbps`;
+        }
+      }
+      prevApi = { t: now, perPath, total };
+    } catch {
+      $("s-viewers").textContent = "n/a";
+      $("s-chout").textContent = "n/a";
+      $("s-allout").textContent = "n/a";
+    }
+  }
+
+  async function pollInputStatus() {
+    const pane = focusedPane();
+    try {
+      const res = await fetch("nexvue-status.php");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const byIndex = {};
+      for (const d of data.devices || []) byIndex[d.index] = d;
+
+      if (!pane || !pane.base) {
+        $("s-input").textContent = "—";
+        $("s-input").style.color = "";
+        $("s-ref").textContent = "—";
+        $("s-ref").style.color = "";
+        return;
+      }
+      const idx = parseInt(pane.base.replace(/\D/g, ""), 10);
+      const d = byIndex[idx];
+      if (data.error && (!data.devices || !data.devices.length)) {
+        $("s-input").textContent = `status error: ${data.error}`;
+        $("s-input").style.color = "var(--bad)";
+        $("s-ref").textContent = "n/a";
+        $("s-ref").style.color = "var(--dim)";
+        return;
+      }
+      if (data.stale) {
+        $("s-input").textContent = d
+          ? `${d.input_locked ? d.input_mode : "NO SIGNAL"} (stale)`
+          : "stale";
+        $("s-input").style.color = "var(--dim)";
+        $("s-ref").textContent = d
+          ? (d.reference_locked ? `locked · ${d.reference_mode}` : "free-run")
+          : "—";
+        $("s-ref").style.color = "var(--dim)";
+      } else if (d) {
+        $("s-input").textContent = d.input_locked ? d.input_mode : "NO SIGNAL";
+        $("s-input").style.color = d.input_locked ? "" : "var(--bad)";
+        $("s-ref").textContent = d.reference_locked
+          ? `locked · ${d.reference_mode}` : "free-run";
+        $("s-ref").style.color = d.reference_locked ? "" : "var(--dim)";
+      } else {
+        $("s-input").textContent = "—";
+        $("s-input").style.color = "";
+        $("s-ref").textContent = "—";
+        $("s-ref").style.color = "";
+      }
+    } catch {
+      $("s-input").textContent = "status unreachable";
+      $("s-input").style.color = "var(--bad)";
+      $("s-ref").textContent = "n/a";
+      $("s-ref").style.color = "var(--dim)";
+    }
   }
 
   function reconnectAllActive() {
@@ -661,6 +947,8 @@
     rendition = rend;
     $("q-hi").classList.toggle("active", rend === "hi");
     $("q-lo").classList.toggle("active", rend === "lo");
+    resetRtcBaseline();
+    updateFocusLabel();
     reconnectAllActive();
   }
 
@@ -688,6 +976,77 @@
 
   for (let i = 0; i < PANE_COUNT; i++) createPane(i);
   applyLayout("quad");
+  setInterval(pollRtcStats, 1000);
+  setInterval(pollApiStats, 2000);
+  setInterval(pollInputStatus, 2000);
+  pollApiStats();
+  pollInputStatus();
+  updateFocusLabel();
+  if (!("wakeLock" in navigator)) setWakeStat("unsupported", "var(--dim)");
+
+  // ---- Session metrics drawer -------------------------------------------------
+  const TIP_DELAY_MS = 2000;
+  const tipEl = $("stat-tip");
+  let tipTimer = null;
+  let tipAnchor = null;
+
+  function hideStatTip() {
+    if (tipTimer) { clearTimeout(tipTimer); tipTimer = null; }
+    tipAnchor = null;
+    tipEl.classList.remove("visible");
+    tipEl.setAttribute("aria-hidden", "true");
+    tipEl.textContent = "";
+  }
+
+  function placeStatTip(el) {
+    const text = el.getAttribute("data-tip");
+    if (!text) return;
+    tipEl.textContent = text;
+    tipEl.classList.add("visible");
+    tipEl.setAttribute("aria-hidden", "false");
+    const r = el.getBoundingClientRect();
+    const pad = 8;
+    const tw = tipEl.offsetWidth;
+    const th = tipEl.offsetHeight;
+    let left = r.left + (r.width - tw) / 2;
+    left = Math.max(pad, Math.min(left, window.innerWidth - tw - pad));
+    let top = r.top - th - 6;
+    if (top < pad) top = r.bottom + 6;
+    tipEl.style.left = `${Math.round(left)}px`;
+    tipEl.style.top = `${Math.round(top)}px`;
+  }
+
+  function scheduleStatTip(el) {
+    if (tipAnchor === el && tipEl.classList.contains("visible")) return;
+    hideStatTip();
+    tipAnchor = el;
+    tipTimer = setTimeout(() => {
+      tipTimer = null;
+      if (tipAnchor === el) placeStatTip(el);
+    }, TIP_DELAY_MS);
+  }
+
+  document.querySelectorAll("#stats .stat[data-tip]").forEach((el) => {
+    el.addEventListener("mouseenter", () => scheduleStatTip(el));
+    el.addEventListener("mouseleave", () => { if (tipAnchor === el) hideStatTip(); });
+    el.addEventListener("focus", () => scheduleStatTip(el));
+    el.addEventListener("blur", () => { if (tipAnchor === el) hideStatTip(); });
+  });
+  window.addEventListener("scroll", () => { if (tipEl.classList.contains("visible")) hideStatTip(); }, true);
+  window.addEventListener("resize", hideStatTip);
+
+  const drawer = $("stats-drawer");
+  const toggle = $("stats-toggle");
+  function setDrawerOpen(open) {
+    drawer.classList.toggle("open", open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    try { sessionStorage.setItem("nexvue-mv-stats-drawer", open ? "1" : "0"); } catch { /* private mode */ }
+    if (!open) hideStatTip();
+  }
+  toggle.addEventListener("click", () => setDrawerOpen(!drawer.classList.contains("open")));
+  try {
+    if (sessionStorage.getItem("nexvue-mv-stats-drawer") === "1") setDrawerOpen(true);
+  } catch { /* default closed */ }
 
   // Keep the control bar's left edge glued to the centered grid.
   (function syncBarToGrid() {

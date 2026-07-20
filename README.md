@@ -285,9 +285,10 @@ Then from a LAN machine:
   **CC** toggles a selectable closed-caption overlay (CEA-608/CC1 side
   channel — not burned into video; preference in `localStorage`).
 - **Multiviewer:** open `multiview.html` (top nav → Multiview). Dual or quad
-  layout with a channel dropdown per pane; defaults to LO; click a pane for
-  audio (one pane unmuted at a time). Same NexVUE brand → QR share. Global
-  **CC** toggle matches the player preference key.
+  layout with a channel dropdown per pane; defaults to LO with a global HI/LO
+  toggle; click a pane for audio (one unmuted at a time) and to focus the
+  **Session metrics** bottom drawer on that pane. Same NexVUE brand → QR
+  share. Global **CC** toggle matches the player preference key.
 - **Usage metrics:** top nav → Metrics (`/metrics.html` + `nexvue-metrics.php`
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
@@ -909,8 +910,9 @@ Services/Settings).
   (`http:`/`https:`) is auto-detected from the page's own scheme — see the TLS
   section above if that's not lining up. Top nav brand **NexVUE** (click for
   page-URL QR) /
-  Player / Multiview / Metrics / Services / Settings. Player session metrics
-  sit in a collapsed bottom drawer (`Session metrics`); hover a tile ~2s for
+  Player / Multiview / Metrics / Services / Settings. Player and Multiview
+  session metrics sit in a collapsed bottom drawer (`Session metrics`);
+  Multiview focuses the audio-active pane. Hover a tile ~2s for
   an explainer.
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Player and Multiview show the alias when set;

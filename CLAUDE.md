@@ -191,8 +191,9 @@ specifically because this box can't get additional ports opened.
   nav Light/Dark toggle. Metrics Chart.js colors follow the active theme.
   Top-nav **NexVUE** brand opens a QR of the page URL; optional station logo
   (Settings → Branding) sits to its right when uploaded
-  (`/var/lib/nexvue/branding`, served by `nexvue-logo.php`). Player session
-  tiles live in a collapsed bottom drawer.
+  (`/var/lib/nexvue/branding`, served by `nexvue-logo.php`). Player and
+  Multiview session metric tiles live in a collapsed bottom drawer
+  (Multiview shows the audio-focused pane).
   Top nav: Player / Multiview / Metrics / Services / Settings.
   Player/Multiview **CC** uses `nexvue-captions.js` + SSE (not WHEP text
   tracks).
