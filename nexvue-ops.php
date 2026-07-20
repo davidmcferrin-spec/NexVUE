@@ -8,10 +8,12 @@
  *
  * Actions (GET or POST JSON body):
  *   services | journal | channels_list | channel_get | channel_put
- *   | channels_bulk | restart | set_enabled | set_running | aliases
+ *   | channels_bulk | restart | restart_encoders | set_enabled | set_running | aliases
  *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete
  *
- * set_enabled toggles systemd enable/disable (with --now); set_running is
+ * restart_encoders restarts every systemd-enabled nexvue-encode@N (parked /
+ * disabled slots are left alone). set_enabled toggles systemd enable/disable
+ * (with --now); set_running is
  * runtime start/stop (boot config untouched). Both apply to encoder units
  * ONLY (nexvue-encode@0-9) via nexvue-ops-enable.sh — the LAN-trust ops page
  * must not be able to disable or stop mediamtx or the shared daemons.
@@ -964,6 +966,31 @@ if ($action === 'restart') {
         fail(500, trim($r['stderr']) ?: 'restart failed');
     }
     echo json_encode(['ok' => true, 'restarted' => $clean]);
+    exit;
+}
+
+// ---- restart_encoders (all systemd-enabled encode slots) ----------------------
+
+if ($action === 'restart_encoders') {
+    $units = [];
+    foreach (list_channel_ids() as $id) {
+        $unit = "nexvue-encode@{$id}";
+        $st = parse_unit_status(sudo_run(['/usr/local/bin/nexvue-ops-status.sh', $unit])['stdout']);
+        // Only enabled slots — disabled/parked encoders must stay parked.
+        if (($st['enabled'] ?? '') === 'enabled') {
+            $units[] = $unit;
+        }
+    }
+    if ($units === []) {
+        echo json_encode(['ok' => true, 'restarted' => [], 'note' => 'no enabled encoders']);
+        exit;
+    }
+    $argv = array_merge(['/usr/local/bin/nexvue-ops-restart.sh'], $units);
+    $r = sudo_run($argv);
+    if ($r['code'] !== 0) {
+        fail(500, trim($r['stderr']) ?: 'restart_encoders failed');
+    }
+    echo json_encode(['ok' => true, 'restarted' => $units]);
     exit;
 }
 

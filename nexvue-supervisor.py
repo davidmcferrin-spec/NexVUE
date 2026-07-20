@@ -125,8 +125,9 @@ def normalize_lo_fps(value: str) -> str:
 
 # LO_PRESET ladder -> (width, height, default bitrate kbps). Matches
 # nexvue-encode.sh exactly — the "p" number is the HEIGHT (480p = 854x480).
-# Bitrate defaults are sized for CBR + target-usage=4 so motion stays watchable
-# (the old 720p@1200 ladder looked choppy under typical sports/news content).
+# Bitrate defaults sized for CBR at LO target-usage=7 (same speed tier as HI).
+# Lower LO_TARGET_USAGE values look "sharper" but send QoS upstream and the
+# LO videorate/videoscale path then over-drops — can land near ~1 fps.
 LO_PRESETS: Dict[str, Tuple[int, int, int]] = {
     "720p": (1280, 720, 2500),
     "540p": (960, 540, 1500),
@@ -180,8 +181,9 @@ class SupervisorConfig:
     lo_width: int = 1280
     lo_height: int = 720
     lo_bitrate_kbps: int = 2500
-    # LO quality / buffering (HI keeps target-usage=7 and shallow queues for latency).
-    lo_target_usage: int = 4
+    # LO quality / buffering (default usage=7 matches HI speed; lower = sharper but
+    # risks QoS-driven frame starvation on the LO scale/rate branch).
+    lo_target_usage: int = 7
     lo_queue_buffers: int = 16
     lo_gop_frames: int = 60
     captions_enable: bool = True
@@ -482,9 +484,9 @@ def load_config(
         )
     lo_rtsp_url = opt("LO_RTSP_URL", f"rtsp://127.0.0.1:8554/{channel_path}lo")
 
-    # vah264enc target-usage: 1 = slow/best, 7 = fastest (HI default). LO defaults
-    # to 4 so the second encode is less blocky without eating the whole media engine.
-    lo_target_usage = opt_int("LO_TARGET_USAGE", 4)
+    # vah264enc target-usage: 1 = slow/best, 7 = fastest. LO defaults to 7
+    # (same as HI / pre-supervisor). Lower values over-trigger QoS drops on LO.
+    lo_target_usage = opt_int("LO_TARGET_USAGE", 7)
     if not (1 <= lo_target_usage <= 7):
         raise ConfigError(f"LO_TARGET_USAGE must be an integer 1-7, got {lo_target_usage}")
     lo_queue_buffers = opt_int("LO_QUEUE_BUFFERS", 16)
@@ -873,9 +875,8 @@ def build_encoder_desc(
 ) -> str:
     """Same encoder property set as nexvue-encode.sh's build_enc().
 
-    HI keeps target-usage=7 / veryfast for glass-to-glass latency. LO uses
-    LO_TARGET_USAGE (default 4) and a slightly slower x264 preset so the
-    adaptive rendition is watchable under motion.
+    HI and LO both default to target-usage=7 / veryfast. LO may use a lower
+    LO_TARGET_USAGE when deliberately trading speed for quality.
     """
     extra = f" {config.extra_enc_args}" if config.extra_enc_args else ""
     gop = config.lo_gop_frames if for_lo else config.gop_frames
@@ -885,10 +886,18 @@ def build_encoder_desc(
             f"vah264enc rate-control=cbr bitrate={bitrate_kbps} "
             f"key-int-max={gop} b-frames=0 target-usage={usage}{extra}"
         )
-    x264_preset = "fast" if for_lo else "veryfast"
     return (
-        f"x264enc tune=zerolatency speed-preset={x264_preset} bitrate={bitrate_kbps} "
+        f"x264enc tune=zerolatency speed-preset=veryfast bitrate={bitrate_kbps} "
         f"key-int-max={gop} bframes=0{extra}"
+    )
+
+
+def _leaky_queue(max_buffers: int, *, name: str = "") -> str:
+    """Leaky queue that is buffer-count limited only (disable default 1s/10MB caps)."""
+    name_part = f"name={name} " if name else ""
+    return (
+        f"queue {name_part}max-size-buffers={max_buffers} "
+        f"max-size-time=0 max-size-bytes=0 leaky=downstream"
     )
 
 
@@ -970,11 +979,11 @@ class Supervisor:
                 f'! textoverlay name=slatetext text="{text}" valignment=center '
                 'halignment=center font-desc="Sans Bold 48" '
                 f"! videorate ! videoscale ! videoconvert ! {caps} "
-                "! queue max-size-buffers=4 leaky=downstream ! vsel.sink_0"
+                f"! {_leaky_queue(4)} ! vsel.sink_0"
             ),
         ]
 
-        vout = "vsel. ! queue name=vout max-size-buffers=4 leaky=downstream"
+        vout = f"vsel. ! {_leaky_queue(4, name='vout')}"
         if cfg.lo_enable:
             hi_enc = build_encoder_desc(cfg, cfg.bitrate_kbps)
             lo_enc = build_encoder_desc(cfg, cfg.lo_bitrate_kbps, for_lo=True)
@@ -982,12 +991,15 @@ class Supervisor:
             lo_q = cfg.lo_queue_buffers
             parts.append(f"{vout} ! tee name=vt")
             parts.append(
-                f"vt. ! queue max-size-buffers=4 leaky=downstream ! {hi_enc} "
+                f"vt. ! {_leaky_queue(4)} ! {hi_enc} "
                 "! h264parse name=hiparse config-interval=-1 ! sink."
             )
+            # qos=false on LO filters: encoder QoS otherwise makes videorate/
+            # videoscale over-drop (symptom: ~1 fps LO while HI stays smooth).
             parts.append(
-                f"vt. ! queue max-size-buffers={lo_q} leaky=downstream "
-                f"! videorate ! videoscale ! videoconvert ! {lo_caps} "
+                f"vt. ! {_leaky_queue(lo_q)} "
+                f"! videorate qos=false ! videoscale qos=false "
+                f"! videoconvert qos=false ! {lo_caps} "
                 f"! {lo_enc} ! h264parse name=loparse config-interval=-1 ! sinklo."
             )
         else:

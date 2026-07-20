@@ -294,7 +294,8 @@ Then from a LAN machine:
   (near `tail -f`). LAN-trust ops.
 - **Settings:** top nav → Settings — optional station **logo** (Branding
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
-  shown in the top nav next to **NexVUE** when present) plus channel list;
+  shown in the top nav next to **NexVUE** when present) plus channel list
+  (LO column: yes/no/denied; **Restart all encoders** for enabled slots);
   click a row (or use Bulk edit) to open a modal editor for
   `/etc/nexvue/channels/<N>.env`. Hover a field label ~2s for an explainer
   (what it does, recommended / valid range, and what blank means — same
@@ -916,7 +917,9 @@ Services/Settings).
 - **Ops pages (Services / Settings)** call `nexvue-ops.php`, which uses
   allowlisted sudo wrappers under `/usr/local/bin/nexvue-ops-*` (sudoers drop-in
   `/etc/sudoers.d/nexvue-ops`). Channel saves write env files only; restart is an
-  explicit confirm. Logo actions (`logo_get` / `logo_put` / `logo_delete`) write
+  explicit confirm. **Restart all encoders** (`restart_encoders`) restarts every
+  systemd-enabled `nexvue-encode@N` (parked/disabled slots stay parked) from
+  Settings or Services. Logo actions (`logo_get` / `logo_put` / `logo_delete`) write
   `/var/lib/nexvue/branding/{logo.bin,logo.json}` as www-data (no sudo);
   `nexvue-logo.php` streams the image for the nav. Phase 1 LAN-trust — do not
   DMZ-expose without auth.
@@ -962,19 +965,20 @@ Services/Settings).
   `systemctl enable --now nexvue-status`. Status queries coexist safely with an
   active capture.
 - **LO renditions (adaptive bandwidth):** `LO_ENABLE=true` in a channel env
-  requests a `<path>lo` publish (default 720p29.97 @ 2.5 Mbps, `LO_TARGET_USAGE=4`,
-  deeper LO queue) alongside the HI rendition — one live source, two QSV encodes
+  requests a `<path>lo` publish (default 720p29.97 @ 2.5 Mbps, `LO_TARGET_USAGE=7`,
+  deeper LO queue, `qos=false` on LO videorate/scale so encoder QoS cannot
+  starve the branch) alongside the HI rendition — one live source, two QSV encodes
   via tee. Station-wide `MAX_LO_RENDITIONS` (default 6 in `/etc/nexvue/nexvue.env`)
   is a floating pool: Settings refuses a 7th enable; the supervisor grants LO
   only to the first N requesters by ascending channel id (deterministic clamp).
-  HI keeps `target-usage=7` for latency; LO defaults favor smoother
-  motion. Settings only offers curated `LO_FPS` / `LO_TARGET_USAGE` /
+  HI and LO both default to `target-usage=7` for realtime throughput; lower
+  `LO_TARGET_USAGE` trades speed for quality. Settings only offers curated `LO_FPS` / `LO_TARGET_USAGE` /
   `LO_QUEUE_BUFFERS` values; ops/supervisor also map legacy aliases
   (`60`/`30`/`15`, `59.94`/`29.97`) to GStreamer fractions — bare integers
   used to become `framerate=(int)N` and break the LO pipeline. Viewers on bad links get switched to it by the
   portal player (Phase 2). Tune `LO_BITRATE_KBPS` / `LO_PRESET` /
   `LO_TARGET_USAGE` / `LO_QUEUE_BUFFERS` in Settings if LO still looks choppy
-  — under multi-channel load try `LO_TARGET_USAGE=7` or a lower preset.
+  — under multi-channel load keep usage at 7 or use a lower preset.
 - **SRT inputs:** set `INPUT_TYPE=srt` and `SRT_URI=srt://…` (caller or
   listener). The supervisor always decode+re-encodes into the same slate /
   normalize / HI(+LO) path as DeckLink. Captions stay DeckLink-only for now

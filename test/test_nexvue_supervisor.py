@@ -107,7 +107,7 @@ class TestLoadConfig(unittest.TestCase):
             {"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "LO_ENABLE": "true", "LO_PRESET": "360p"}
         )
         self.assertEqual((cfg.lo_width, cfg.lo_height, cfg.lo_bitrate_kbps), (640, 360, 800))
-        self.assertEqual(cfg.lo_target_usage, 4)
+        self.assertEqual(cfg.lo_target_usage, 7)
         self.assertEqual(cfg.lo_queue_buffers, 16)
         with self.assertRaises(mod.ConfigError):
             mod.load_config(
@@ -442,7 +442,30 @@ class TestPureHelpers(unittest.TestCase):
         self.assertIn("target-usage=7", hi)
         self.assertIn("target-usage=4", lo)
         self.assertIn("key-int-max=30", lo)
-        self.assertIn("bitrate=2500", lo)
+
+    def test_leaky_queue_disables_time_and_bytes_caps(self) -> None:
+        q = mod._leaky_queue(16, name="loq")
+        self.assertIn("name=loq", q)
+        self.assertIn("max-size-buffers=16", q)
+        self.assertIn("max-size-time=0", q)
+        self.assertIn("max-size-bytes=0", q)
+        self.assertIn("leaky=downstream", q)
+
+    def test_lo_static_desc_disables_filter_qos(self) -> None:
+        cfg = mod.load_config(
+            {
+                "DEVICE_NUMBER": "0",
+                "CHANNEL_PATH": "ch0",
+                "LO_ENABLE": "true",
+                "LO_PRESET": "360p",
+            }
+        )
+        desc = mod.Supervisor(cfg)._build_static_desc()
+        self.assertIn("videorate qos=false", desc)
+        self.assertIn("videoscale qos=false", desc)
+        self.assertIn("videoconvert qos=false", desc)
+        self.assertIn("max-size-time=0 max-size-bytes=0", desc)
+        self.assertIn("target-usage=7", desc)
 
     def test_build_encoder_desc_x264_fallback(self) -> None:
         cfg = mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "VIDEO_ENCODER": "x264enc"})
@@ -451,7 +474,7 @@ class TestPureHelpers(unittest.TestCase):
         self.assertIn("speed-preset=veryfast", desc)
         self.assertIn("bitrate=2500", desc)
         lo = mod.build_encoder_desc(cfg, 800, for_lo=True)
-        self.assertIn("speed-preset=fast", lo)
+        self.assertIn("speed-preset=veryfast", lo)
 
     def test_slate_overlay_text_with_and_without_alias(self) -> None:
         cfg = mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0"})

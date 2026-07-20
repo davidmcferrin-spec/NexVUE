@@ -96,9 +96,10 @@ LO_ENABLE="${LO_ENABLE:-false}"
 LO_PRESET="${LO_PRESET:-720p}"              # 720p|540p|480p|360p|240p|180p
 LO_FPS="${LO_FPS:-30000/1001}"              # 29.97p default: cellular-friendly
 LO_RTSP_URL="${LO_RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}lo}"
-# LO quality (vah264enc target-usage 1–7) and queue depth — HI stays usage=7 /
-# 4-buffer queues for latency; LO defaults favor smoother motion.
-LO_TARGET_USAGE="$(strip_inline "${LO_TARGET_USAGE:-4}")"
+# LO quality (vah264enc target-usage 1–7) and queue depth — HI stays usage=7.
+# Default LO usage is also 7: lower values look sharper but QoS on the LO
+# videorate/videoscale path can starve the rendition down to ~1 fps.
+LO_TARGET_USAGE="$(strip_inline "${LO_TARGET_USAGE:-7}")"
 LO_QUEUE_BUFFERS="$(strip_inline "${LO_QUEUE_BUFFERS:-16}")"
 LO_GOP_FRAMES="$(strip_inline "${LO_GOP_FRAMES:-}")"
 
@@ -280,9 +281,10 @@ if [ "${LO_ENABLE}" = "true" ]; then
   PIPELINE+=" vt. ! queue max-size-buffers=4 leaky=downstream"
   PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1 ! sink."
   # LO branch: drop to LO_FPS first (cheap), then scale down, then encode.
-  # Deeper queue than HI so momentary iGPU contention drops fewer LO frames.
-  PIPELINE+=" vt. ! queue max-size-buffers=${LO_QUEUE_BUFFERS} leaky=downstream"
-  PIPELINE+=" ! videorate ! videoscale ! videoconvert"
+  # qos=false: LO encoder QoS otherwise makes videorate/videoscale over-drop
+  # (~1 fps symptom). max-size-time/bytes=0 so only the buffer count limits.
+  PIPELINE+=" vt. ! queue max-size-buffers=${LO_QUEUE_BUFFERS} max-size-time=0 max-size-bytes=0 leaky=downstream"
+  PIPELINE+=" ! videorate qos=false ! videoscale qos=false ! videoconvert qos=false"
   PIPELINE+=" ! video/x-raw,format=NV12,width=${LO_WIDTH},height=${LO_HEIGHT},framerate=${LO_FPS},pixel-aspect-ratio=1/1"
   PIPELINE+=" ! ${ENC_LO} ! h264parse config-interval=-1 ! sinklo."
 else

@@ -243,7 +243,10 @@ specifically because this box can't get additional ports opened.
  `<is-active> <is-enabled>`) plus Enable/Disable (`set_enabled`, --now) and
  Start/Stop (`set_running`, runtime-only) toggles for `nexvue-encode@0-9`
  ONLY (`nexvue-ops-enable.sh` verbs enable|disable|start|stop) — never the
- shared units. Disable and Stop both run `reset-failed` so a parked encoder
+ shared units. Settings Channel list shows LO yes/no (pool-denied) and
+ **Restart all encoders** (`restart_encoders`: systemd-enabled encode slots
+ only); Services has the same bulk restart. Disable and Stop both run
+ `reset-failed` so a parked encoder
  doesn't show stale red "failed"; any disabled + not-running unit (even
  with a stale `failed` from an SSH-side disable) renders neutral
  "disabled", not red, on Services and Settings — `failed` is red only when

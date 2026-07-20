@@ -68,15 +68,15 @@ grep -q "bitrate=800" <<<"$out" || fail "T7 360p default bitrate"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_PRESET=240p run_encode)
 grep -q "width=426,height=240" <<<"$out" || fail "T7 240p raster"
 
-# T7b: LO smooth defaults (higher bitrate ladder, target-usage=4, deeper queue)
+# T7b: LO defaults (higher bitrate ladder, target-usage=7, deeper queue, qos=false)
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_PRESET=720p run_encode)
 grep -q "bitrate=2500" <<<"$out" || fail "T7b 720p default bitrate 2500"
-grep -q "target-usage=4" <<<"$out" || fail "T7b LO target-usage=4"
-grep -q "target-usage=7" <<<"$out" || fail "T7b HI still target-usage=7"
-grep -q "max-size-buffers=16 leaky=downstream" <<<"$out" || fail "T7b LO queue depth 16"
+grep -q "target-usage=7" <<<"$out" || fail "T7b LO default target-usage=7"
+grep -q "videorate qos=false" <<<"$out" || fail "T7b LO videorate qos=false"
+grep -q "max-size-buffers=16 max-size-time=0 max-size-bytes=0 leaky=downstream" <<<"$out" || fail "T7b LO queue depth 16"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_TARGET_USAGE=3 LO_QUEUE_BUFFERS=24 run_encode)
 grep -q "target-usage=3" <<<"$out" || fail "T7b LO_TARGET_USAGE override"
-grep -q "max-size-buffers=24 leaky=downstream" <<<"$out" || fail "T7b LO_QUEUE_BUFFERS override"
+grep -q "max-size-buffers=24 max-size-time=0 max-size-bytes=0 leaky=downstream" <<<"$out" || fail "T7b LO_QUEUE_BUFFERS override"
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_TARGET_USAGE=9 expect_usage_64 "T7b accepted bad LO_TARGET_USAGE"
 
 # T8: explicit LO_WIDTH/HEIGHT/BITRATE override the preset

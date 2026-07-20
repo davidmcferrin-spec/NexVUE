@@ -268,6 +268,9 @@
     box-shadow: var(--shadow); pointer-events: none; white-space: pre-wrap;
   }
   #field-tip.visible { display: block; }
+  td .lo-yes { color: var(--ok); }
+  td .lo-no { color: var(--dim); }
+  td .lo-denied { color: #c9a227; }
 </style>
 </head>
 <body>
@@ -291,13 +294,14 @@
     <button type="button" id="select-all">Select all</button>
     <button type="button" id="select-none">Select none</button>
     <button type="button" class="primary" id="bulk-open" disabled>Bulk edit</button>
+    <button type="button" id="restart-all" title="Restart every systemd-enabled nexvue-encode@N (parked slots left alone)">Restart all encoders…</button>
     <span id="state">loading…</span>
   </div>
   <table>
     <thead>
       <tr>
         <th></th><th>ID</th><th>Path</th><th>Alias</th><th>Src</th><th>Bitrate</th>
-        <th>Deint</th><th>Audio</th><th>LO</th><th>Status</th>
+        <th>Deint</th><th>Audio</th><th title="LO rendition (LO_ENABLE)">LO</th><th>Status</th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
@@ -419,6 +423,7 @@
   let editableKeys = [];
   let selectedId = null;
   let pendingRestart = [];
+  let pendingRestartAll = false;
 
   // Hover/focus explainers for field labels (2s delay; fixed so modal overflow
   // does not clip). Moved into the open <dialog> so it paints in the top layer.
@@ -591,12 +596,12 @@
       type: "select",
       options: ["3", "4", "5", "7"],
       optionLabels: {
-        "3": "3 (better quality)",
-        "4": "4 (default)",
+        "3": "3 (better quality — may drop frames)",
+        "4": "4 (balanced)",
         "5": "5 (faster)",
-        "7": "7 (fastest — if LO drops frames under load)",
+        "7": "7 (default / fastest)",
       },
-      tip: "vah264enc target-usage for LO only (1–7). HI stays at 7. If LO plays at a few fps under multi-channel load, pick 7. Blank = 4.",
+      tip: "vah264enc target-usage for LO only (1–7). HI stays at 7. Blank = 7. Values below 7 can make LO play at a few fps under load (QoS drops on the scale path).",
     },
     LO_QUEUE_BUFFERS: {
       label: "LO_QUEUE_BUFFERS",
@@ -782,9 +787,20 @@
   function renderTable() {
     tbody.innerHTML = channels.map(c => {
       const alias = c.CHANNEL_ALIAS || "—";
-      const lo = c.LO_ENABLE === "true"
-        ? (c.LO_GRANTED === false ? "req (denied)" : (c.LO_PRESET || "on"))
-        : "off";
+      const esc = s => String(s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      let loHtml;
+      if (c.LO_ENABLE === "true") {
+        if (c.LO_GRANTED === false) {
+          loHtml = `<span class="lo-denied" title="LO_ENABLE=true but MAX_LO_RENDITIONS pool is full">denied</span>`;
+        } else {
+          const preset = esc(c.LO_PRESET || "on");
+          loHtml = `<span class="lo-yes">yes</span> · ${preset}`;
+        }
+      } else {
+        loHtml = `<span class="lo-no">no</span>`;
+      }
       const src = (c.INPUT_TYPE || "decklink") === "srt" ? "SRT" : "SDI";
       // Disabled + not running = parked: neutral dot and "disabled" label,
       // even if the last run left a stale `failed` behind — no live fault.
@@ -793,9 +809,6 @@
       const stateTxt = parked
         ? "disabled"
         : (c.state || "—") + (c.enabled === "disabled" ? " · disabled" : "");
-      const esc = s => String(s)
-        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
       return `<tr class="row" data-id="${c.id}">
         <td><input type="checkbox" class="sel" value="${c.id}"></td>
         <td><span class="dot ${dot}"></span>${c.id}</td>
@@ -805,7 +818,7 @@
         <td>${esc(c.BITRATE_KBPS || "—")}</td>
         <td>${esc(c.DEINT_FIELDS || "—")}</td>
         <td>${esc(c.ENABLE_AUDIO || "—")}</td>
-        <td>${esc(lo)}</td>
+        <td>${loHtml}</td>
         <td>${esc(stateTxt)}</td>
       </tr>`;
     }).join("");
@@ -1001,9 +1014,20 @@
   }
 
   function askRestart(units) {
+    pendingRestartAll = false;
     pendingRestart = units || [];
     if (!pendingRestart.length) return;
     restartMsg.textContent = `Restart ${pendingRestart.join(", ")} now so changes take effect?`;
+    if (!restartDlg.open) restartDlg.showModal();
+  }
+
+  function askRestartAll() {
+    pendingRestartAll = true;
+    pendingRestart = [];
+    const n = channels.filter(c => c.enabled === "enabled").length;
+    restartMsg.textContent = n
+      ? `Restart all ${n} enabled encoder unit(s)? Disabled/parked slots are left alone.`
+      : "Restart all systemd-enabled encoder units? (none look enabled in this list — server will re-check.)";
     if (!restartDlg.open) restartDlg.showModal();
   }
 
@@ -1030,6 +1054,7 @@
   });
   restartDlg.addEventListener("cancel", () => {
     pendingRestart = [];
+    pendingRestartAll = false;
   });
 
   document.getElementById("edit-x").addEventListener("click", closeEditor);
@@ -1038,18 +1063,29 @@
   document.getElementById("bulk-cancel").addEventListener("click", closeBulk);
   document.getElementById("restart-x").addEventListener("click", () => {
     pendingRestart = [];
+    pendingRestartAll = false;
     restartDlg.close();
   });
   document.getElementById("restart-skip").addEventListener("click", () => {
     pendingRestart = [];
+    pendingRestartAll = false;
     restartDlg.close();
   });
   document.getElementById("restart-go").addEventListener("click", async () => {
     try {
-      await api("restart", { units: pendingRestart });
+      let data;
+      if (pendingRestartAll) {
+        data = await api("restart_encoders", {});
+      } else {
+        data = await api("restart", { units: pendingRestart });
+      }
+      const n = (data.restarted || []).length;
       restartDlg.close();
-      stateEl.textContent = `restarted ${pendingRestart.length} unit(s)`;
+      stateEl.textContent = n
+        ? `restarted ${n} unit(s)`
+        : (data.note || "no encoders restarted");
       pendingRestart = [];
+      pendingRestartAll = false;
       load();
     } catch (err) {
       alert(err.message);
@@ -1108,6 +1144,7 @@
   });
 
   document.getElementById("reload").addEventListener("click", load);
+  document.getElementById("restart-all").addEventListener("click", askRestartAll);
   document.getElementById("select-all").addEventListener("click", () => {
     tbody.querySelectorAll("input.sel").forEach(cb => { cb.checked = true; });
     updateBulkEnable();

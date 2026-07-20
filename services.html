@@ -151,6 +151,7 @@
       <button type="button" id="follow" class="active" title="Poll for new lines">Follow</button>
       <button type="button" id="clear-log">Clear view</button>
       <button type="button" id="restart-unit" disabled>Restart unit…</button>
+      <button type="button" id="restart-all-encoders" title="Restart every systemd-enabled nexvue-encode@N">Restart all encoders…</button>
       <button type="button" id="power-unit" disabled>Start/Stop…</button>
       <button type="button" id="toggle-unit" disabled>Enable/Disable…</button>
       <span id="status">select a unit</span>
@@ -346,6 +347,21 @@
     try {
       await api("restart", { units: [selected] });
       statusEl.textContent = `restarted ${selected}`;
+      refreshServices();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+  document.getElementById("restart-all-encoders").addEventListener("click", async () => {
+    if (!confirm("Restart all enabled encoder units (nexvue-encode@N)? Disabled/parked slots are left alone.")) {
+      return;
+    }
+    try {
+      const data = await api("restart_encoders", {});
+      const n = (data.restarted || []).length;
+      statusEl.textContent = n
+        ? `restarted ${n} encoder(s): ${(data.restarted || []).join(", ")}`
+        : (data.note || "no enabled encoders");
       refreshServices();
     } catch (err) {
       alert(err.message);
