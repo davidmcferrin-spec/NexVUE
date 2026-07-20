@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 ###############################################################################
-# nexvue-encode.sh — one DeckLink input → H.264/Opus → MediaMTX (RTSP)
+# nexvue-encode.sh — one DeckLink input -> H.264/Opus -> MediaMTX (RTSP)
 #
-# Production ExecStart for nexvue-encode@N (Phase 1.5 supervisor/slate was
-# rolled back after field instability; this gst-launch path is the stable
-# encoder again). Environment from /etc/nexvue/channels/<n>.env plus optional
-# /etc/nexvue/nexvue.env.
+# Invoked by systemd template unit nexvue-encode@<n>.service with environment
+# loaded from /etc/nexvue/channels/<n>.env
 #
 # v3: adds optional LO rendition ("poor man's ABR").
 #   LO_ENABLE=true adds a second, lower-bitrate encode of the SAME capture via
@@ -81,12 +79,7 @@ AUDIO_QUEUE_BUFFERS="$(strip_inline "${AUDIO_QUEUE_BUFFERS:-100}")"
 # one audio stream, standard fix for this symptom.
 AUDIO_RESAMPLE_QUALITY="$(strip_inline "${AUDIO_RESAMPLE_QUALITY:-9}")"
 DECKLINK_BUFFER_FRAMES="$(strip_inline "${DECKLINK_BUFFER_FRAMES:-2}")"
-# Default false matches the Phase-1-stable encode path. true drops unlocked
-# placeholder frames (avoids some lock races; set via channel env if needed).
-DECKLINK_DROP_NO_SIGNAL="$(strip_inline "${DECKLINK_DROP_NO_SIGNAL_FRAMES:-false}")"
-# 0 = off. A short watchdog turns brief DeckLink unlocks into unit restarts;
-# prefer leaving this off unless diagnosing a hard capture hang.
-WATCHDOG_MS="${WATCHDOG_MS:-0}"
+WATCHDOG_MS="${WATCHDOG_MS:-3000}"
 OUTPUT_WIDTH="${OUTPUT_WIDTH:-1920}"        # normalized HI raster — constant
 OUTPUT_HEIGHT="${OUTPUT_HEIGHT:-1080}"      # regardless of input format
 RTSP_URL="${RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}}"
@@ -98,12 +91,6 @@ LO_ENABLE="${LO_ENABLE:-false}"
 LO_PRESET="${LO_PRESET:-720p}"              # 720p|540p|480p|360p|240p|180p
 LO_FPS="${LO_FPS:-30000/1001}"              # 29.97p default: cellular-friendly
 LO_RTSP_URL="${LO_RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}lo}"
-# LO quality (vah264enc target-usage 1–7) and queue depth — HI stays usage=7.
-# Default LO usage is also 7: lower values look sharper but QoS on the LO
-# videorate/videoscale path can starve the rendition down to ~1 fps.
-LO_TARGET_USAGE="$(strip_inline "${LO_TARGET_USAGE:-7}")"
-LO_QUEUE_BUFFERS="$(strip_inline "${LO_QUEUE_BUFFERS:-16}")"
-LO_GOP_FRAMES="$(strip_inline "${LO_GOP_FRAMES:-}")"
 
 # Caption side channel (CEA-608/CC1 → /run/nexvue/captions/<path>.json).
 # Not burned into video; not a second encode. Extract in-pipeline because
@@ -118,18 +105,17 @@ CAPTIONS_PIPELINE_ONLY="$(strip_inline "${CAPTIONS_PIPELINE_ONLY:-false}")"
 # (480p = 854x480). All dimensions even, as H.264 requires. Explicit
 # LO_WIDTH/LO_HEIGHT/LO_BITRATE_KBPS below override the preset.
 case "${LO_PRESET}" in
-  720p) LO_W_DEF=1280; LO_H_DEF=720; LO_BR_DEF=2500 ;;
-  540p) LO_W_DEF=960;  LO_H_DEF=540; LO_BR_DEF=1500 ;;
-  480p) LO_W_DEF=854;  LO_H_DEF=480; LO_BR_DEF=1200 ;;
-  360p) LO_W_DEF=640;  LO_H_DEF=360; LO_BR_DEF=800  ;;
-  240p) LO_W_DEF=426;  LO_H_DEF=240; LO_BR_DEF=500  ;;
-  180p) LO_W_DEF=320;  LO_H_DEF=180; LO_BR_DEF=350  ;;
+  720p) LO_W_DEF=1280; LO_H_DEF=720; LO_BR_DEF=1200 ;;
+  540p) LO_W_DEF=960;  LO_H_DEF=540; LO_BR_DEF=800  ;;
+  480p) LO_W_DEF=854;  LO_H_DEF=480; LO_BR_DEF=700  ;;
+  360p) LO_W_DEF=640;  LO_H_DEF=360; LO_BR_DEF=500  ;;
+  240p) LO_W_DEF=426;  LO_H_DEF=240; LO_BR_DEF=300  ;;
+  180p) LO_W_DEF=320;  LO_H_DEF=180; LO_BR_DEF=200  ;;
   *) log "ERROR: LO_PRESET must be one of 720p,540p,480p,360p,240p,180p — got '${LO_PRESET}'"; exit 64 ;;
 esac
 LO_WIDTH="${LO_WIDTH:-${LO_W_DEF}}"
 LO_HEIGHT="${LO_HEIGHT:-${LO_H_DEF}}"
 LO_BITRATE_KBPS="${LO_BITRATE_KBPS:-${LO_BR_DEF}}"
-[ -n "${LO_GOP_FRAMES}" ] || LO_GOP_FRAMES="${GOP_FRAMES}"
 
 # ---- Sanity checks ------------------------------------------------------------
 if ! [[ "${DEVICE_NUMBER}" =~ ^[0-9]+$ ]] || [ "${DEVICE_NUMBER}" -ge "${MAX_DEVICES}" ]; then
@@ -147,25 +133,6 @@ esac
 case "${CAPTIONS_ENABLE}" in true|false) ;; *)
     log "ERROR: CAPTIONS_ENABLE must be 'true' or 'false'"; exit 64 ;;
 esac
-case "${DECKLINK_DROP_NO_SIGNAL}" in true|false) ;; *)
-    log "ERROR: DECKLINK_DROP_NO_SIGNAL_FRAMES must be 'true' or 'false'"; exit 64 ;;
-esac
-case "${LO_TARGET_USAGE}" in
-  [1-7]) ;;
-  *) log "ERROR: LO_TARGET_USAGE must be an integer 1-7 — got '${LO_TARGET_USAGE}'"; exit 64 ;;
-esac
-if ! [[ "${LO_QUEUE_BUFFERS}" =~ ^[1-9][0-9]*$ ]]; then
-    log "ERROR: LO_QUEUE_BUFFERS must be a positive integer — got '${LO_QUEUE_BUFFERS}'"; exit 64
-fi
-if ! [[ "${LO_GOP_FRAMES}" =~ ^[1-9][0-9]*$ ]]; then
-    log "ERROR: LO_GOP_FRAMES must be a positive integer — got '${LO_GOP_FRAMES}'"; exit 64
-fi
-case "${LO_FPS}" in
-  60|59.94|60000/1001) LO_FPS="60000/1001" ;;
-  30|29.97|30000/1001) LO_FPS="30000/1001" ;;
-  15|14.99|15000/1001) LO_FPS="15000/1001" ;;
-  *) log "ERROR: LO_FPS must be 60000/1001, 30000/1001, or 15000/1001 (aliases: 60/30/15) — got '${LO_FPS}'"; exit 64 ;;
-esac
 case "${AUDIO_FRAME_MS}" in 2|5|10|20|40|60) ;; *)
     log "ERROR: AUDIO_FRAME_MS must be one of 2,5,10,20,40,60"; exit 64 ;;
 esac
@@ -180,16 +147,13 @@ gst-inspect-1.0 decklinkvideosrc >/dev/null 2>&1 \
     || { log "ERROR: GStreamer decklink plugin missing (install Desktop Video + gst-plugins-bad)"; exit 69; }
 
 # ---- Encoder selection ---------------------------------------------------------
-build_enc() { # $1 = bitrate kbps, $2 = gop, $3 = target-usage (va) / unused (x264), $4 = lo|hi
-  local br="$1" gop="$2" usage="$3" role="${4:-hi}"
+build_enc() { # $1 = bitrate kbps
   case "${VIDEO_ENCODER}" in
     vah264enc)
-      echo "vah264enc rate-control=cbr bitrate=${br} key-int-max=${gop} b-frames=0 target-usage=${usage} ${EXTRA_ENC_ARGS}"
+      echo "vah264enc rate-control=cbr bitrate=$1 key-int-max=${GOP_FRAMES} b-frames=0 target-usage=7 ${EXTRA_ENC_ARGS}"
       ;;
     x264enc)
-      local preset="veryfast"
-      [ "${role}" = "lo" ] && preset="fast"
-      echo "x264enc tune=zerolatency speed-preset=${preset} bitrate=${br} key-int-max=${gop} bframes=0 ${EXTRA_ENC_ARGS}"
+      echo "x264enc tune=zerolatency speed-preset=veryfast bitrate=$1 key-int-max=${GOP_FRAMES} bframes=0 ${EXTRA_ENC_ARGS}"
       ;;
   esac
 }
@@ -201,8 +165,8 @@ case "${VIDEO_ENCODER}" in
   x264enc) ;;
   *) log "ERROR: unsupported VIDEO_ENCODER '${VIDEO_ENCODER}'"; exit 64 ;;
 esac
-ENC_HI="$(build_enc "${BITRATE_KBPS}" "${GOP_FRAMES}" 7 hi)"
-ENC_LO="$(build_enc "${LO_BITRATE_KBPS}" "${LO_GOP_FRAMES}" "${LO_TARGET_USAGE}" lo)"
+ENC_HI="$(build_enc "${BITRATE_KBPS}")"
+ENC_LO="$(build_enc "${LO_BITRATE_KBPS}")"
 
 # ---- Fixed output framerate (drives the normalization capsfilter) -------------
 case "${DEINT_FIELDS}" in
@@ -264,8 +228,7 @@ if [ "${LO_ENABLE}" = "true" ]; then
 fi
 
 PIPELINE+=" decklinkvideosrc device-number=${DEVICE_NUMBER} mode=auto"
-PIPELINE+=" buffer-size=${DECKLINK_BUFFER_FRAMES}"
-PIPELINE+=" drop-no-signal-frames=${DECKLINK_DROP_NO_SIGNAL}"
+PIPELINE+=" buffer-size=${DECKLINK_BUFFER_FRAMES} drop-no-signal-frames=false"
 if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
   PIPELINE+=" output-cc=true"
 fi
@@ -275,11 +238,7 @@ if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
   PIPELINE+=" ! ccextractor name=cc"
   PIPELINE+=" cc. ! queue max-size-buffers=4 leaky=downstream"
 fi
-if [ "${WATCHDOG_MS}" -gt 0 ] 2>/dev/null; then
-  PIPELINE+=" ! watchdog timeout=${WATCHDOG_MS}"
-fi
-# Match Phase-1-stable chain: fields=${DEINT_FIELDS}, no interlace-mode on HI
-# caps (forcing progressive here not-negotiated on this Quad 2 + gst combo).
+PIPELINE+=" ! watchdog timeout=${WATCHDOG_MS}"
 PIPELINE+=" ! deinterlace fields=${DEINT_FIELDS} method=greedyh"
 PIPELINE+=" ! videorate ! videoscale ! videoconvert"
 PIPELINE+=" ! video/x-raw,format=NV12,width=${OUTPUT_WIDTH},height=${OUTPUT_HEIGHT},framerate=${OUTPUT_FPS},pixel-aspect-ratio=1/1"
@@ -288,12 +247,9 @@ if [ "${LO_ENABLE}" = "true" ]; then
   PIPELINE+=" ! tee name=vt"
   PIPELINE+=" vt. ! queue max-size-buffers=4 leaky=downstream"
   PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1 ! sink."
-  # LO: rate then scale. Keep qos=false / deeper queue (starve fix). Do not
-  # force interlace-mode or bilinear method — those broke caps negotiation
-  # on the edge after the supervisor-era LO tweaks.
-  PIPELINE+=" vt. ! queue max-size-buffers=${LO_QUEUE_BUFFERS} max-size-time=0 max-size-bytes=0 leaky=downstream"
-  PIPELINE+=" ! videorate qos=false skip-to-first=true"
-  PIPELINE+=" ! videoscale qos=false"
+  # LO branch: drop to LO_FPS first (cheap), then scale down, then encode.
+  PIPELINE+=" vt. ! queue max-size-buffers=4 leaky=downstream"
+  PIPELINE+=" ! videorate ! videoscale"
   PIPELINE+=" ! video/x-raw,format=NV12,width=${LO_WIDTH},height=${LO_HEIGHT},framerate=${LO_FPS},pixel-aspect-ratio=1/1"
   PIPELINE+=" ! ${ENC_LO} ! h264parse config-interval=-1 ! sinklo."
 else

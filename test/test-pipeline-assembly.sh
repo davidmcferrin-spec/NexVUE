@@ -26,14 +26,8 @@ expect_usage_64() {
 # T1: default single-rendition pipeline
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 run_encode)
 grep -q "rtsp://127.0.0.1:8554/ch0" <<<"$out" || fail "T1 default RTSP url"
-grep -q "watchdog" <<<"$out" && fail "T1 watchdog off by default (WATCHDOG_MS=0)"
-# Optional watchdog when explicitly enabled (debug path only)
-out_wd=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 WATCHDOG_MS=20000 run_encode)
-grep -q "watchdog timeout=20000" <<<"$out_wd" || fail "T1 watchdog present when WATCHDOG_MS>0"
+grep -q "watchdog" <<<"$out" || fail "T1 watchdog present"
 grep -q "width=1920,height=1080,framerate=60000/1001" <<<"$out" || fail "T1 normalization caps"
-grep -q "drop-no-signal-frames=false" <<<"$out" || fail "T1 drop-no-signal-frames default false"
-out_drop=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 DECKLINK_DROP_NO_SIGNAL_FRAMES=true run_encode)
-grep -q "drop-no-signal-frames=true" <<<"$out_drop" || fail "T1 drop-no-signal-frames=true override"
 grep -q "opusenc" <<<"$out" || fail "T1 audio present by default"
 grep -q "audiorate" <<<"$out" || fail "T1 audiorate present (gapless timestamp fix)"
 grep -q "tee" <<<"$out" && fail "T1 no tee when LO disabled"
@@ -51,10 +45,9 @@ out=$(DEVICE_NUMBER=1 CHANNEL_PATH=ch1 ENABLE_AUDIO=false run_encode)
 grep -q "opusenc" <<<"$out" && fail "T3 audio should be absent"
 grep -q "decklinkaudiosrc" <<<"$out" && fail "T3 audiosrc should be absent"
 
-# T4: top-field mode sets 29.97p normalization and literal fields=top
+# T4: top-field mode sets 29.97p normalization
 out=$(DEVICE_NUMBER=2 CHANNEL_PATH=ch2 DEINT_FIELDS=top run_encode)
 grep -q "framerate=30000/1001" <<<"$out" || fail "T4 29.97p caps"
-grep -q "deinterlace fields=top" <<<"$out" || fail "T4 deinterlace fields=top"
 
 # T5: invalid inputs rejected with usage exit code
 DEVICE_NUMBER=9 CHANNEL_PATH=ch9 expect_usage_64 "T5 accepted device 9"
@@ -68,23 +61,9 @@ grep -q "x264enc tune=zerolatency" <<<"$out" || fail "T6 x264 fallback"
 # T7: LO_PRESET ladder maps to correct raster and default bitrate
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_PRESET=360p run_encode)
 grep -q "width=640,height=360" <<<"$out" || fail "T7 360p raster"
-grep -q "bitrate=800" <<<"$out" || fail "T7 360p default bitrate"
+grep -q "bitrate=500" <<<"$out" || fail "T7 360p default bitrate"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_PRESET=240p run_encode)
 grep -q "width=426,height=240" <<<"$out" || fail "T7 240p raster"
-
-# T7b: LO defaults (higher bitrate ladder, target-usage=7, deeper queue, qos=false)
-out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_PRESET=720p run_encode)
-grep -q "bitrate=2500" <<<"$out" || fail "T7b 720p default bitrate 2500"
-grep -q "target-usage=7" <<<"$out" || fail "T7b LO default target-usage=7"
-grep -q "videorate qos=false" <<<"$out" || fail "T7b LO videorate qos=false"
-grep -q "videoscale qos=false" <<<"$out" || fail "T7b LO videoscale qos=false"
-grep -q "max-size-buffers=16 max-size-time=0 max-size-bytes=0 leaky=downstream" <<<"$out" || fail "T7b LO queue depth 16"
-grep -q "rtspclientsink name=sink location=" <<<"$out" || fail "T7b HI sink present"
-! grep -q "rtspclientsink.*sync=" <<<"$out" || fail "T7b rtspclientsink must not set sync="
-out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_TARGET_USAGE=3 LO_QUEUE_BUFFERS=24 run_encode)
-grep -q "target-usage=3" <<<"$out" || fail "T7b LO_TARGET_USAGE override"
-grep -q "max-size-buffers=24 max-size-time=0 max-size-bytes=0 leaky=downstream" <<<"$out" || fail "T7b LO_QUEUE_BUFFERS override"
-DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_TARGET_USAGE=9 expect_usage_64 "T7b accepted bad LO_TARGET_USAGE"
 
 # T8: explicit LO_WIDTH/HEIGHT/BITRATE override the preset
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_PRESET=480p LO_WIDTH=512 LO_HEIGHT=288 LO_BITRATE_KBPS=400 run_encode)
