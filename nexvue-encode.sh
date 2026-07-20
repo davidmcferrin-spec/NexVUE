@@ -252,10 +252,10 @@ fi
 #        -> tee -> HI encode -> sink   [-> LO scale/rate -> LO encode -> sinklo]
 # Captions (optional): ccextractor.caption -> ccconverter -> FIFO -> decode.py
 # Audio: capture -> Opus once -> tee -> both sinks (same encoded track).
-PIPELINE="rtspclientsink name=sink location=${RTSP_URL} protocols=tcp sync=false"
+PIPELINE="rtspclientsink name=sink location=${RTSP_URL} protocols=tcp"
 
 if [ "${LO_ENABLE}" = "true" ]; then
-  PIPELINE+=" rtspclientsink name=sinklo location=${LO_RTSP_URL} protocols=tcp sync=false"
+  PIPELINE+=" rtspclientsink name=sinklo location=${LO_RTSP_URL} protocols=tcp"
 fi
 
 PIPELINE+=" decklinkvideosrc device-number=${DEVICE_NUMBER} mode=auto"

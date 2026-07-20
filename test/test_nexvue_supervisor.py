@@ -469,7 +469,9 @@ class TestPureHelpers(unittest.TestCase):
         self.assertIn("skip-to-first=true", desc)
         self.assertIn("max-size-time=0 max-size-bytes=0", desc)
         self.assertIn("target-usage=7", desc)
-        self.assertIn("sync=false", desc)
+        # rtspclientsink must not set sync= (property missing on our gst build).
+        self.assertRegex(desc, r"rtspclientsink name=sink location=\S+ protocols=tcp(?!\s+sync)")
+        self.assertRegex(desc, r"rtspclientsink name=sinklo location=\S+ protocols=tcp(?!\s+sync)")
         # Geometry and rate are separate capsfilters (scale then rate).
         self.assertIn(
             f"width={cfg.lo_width},height={cfg.lo_height}",

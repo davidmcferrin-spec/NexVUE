@@ -1003,7 +1003,7 @@ class Supervisor:
             )
             # Scale geometry first (cheap nearest), then rate — split caps so
             # videorate is not fighting videoscale. qos=false stops encoder QoS
-            # from starving this branch. sync=false on sinks is set below.
+            # from starving this branch.
             parts.append(
                 f"vt. ! {_leaky_queue(lo_q)} "
                 f"! videoscale qos=false method=nearest-neighbour add-borders=false "
@@ -1015,15 +1015,12 @@ class Supervisor:
             hi_enc = build_encoder_desc(cfg, cfg.bitrate_kbps)
             parts.append(f"{vout} ! {hi_enc} ! h264parse name=hiparse config-interval=-1 ! sink.")
 
-        # Live WHEP: do not clock-sync the RTSP publish sinks (adds latency and
-        # can backpressure the LO branch under dual-encode load).
-        parts.append(
-            f"rtspclientsink name=sink location={cfg.rtsp_url} protocols=tcp sync=false"
-        )
+        # Note: do not set sync= on rtspclientsink — this element's GstProperty
+        # set does not expose BaseSink sync on the Ubuntu/gst-rtsp-server build
+        # we ship (parse_launch fails with "no property sync").
+        parts.append(f"rtspclientsink name=sink location={cfg.rtsp_url} protocols=tcp")
         if cfg.lo_enable:
-            parts.append(
-                f"rtspclientsink name=sinklo location={cfg.lo_rtsp_url} protocols=tcp sync=false"
-            )
+            parts.append(f"rtspclientsink name=sinklo location={cfg.lo_rtsp_url} protocols=tcp")
 
         if cfg.enable_audio:
             parts.append("input-selector name=asel sync-streams=false")
