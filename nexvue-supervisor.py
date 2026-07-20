@@ -963,6 +963,18 @@ def _try_set(element, prop_name: str, value) -> bool:
         return False
 
 
+def _try_set_pad(pad, prop_name: str, value) -> bool:
+    """Best-effort pad property (e.g. input-selector sink always-ok)."""
+    if pad is None:
+        return False
+    try:
+        pad.set_property(prop_name, value)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.debug("could not set pad %s=%s (%s)", prop_name, value, exc)
+        return False
+
+
 # ---------------------------------------------------------------------------
 # GStreamer pipeline / supervisor process. All Gst/GLib access lives inside
 # method bodies (never at class- or module-body scope), and annotations are
@@ -997,6 +1009,8 @@ class Supervisor:
         self._live_audio_pad = None
         self._live_bins_active = False
         self._live_error_grace_until = 0.0
+        self._live_retry_failures = 0
+        self._slate_pause_timeout_id = 0
         self._srt_elements: list = []
         self._srt_video_linked = False
         self._srt_audio_linked = False
@@ -1170,6 +1184,10 @@ class Supervisor:
 
         self._video_selector = self._pipeline.get_by_name("vsel")
         self._slate_video_pad = self._video_selector.get_static_pad("sink_0")
+        # Live sources on an inactive selector pad must see FLOW_OK or they
+        # stop with basesrc "reason error" / not-linked. Default is usually
+        # true; set explicitly after we turned sync-streams off.
+        _try_set_pad(self._slate_video_pad, "always-ok", True)
         self._video_selector.set_property("active-pad", self._slate_video_pad)
         # sync-streams is off in the launch string; do not re-enable cache/sync
         # knobs that only matter (and can hurt pacing) when sync-streams=true.
@@ -1180,6 +1198,7 @@ class Supervisor:
         if self._config.enable_audio:
             self._audio_selector = self._pipeline.get_by_name("asel")
             self._slate_audio_pad = self._audio_selector.get_static_pad("sink_0")
+            _try_set_pad(self._slate_audio_pad, "always-ok", True)
             self._audio_selector.set_property("active-pad", self._slate_audio_pad)
 
         if self._captions.enabled:
@@ -1314,6 +1333,7 @@ class Supervisor:
 
         self._pipeline.add(video_bin)
         sink_pad = self._request_pad(self._video_selector, "sink_%u")
+        _try_set_pad(sink_pad, "always-ok", True)
         video_src_pad.link(sink_pad)
         self._live_video_pad = sink_pad
         if caption_pad is not None and self._cc_queue is not None:
@@ -1329,6 +1349,7 @@ class Supervisor:
             audio_bin, audio_src_pad = self._create_decklink_audio_bin()
             self._pipeline.add(audio_bin)
             asink_pad = self._request_pad(self._audio_selector, "sink_%u")
+            _try_set_pad(asink_pad, "always-ok", True)
             audio_src_pad.link(asink_pad)
             self._live_audio_pad = asink_pad
             audio_bin.sync_state_with_parent()
@@ -1336,6 +1357,7 @@ class Supervisor:
 
         self._live_bins_active = True
         self._live_error_grace_until = 0.0
+        self._live_retry_failures = 0
         # notify::signal only fires on CHANGE — read the current value once
         # right after linking in case the card already had lock the whole
         # time we were waiting out DECKLINK_RETRY_S.
@@ -1427,6 +1449,7 @@ class Supervisor:
                 return
             out = chain.get_by_name("srtvqout").get_static_pad("src")
             sel_sink = self._request_pad(self._video_selector, "sink_%u")
+            _try_set_pad(sel_sink, "always-ok", True)
             out.link(sel_sink)
             self._live_video_pad = sel_sink
             out.add_probe(Gst.PadProbeType.BUFFER, self._on_srt_video_probe)
@@ -1455,6 +1478,7 @@ class Supervisor:
                 return
             out = chain.get_by_name("srtaqout").get_static_pad("src")
             asink = self._request_pad(self._audio_selector, "sink_%u")
+            _try_set_pad(asink, "always-ok", True)
             out.link(asink)
             self._live_audio_pad = asink
             chain.sync_state_with_parent()
@@ -1525,11 +1549,62 @@ class Supervisor:
         # Child queues (dlq0) often post ERROR after the src; keep those from
         # being classified as fatal while teardown drains.
         self._live_error_grace_until = time.monotonic() + 5.0
+        self._cancel_slate_pause()
         self._state_machine.on_live_error()
         self._teardown_live()
+        self._live_retry_failures += 1
+        # Back off reopen storms — hammering DeckLink every 3s yields error (-5).
+        delay = min(
+            30.0,
+            max(self._config.live_retry_s, self._config.live_retry_s * (2 ** min(self._live_retry_failures - 1, 4))),
+        )
         label = "SRT" if self._config.input_type == "srt" else "DeckLink"
-        self._log.warning("%s branch down — retrying in %.1fs", label, self._config.live_retry_s)
-        GLib.timeout_add(int(self._config.live_retry_s * 1000), self._attach_live)
+        self._log.warning("%s branch down — retrying in %.1fs", label, delay)
+        GLib.timeout_add(int(delay * 1000), self._attach_live)
+
+    def _teardown_live_audio_only(self) -> None:
+        """Audio not-negotiated must not bounce the video/DeckLink reopen loop."""
+        if self._audio_selector is not None and self._slate_audio_pad is not None:
+            self._audio_selector.set_property("active-pad", self._slate_audio_pad)
+        pad = self._live_audio_pad
+        bin_ = self._live_audio_bin
+        self._live_audio_pad = None
+        self._live_audio_bin = None
+        if bin_ is None:
+            return
+        try:
+            bin_.set_state(Gst.State.NULL)
+        except Exception:  # noqa: BLE001
+            pass
+        if pad is not None and self._audio_selector is not None:
+            try:
+                peer = pad.get_peer()
+                if peer is not None:
+                    peer.unlink(pad)
+                self._audio_selector.release_request_pad(pad)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            self._pipeline.remove(bin_)
+        except Exception:  # noqa: BLE001
+            pass
+        self._log.warning("DeckLink/SRT audio detached (video continues on slate silence)")
+
+    def _is_live_audio_element(self, element) -> bool:
+        if element is None:
+            return False
+        try:
+            name = element.get_name() or ""
+        except Exception:  # noqa: BLE001
+            name = ""
+        if name.startswith("dlaudio") or name.startswith("dlaq") or name.startswith("srtaq"):
+            return True
+        node = element
+        while node is not None:
+            if self._live_audio_bin is not None and node is self._live_audio_bin:
+                return True
+            node = node.get_parent()
+        return False
 
     # -- bus / probes ---------------------------------------------------------
     def _is_live_source(self, element) -> bool:
@@ -1582,7 +1657,12 @@ class Supervisor:
         label = "SRT" if self._config.input_type == "srt" else "DeckLink"
         if mtype == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
-            if self._is_live_source(message.src):
+            if self._is_live_audio_element(message.src) and self._live_video_bin is not None:
+                self._log.warning(
+                    "%s audio error (keeping video): %s (%s)", label, err.message, debug
+                )
+                self._teardown_live_audio_only()
+            elif self._is_live_source(message.src):
                 self._log.warning("%s branch error: %s (%s)", label, err.message, debug)
                 self._handle_live_failure()
             elif self._is_caption_element(message.src):
@@ -1602,7 +1682,10 @@ class Supervisor:
                 self._log.error("fatal pipeline error: %s (%s)", err.message, debug)
                 self._fatal(1)
         elif mtype == Gst.MessageType.EOS:
-            if self._is_live_source(message.src):
+            if self._is_live_audio_element(message.src) and self._live_video_bin is not None:
+                self._log.warning("%s audio EOS (keeping video)", label)
+                self._teardown_live_audio_only()
+            elif self._is_live_source(message.src):
                 self._log.warning("%s branch EOS", label)
                 self._handle_live_failure()
             elif self._is_caption_element(message.src):
@@ -1655,14 +1738,32 @@ class Supervisor:
             except Exception as exc:  # noqa: BLE001
                 self._log.debug("slate %s -> %s failed (%s)", name, state, exc)
 
+    def _cancel_slate_pause(self) -> None:
+        if self._slate_pause_timeout_id:
+            try:
+                GLib.source_remove(self._slate_pause_timeout_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._slate_pause_timeout_id = 0
+
+    def _deferred_pause_slate(self) -> bool:
+        self._slate_pause_timeout_id = 0
+        # Only pause if we are still LIVE — a flap back to slate must keep
+        # videotestsrc running.
+        if self._state_machine.state == State.LIVE:
+            self._set_slate_running(False)
+        return False
+
     def _on_enter_live(self) -> None:
         self._log.info("state -> LIVE")
         if self._live_video_pad is not None:
             self._video_selector.set_property("active-pad", self._live_video_pad)
         if self._config.enable_audio and self._live_audio_pad is not None:
             self._audio_selector.set_property("active-pad", self._live_audio_pad)
-        # Flip pad first, then stop slate generation on the inactive branch.
-        self._set_slate_running(False)
+        # Defer pausing slate: pausing in the same turn as the pad switch can
+        # flush the selector and bounce DeckLink with basesrc error (-5).
+        self._cancel_slate_pause()
+        self._slate_pause_timeout_id = GLib.timeout_add(2000, self._deferred_pause_slate)
         # Reopen caption valve only after the live source is the active pad.
         if self._cc_valve is not None:
             self._cc_valve.set_property("drop", False)
@@ -1670,6 +1771,7 @@ class Supervisor:
 
     def _on_enter_slate(self) -> None:
         self._log.info("state -> SLATE")
+        self._cancel_slate_pause()
         # Close the caption valve BEFORE flipping to slate so late 608 pairs
         # from the still-running DeckLink branch cannot land in the decoder
         # after CLEAR (plan: valve closes before entering SLATE).
