@@ -2,6 +2,11 @@
 ###############################################################################
 # nexvue-encode.sh — one DeckLink input -> H.264/Opus -> MediaMTX (RTSP)
 #
+# Production ExecStart for nexvue-encode@N. Restored to the Phase-1-stable
+# revision from immediately before Phase 1.5 supervisor/slate (git 4095445^)
+# so we are not carrying supervisor-era pipeline drift. Only change vs that
+# tree: skip Gst watchdog when WATCHDOG_MS=0 (supervisor-era channel envs).
+#
 # Invoked by systemd template unit nexvue-encode@<n>.service with environment
 # loaded from /etc/nexvue/channels/<n>.env
 #
@@ -238,7 +243,9 @@ if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
   PIPELINE+=" ! ccextractor name=cc"
   PIPELINE+=" cc. ! queue max-size-buffers=4 leaky=downstream"
 fi
-PIPELINE+=" ! watchdog timeout=${WATCHDOG_MS}"
+if [ "${WATCHDOG_MS}" -gt 0 ] 2>/dev/null; then
+  PIPELINE+=" ! watchdog timeout=${WATCHDOG_MS}"
+fi
 PIPELINE+=" ! deinterlace fields=${DEINT_FIELDS} method=greedyh"
 PIPELINE+=" ! videorate ! videoscale ! videoconvert"
 PIPELINE+=" ! video/x-raw,format=NV12,width=${OUTPUT_WIDTH},height=${OUTPUT_HEIGHT},framerate=${OUTPUT_FPS},pixel-aspect-ratio=1/1"

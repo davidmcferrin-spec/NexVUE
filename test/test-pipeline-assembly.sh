@@ -27,6 +27,8 @@ expect_usage_64() {
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 run_encode)
 grep -q "rtsp://127.0.0.1:8554/ch0" <<<"$out" || fail "T1 default RTSP url"
 grep -q "watchdog" <<<"$out" || fail "T1 watchdog present"
+out_nw=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 WATCHDOG_MS=0 run_encode)
+grep -q "watchdog" <<<"$out_nw" && fail "T1 WATCHDOG_MS=0 must omit watchdog"
 grep -q "width=1920,height=1080,framerate=60000/1001" <<<"$out" || fail "T1 normalization caps"
 grep -q "opusenc" <<<"$out" || fail "T1 audio present by default"
 grep -q "audiorate" <<<"$out" || fail "T1 audiorate present (gapless timestamp fix)"

@@ -127,12 +127,11 @@ specifically because this box can't get additional ports opened.
   `MAX_LO_RENDITIONS` live in `/etc/nexvue/nexvue.env`.
   Glass-to-glass latency photos remain deferred until on-site/bench access.
 - **Phase 1.5: rolled back** — `nexvue-encode@.service` ExecStart is again
-  `nexvue-encode.sh` (gst-launch DeckLink → MediaMTX), the path that was
-  stable in Phase 1. `nexvue-supervisor.py` (slate / `input-selector` /
-  SRT) stays in the tree for a future redesign only — systemd does **not**
-  run it. Accepted trade-off: unlocked inputs restart or show black instead
-  of a NO SIGNAL slate — park empty ports via Services Enable/Disable.
-  Captions, LO, metrics, and ops UI are unchanged. Assembly tests:
+  `nexvue-encode.sh`. The script itself was restored to the Phase-1-stable
+  revision from immediately before supervisor/slate (`git 4095445^`) so
+  supervisor-era pipeline drift is gone. `nexvue-supervisor.py` stays in
+  the tree unused. Park empty ports via Services Enable/Disable.
+  Captions/LO/metrics/ops UI remain. Assembly tests:
   `test/test-pipeline-assembly.sh`.
 - **Phase 2: PHP portal** — channel catalog, local bcrypt + JWT issuance,
   MediaMTX JWKS auth. Open decision: publisher auth pattern (long-lived
