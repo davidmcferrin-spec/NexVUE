@@ -917,6 +917,28 @@ def _leaky_queue(max_buffers: int, *, name: str = "") -> str:
     )
 
 
+# Named elements inside the DeckLink / SRT live bins. Used to classify bus
+# ERROR messages that arrive AFTER teardown (parent bin already gone) so a
+# late dlq0 not-negotiated does not kill the slate/RTSP session.
+LIVE_BRANCH_NAME_PREFIXES = (
+    "dlvideo",
+    "dlq",
+    "dlaudio",
+    "dlaq",
+    "dlcc",
+    "srtsrc",
+    "srtq",
+    "srtdecode",
+    "srtvq",
+    "srtaq",
+)
+
+
+def live_branch_element_name(name: str) -> bool:
+    n = name or ""
+    return any(n == p or n.startswith(p) for p in LIVE_BRANCH_NAME_PREFIXES)
+
+
 def slate_overlay_text(config: SupervisorConfig) -> str:
     """NO SIGNAL burn-in text, optionally with the channel alias. Sanitized
     for safe embedding in a quoted gst-launch property value."""
@@ -974,6 +996,7 @@ class Supervisor:
         self._live_video_pad = None
         self._live_audio_pad = None
         self._live_bins_active = False
+        self._live_error_grace_until = 0.0
         self._srt_elements: list = []
         self._srt_video_linked = False
         self._srt_audio_linked = False
@@ -1268,6 +1291,15 @@ class Supervisor:
             return self._attach_srt()
         return self._attach_decklink()
 
+    @staticmethod
+    def _request_pad(element, name: str = "sink_%u"):
+        """Gst.Element.request_pad_simple when available; else get_request_pad."""
+        if hasattr(element, "request_pad_simple"):
+            pad = element.request_pad_simple(name)
+            if pad is not None:
+                return pad
+        return element.get_request_pad(name)
+
     # -- DeckLink branch attach/detach --------------------------------------
     def _attach_decklink(self) -> bool:
         cfg = self._config
@@ -1281,7 +1313,7 @@ class Supervisor:
             return False
 
         self._pipeline.add(video_bin)
-        sink_pad = self._video_selector.get_request_pad("sink_1")
+        sink_pad = self._request_pad(self._video_selector, "sink_%u")
         video_src_pad.link(sink_pad)
         self._live_video_pad = sink_pad
         if caption_pad is not None and self._cc_queue is not None:
@@ -1296,13 +1328,14 @@ class Supervisor:
         if cfg.enable_audio:
             audio_bin, audio_src_pad = self._create_decklink_audio_bin()
             self._pipeline.add(audio_bin)
-            asink_pad = self._audio_selector.get_request_pad("sink_1")
+            asink_pad = self._request_pad(self._audio_selector, "sink_%u")
             audio_src_pad.link(asink_pad)
             self._live_audio_pad = asink_pad
             audio_bin.sync_state_with_parent()
             self._live_audio_bin = audio_bin
 
         self._live_bins_active = True
+        self._live_error_grace_until = 0.0
         # notify::signal only fires on CHANGE — read the current value once
         # right after linking in case the card already had lock the whole
         # time we were waiting out DECKLINK_RETRY_S.
@@ -1393,7 +1426,7 @@ class Supervisor:
                 self._log.error("failed to link decodebin video pad to SRT normalize chain")
                 return
             out = chain.get_by_name("srtvqout").get_static_pad("src")
-            sel_sink = self._video_selector.get_request_pad("sink_1")
+            sel_sink = self._request_pad(self._video_selector, "sink_%u")
             out.link(sel_sink)
             self._live_video_pad = sel_sink
             out.add_probe(Gst.PadProbeType.BUFFER, self._on_srt_video_probe)
@@ -1421,7 +1454,7 @@ class Supervisor:
                 self._log.error("failed to link decodebin audio pad to SRT audio chain")
                 return
             out = chain.get_by_name("srtaqout").get_static_pad("src")
-            asink = self._audio_selector.get_request_pad("sink_1")
+            asink = self._request_pad(self._audio_selector, "sink_%u")
             out.link(asink)
             self._live_audio_pad = asink
             chain.sync_state_with_parent()
@@ -1489,6 +1522,9 @@ class Supervisor:
         if not self._live_bins_active:
             return
         self._live_bins_active = False
+        # Child queues (dlq0) often post ERROR after the src; keep those from
+        # being classified as fatal while teardown drains.
+        self._live_error_grace_until = time.monotonic() + 5.0
         self._state_machine.on_live_error()
         self._teardown_live()
         label = "SRT" if self._config.input_type == "srt" else "DeckLink"
@@ -1497,6 +1533,13 @@ class Supervisor:
 
     # -- bus / probes ---------------------------------------------------------
     def _is_live_source(self, element) -> bool:
+        if element is not None:
+            try:
+                name = element.get_name() or ""
+            except Exception:  # noqa: BLE001
+                name = ""
+            if live_branch_element_name(name):
+                return True
         if self._config.input_type == "srt":
             for el in self._srt_elements:
                 node = element
@@ -1549,6 +1592,12 @@ class Supervisor:
                     err.message,
                     debug,
                 )
+            elif time.monotonic() < self._live_error_grace_until:
+                # Late ERROR from a torn-down live child (e.g. dlq0 after
+                # dlvideo not-negotiated) — stay on slate; do not exit 1.
+                self._log.warning(
+                    "ignoring post-teardown live error: %s (%s)", err.message, debug
+                )
             else:
                 self._log.error("fatal pipeline error: %s (%s)", err.message, debug)
                 self._fatal(1)
@@ -1558,6 +1607,8 @@ class Supervisor:
                 self._handle_live_failure()
             elif self._is_caption_element(message.src):
                 self._log.warning("caption side-channel EOS (non-fatal)")
+            elif time.monotonic() < self._live_error_grace_until:
+                self._log.warning("ignoring post-teardown live EOS")
             else:
                 self._log.error("unexpected EOS on common (non-live) path")
                 self._fatal(1)

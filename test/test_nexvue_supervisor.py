@@ -411,6 +411,15 @@ class TestStateMachine(unittest.TestCase):
 
 
 class TestPureHelpers(unittest.TestCase):
+    def test_live_branch_element_name(self) -> None:
+        self.assertTrue(mod.live_branch_element_name("dlvideo"))
+        self.assertTrue(mod.live_branch_element_name("dlq0"))
+        self.assertTrue(mod.live_branch_element_name("dlaudio"))
+        self.assertTrue(mod.live_branch_element_name("srtsrc"))
+        self.assertFalse(mod.live_branch_element_name("vout"))
+        self.assertFalse(mod.live_branch_element_name("sink"))
+        self.assertFalse(mod.live_branch_element_name("slatevideo"))
+
     def test_norm_caps_string(self) -> None:
         caps = mod.norm_caps_string(1920, 1080, "60000/1001")
         self.assertEqual(
