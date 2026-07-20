@@ -846,9 +846,13 @@ class CaptionsSupervisor:
         if self._proc is not None and self._proc.poll() is None:
             self._proc.terminate()
             try:
-                self._proc.wait(timeout=3)
+                self._proc.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 self._proc.kill()
+                try:
+                    self._proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
         for fifo in (self.data_fifo, self.control_fifo):
             if fifo is not None:
                 try:
@@ -990,25 +994,24 @@ class Supervisor:
         if cfg.lo_enable:
             hi_enc = build_encoder_desc(cfg, cfg.bitrate_kbps)
             lo_enc = build_encoder_desc(cfg, cfg.lo_bitrate_kbps, for_lo=True)
-            lo_geom = (
+            lo_caps = (
                 f"video/x-raw,format=NV12,width={cfg.lo_width},height={cfg.lo_height},"
-                f"pixel-aspect-ratio=1/1"
+                f"framerate={cfg.lo_fps},pixel-aspect-ratio=1/1,interlace-mode=progressive"
             )
-            lo_rate = f"video/x-raw,framerate={cfg.lo_fps}"
             lo_q = cfg.lo_queue_buffers
             parts.append(f"{vout} ! tee name=vt")
             parts.append(
                 f"vt. ! {_leaky_queue(4)} ! {hi_enc} "
                 "! h264parse name=hiparse config-interval=-1 ! sink."
             )
-            # Scale geometry first (cheap nearest), then rate — split caps so
-            # videorate is not fighting videoscale. qos=false stops encoder QoS
-            # from starving this branch.
+            # Rate first (cheap), then bilinear scale — nearest-neighbour made
+            # 480p graphics look "combed"/jagged. Force progressive caps so any
+            # leftover field flags cannot weave into the LO encode.
             parts.append(
                 f"vt. ! {_leaky_queue(lo_q)} "
-                f"! videoscale qos=false method=nearest-neighbour add-borders=false "
-                f"! videoconvert qos=false ! {lo_geom} "
-                f"! videorate qos=false skip-to-first=true ! {lo_rate} "
+                f"! videorate qos=false skip-to-first=true "
+                f"! videoscale qos=false method=bilinear add-borders=false "
+                f"! videoconvert qos=false ! {lo_caps} "
                 f"! {lo_enc} ! h264parse name=loparse config-interval=-1 ! sinklo."
             )
         else:
@@ -1187,9 +1190,42 @@ class Supervisor:
         return self._exit_code
 
     def _shutdown(self) -> None:
+        """Tear down quickly so systemctl stop/restart does not sit on the
+        default 90s TimeoutStopSec. rtspclientsink TCP close is the usual hang."""
+        pipe = self._pipeline
+        self._pipeline = None
+        if pipe is None:
+            self._captions.close()
+            return
+        wait_ns = 2 * Gst.SECOND
         try:
-            if self._pipeline is not None:
-                self._pipeline.set_state(Gst.State.NULL)
+            # Null publish sinks first — they block NULL the longest.
+            for name in ("sink", "sinklo"):
+                el = pipe.get_by_name(name)
+                if el is not None:
+                    try:
+                        el.set_state(Gst.State.NULL)
+                    except Exception:  # noqa: BLE001
+                        pass
+            # Release DeckLink exclusive-open promptly so a restart can reopen.
+            for bin_ in (self._live_video_bin, self._live_audio_bin):
+                if bin_ is not None:
+                    try:
+                        bin_.set_state(Gst.State.NULL)
+                    except Exception:  # noqa: BLE001
+                        pass
+            for name in ("slatevideo", "slateaudio", "slatetext"):
+                el = pipe.get_by_name(name)
+                if el is not None:
+                    try:
+                        el.set_state(Gst.State.NULL)
+                    except Exception:  # noqa: BLE001
+                        pass
+            pipe.set_state(Gst.State.NULL)
+            # Bound wait (do not use CLOCK_TIME_NONE — that can hang for minutes).
+            pipe.get_state(wait_ns)
+        except Exception as exc:  # noqa: BLE001
+            self._log.warning("pipeline shutdown incomplete (%s)", exc)
         finally:
             self._captions.close()
 

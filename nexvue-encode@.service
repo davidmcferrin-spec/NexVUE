@@ -48,6 +48,9 @@ ExecStart=/usr/bin/bash -c 'set -a; f="/etc/nexvue/channels/%i.env"; [ -r "$f" ]
 
 Restart=always
 RestartSec=3
+# Bound stop so a stuck Gst NULL (rtspclientsink TCP) cannot sit on the
+# default 90s TimeoutStopSec — supervisor also caps its own teardown.
+TimeoutStopSec=12
 # If the pipeline crash-loops (e.g. driver fault), keep trying forever —
 # an unattended edge node must recover without hands. Rate-limited so the
 # journal stays readable.

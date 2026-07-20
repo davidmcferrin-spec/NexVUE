@@ -280,13 +280,13 @@ if [ "${LO_ENABLE}" = "true" ]; then
   PIPELINE+=" ! tee name=vt"
   PIPELINE+=" vt. ! queue max-size-buffers=4 leaky=downstream"
   PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1 ! sink."
-  # LO: scale geometry first, then rate. qos=false avoids ~1 fps QoS starve.
+  # LO: rate first, then bilinear scale (nearest looked like combing on
+  # graphics at 480p). Force progressive caps. qos=false avoids ~1 fps starve.
   PIPELINE+=" vt. ! queue max-size-buffers=${LO_QUEUE_BUFFERS} max-size-time=0 max-size-bytes=0 leaky=downstream"
-  PIPELINE+=" ! videoscale qos=false method=nearest-neighbour add-borders=false"
-  PIPELINE+=" ! videoconvert qos=false"
-  PIPELINE+=" ! video/x-raw,format=NV12,width=${LO_WIDTH},height=${LO_HEIGHT},pixel-aspect-ratio=1/1"
   PIPELINE+=" ! videorate qos=false skip-to-first=true"
-  PIPELINE+=" ! video/x-raw,framerate=${LO_FPS}"
+  PIPELINE+=" ! videoscale qos=false method=bilinear add-borders=false"
+  PIPELINE+=" ! videoconvert qos=false"
+  PIPELINE+=" ! video/x-raw,format=NV12,width=${LO_WIDTH},height=${LO_HEIGHT},framerate=${LO_FPS},pixel-aspect-ratio=1/1,interlace-mode=progressive"
   PIPELINE+=" ! ${ENC_LO} ! h264parse config-interval=-1 ! sinklo."
 else
   PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1 ! sink."
