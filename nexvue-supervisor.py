@@ -101,6 +101,27 @@ class ConfigError(Exception):
 
 # LO framerates accepted by Settings / ops (must be a GStreamer fraction).
 LO_FPS_ALLOWED = frozenset({"60000/1001", "30000/1001", "15000/1001"})
+# Hand-edited / legacy typos that used to produce framerate=(int)N and break
+# videoscale→vah264enc linking (restart storm). Map to the curated fraction.
+LO_FPS_ALIASES = {
+    "60": "60000/1001",
+    "59.94": "60000/1001",
+    "59.940": "60000/1001",
+    "30": "30000/1001",
+    "29.97": "30000/1001",
+    "29.970": "30000/1001",
+    "15": "15000/1001",
+    "14.99": "15000/1001",
+    "14.985": "15000/1001",
+}
+
+
+def normalize_lo_fps(value: str) -> str:
+    """Return a curated LO_FPS fraction, or the stripped input for allowlist check."""
+    v = (value or "").strip()
+    if not v:
+        return "30000/1001"
+    return LO_FPS_ALIASES.get(v, LO_FPS_ALIASES.get(v.lower(), v))
 
 # LO_PRESET ladder -> (width, height, default bitrate kbps). Matches
 # nexvue-encode.sh exactly — the "p" number is the HEIGHT (480p = 854x480).
@@ -453,10 +474,11 @@ def load_config(
             raise ConfigError(f"LO_WIDTH/LO_HEIGHT must be positive even integers, got {lo_width}x{lo_height}")
         if lo_bitrate_kbps <= 0:
             raise ConfigError(f"LO_BITRATE_KBPS must be positive, got {lo_bitrate_kbps}")
-    lo_fps = opt("LO_FPS", "30000/1001")
+    lo_fps = normalize_lo_fps(opt("LO_FPS", "30000/1001"))
     if lo_fps not in LO_FPS_ALLOWED:
         raise ConfigError(
-            f"LO_FPS must be one of {', '.join(sorted(LO_FPS_ALLOWED))}, got {lo_fps!r}"
+            f"LO_FPS must be one of {', '.join(sorted(LO_FPS_ALLOWED))} "
+            f"(or alias 60/30/15 / 59.94/29.97), got {opt('LO_FPS', '')!r}"
         )
     lo_rtsp_url = opt("LO_RTSP_URL", f"rtsp://127.0.0.1:8554/{channel_path}lo")
 
@@ -964,8 +986,9 @@ class Supervisor:
                 "! h264parse name=hiparse config-interval=-1 ! sink."
             )
             parts.append(
-                f"vt. ! queue max-size-buffers={lo_q} leaky=downstream ! videorate ! videoscale "
-                f"! {lo_caps} ! {lo_enc} ! h264parse name=loparse config-interval=-1 ! sinklo."
+                f"vt. ! queue max-size-buffers={lo_q} leaky=downstream "
+                f"! videorate ! videoscale ! videoconvert ! {lo_caps} "
+                f"! {lo_enc} ! h264parse name=loparse config-interval=-1 ! sinklo."
             )
         else:
             hi_enc = build_encoder_desc(cfg, cfg.bitrate_kbps)

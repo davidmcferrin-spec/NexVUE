@@ -234,6 +234,17 @@ def sanitize_value(key: str, value: str) -> str:
     if key == "LO_BITRATE_KBPS":
         return _require_int(key, value, lo=100, hi=20000)
     if key == "LO_FPS":
+        # Normalize legacy bare rates that used to become framerate=(int)N and
+        # fail videoscale→vah264enc (encoder restart storm).
+        aliases = {
+            "60": "60000/1001",
+            "59.94": "60000/1001",
+            "30": "30000/1001",
+            "29.97": "30000/1001",
+            "15": "15000/1001",
+            "14.99": "15000/1001",
+        }
+        value = aliases.get(value, value)
         if value not in LO_FPS_ALLOWED:
             raise ValueError(
                 "LO_FPS must be blank (default 29.97), 60000/1001, 30000/1001, or 15000/1001"

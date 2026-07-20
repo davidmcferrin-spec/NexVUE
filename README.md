@@ -969,8 +969,9 @@ Services/Settings).
   only to the first N requesters by ascending channel id (deterministic clamp).
   HI keeps `target-usage=7` for latency; LO defaults favor smoother
   motion. Settings only offers curated `LO_FPS` / `LO_TARGET_USAGE` /
-  `LO_QUEUE_BUFFERS` values (ops write rejects free-form fps like `29.97`
-  that break GStreamer). Viewers on bad links get switched to it by the
+  `LO_QUEUE_BUFFERS` values; ops/supervisor also map legacy aliases
+  (`60`/`30`/`15`, `59.94`/`29.97`) to GStreamer fractions — bare integers
+  used to become `framerate=(int)N` and break the LO pipeline. Viewers on bad links get switched to it by the
   portal player (Phase 2). Tune `LO_BITRATE_KBPS` / `LO_PRESET` /
   `LO_TARGET_USAGE` / `LO_QUEUE_BUFFERS` in Settings if LO still looks choppy
   — under multi-channel load try `LO_TARGET_USAGE=7` or a lower preset.

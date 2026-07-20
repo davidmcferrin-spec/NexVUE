@@ -143,9 +143,19 @@ class TestLoadConfig(unittest.TestCase):
                     "DEVICE_NUMBER": "0",
                     "CHANNEL_PATH": "ch0",
                     "LO_ENABLE": "true",
-                    "LO_FPS": "29.97",
+                    "LO_FPS": "24",
                 }
             )
+        # Legacy bare rates normalize instead of restart-storming.
+        cfg_alias = mod.load_config(
+            {
+                "DEVICE_NUMBER": "0",
+                "CHANNEL_PATH": "ch0",
+                "LO_ENABLE": "true",
+                "LO_FPS": "60",
+            }
+        )
+        self.assertEqual(cfg_alias.lo_fps, "60000/1001")
         cfg_fps = mod.load_config(
             {
                 "DEVICE_NUMBER": "0",

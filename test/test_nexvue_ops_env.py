@@ -113,10 +113,12 @@ class TestApplyPatch(unittest.TestCase):
         self.assertIn("LO_FPS=30000/1001\n", out)
 
     def test_lo_fps_rejects_freeform(self):
+        # Bare integers used to be written and become framerate=(int)60 in Gst.
+        self.assertEqual(mod.sanitize_value("LO_FPS", "60"), "60000/1001")
+        self.assertEqual(mod.sanitize_value("LO_FPS", "30"), "30000/1001")
+        self.assertEqual(mod.sanitize_value("LO_FPS", "29.97"), "30000/1001")
         with self.assertRaises(ValueError):
-            mod.sanitize_value("LO_FPS", "29.97")
-        with self.assertRaises(ValueError):
-            mod.sanitize_value("LO_FPS", "15")
+            mod.sanitize_value("LO_FPS", "24")
         self.assertEqual(mod.sanitize_value("LO_FPS", "60000/1001"), "60000/1001")
         self.assertEqual(mod.sanitize_value("LO_FPS", ""), "")
 

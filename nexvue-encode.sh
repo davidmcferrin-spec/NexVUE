@@ -155,8 +155,10 @@ if ! [[ "${LO_GOP_FRAMES}" =~ ^[1-9][0-9]*$ ]]; then
     log "ERROR: LO_GOP_FRAMES must be a positive integer — got '${LO_GOP_FRAMES}'"; exit 64
 fi
 case "${LO_FPS}" in
-  60000/1001|30000/1001|15000/1001) ;;
-  *) log "ERROR: LO_FPS must be 60000/1001, 30000/1001, or 15000/1001 — got '${LO_FPS}'"; exit 64 ;;
+  60|59.94|60000/1001) LO_FPS="60000/1001" ;;
+  30|29.97|30000/1001) LO_FPS="30000/1001" ;;
+  15|14.99|15000/1001) LO_FPS="15000/1001" ;;
+  *) log "ERROR: LO_FPS must be 60000/1001, 30000/1001, or 15000/1001 (aliases: 60/30/15) — got '${LO_FPS}'"; exit 64 ;;
 esac
 case "${AUDIO_FRAME_MS}" in 2|5|10|20|40|60) ;; *)
     log "ERROR: AUDIO_FRAME_MS must be one of 2,5,10,20,40,60"; exit 64 ;;
@@ -280,7 +282,7 @@ if [ "${LO_ENABLE}" = "true" ]; then
   # LO branch: drop to LO_FPS first (cheap), then scale down, then encode.
   # Deeper queue than HI so momentary iGPU contention drops fewer LO frames.
   PIPELINE+=" vt. ! queue max-size-buffers=${LO_QUEUE_BUFFERS} leaky=downstream"
-  PIPELINE+=" ! videorate ! videoscale"
+  PIPELINE+=" ! videorate ! videoscale ! videoconvert"
   PIPELINE+=" ! video/x-raw,format=NV12,width=${LO_WIDTH},height=${LO_HEIGHT},framerate=${LO_FPS},pixel-aspect-ratio=1/1"
   PIPELINE+=" ! ${ENC_LO} ! h264parse config-interval=-1 ! sinklo."
 else
