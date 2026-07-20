@@ -91,7 +91,7 @@ apt-get install -y -qq \
   intel-media-va-driver-non-free vainfo intel-gpu-tools \
   build-essential curl ca-certificates jq \
   php-sqlite3 \
-  python3-gi python3-gst-1.0 gir1.2-glib-2.0 gir1.2-gstreamer-1.0
+  python3-gi python3-gst-1.0 gir1.2-glib-2.0 gir1.2-gstreamer-1.0 \
   gir1.2-gst-plugins-base-1.0
 ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for the Phase 1.5 supervisor — never pip; php-sqlite3 for metrics.php)"
 
