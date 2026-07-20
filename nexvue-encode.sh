@@ -81,10 +81,9 @@ AUDIO_QUEUE_BUFFERS="$(strip_inline "${AUDIO_QUEUE_BUFFERS:-100}")"
 # one audio stream, standard fix for this symptom.
 AUDIO_RESAMPLE_QUALITY="$(strip_inline "${AUDIO_RESAMPLE_QUALITY:-9}")"
 DECKLINK_BUFFER_FRAMES="$(strip_inline "${DECKLINK_BUFFER_FRAMES:-2}")"
-# true = do not push placeholder black while unlocked. false negotiates on
-# no-signal frames first; when the real SDI mode appears, DeckLink often dies
-# with basesrc not-negotiated (-4) ("Input source detected" then ERROR).
-DECKLINK_DROP_NO_SIGNAL="$(strip_inline "${DECKLINK_DROP_NO_SIGNAL_FRAMES:-true}")"
+# Default false matches the Phase-1-stable encode path. true drops unlocked
+# placeholder frames (avoids some lock races; set via channel env if needed).
+DECKLINK_DROP_NO_SIGNAL="$(strip_inline "${DECKLINK_DROP_NO_SIGNAL_FRAMES:-false}")"
 # 0 = off. A short watchdog turns brief DeckLink unlocks into unit restarts;
 # prefer leaving this off unless diagnosing a hard capture hang.
 WATCHDOG_MS="${WATCHDOG_MS:-0}"
@@ -206,9 +205,6 @@ ENC_HI="$(build_enc "${BITRATE_KBPS}" "${GOP_FRAMES}" 7 hi)"
 ENC_LO="$(build_enc "${LO_BITRATE_KBPS}" "${LO_GOP_FRAMES}" "${LO_TARGET_USAGE}" lo)"
 
 # ---- Fixed output framerate (drives the normalization capsfilter) -------------
-# DEINT_FIELDS names are historical: they select OUTPUT fps only. The
-# deinterlace element always uses fields=all so progressive sources (and
-# mode=auto lock transitions) do not die with not-negotiated (-4).
 case "${DEINT_FIELDS}" in
   all) OUTPUT_FPS="60000/1001" ;;
   top) OUTPUT_FPS="30000/1001" ;;
@@ -282,26 +278,23 @@ fi
 if [ "${WATCHDOG_MS}" -gt 0 ] 2>/dev/null; then
   PIPELINE+=" ! watchdog timeout=${WATCHDOG_MS}"
 fi
-# Deinterlace always uses fields=all (handles progressive + interlaced SDI).
-# DEINT_FIELDS only selects the normalized OUTPUT_FPS via videorate below —
-# literal fields=top not-negotiates on many progressive/auto locks.
-PIPELINE+=" ! deinterlace fields=all method=greedyh"
+# Match Phase-1-stable chain: fields=${DEINT_FIELDS}, no interlace-mode on HI
+# caps (forcing progressive here not-negotiated on this Quad 2 + gst combo).
+PIPELINE+=" ! deinterlace fields=${DEINT_FIELDS} method=greedyh"
 PIPELINE+=" ! videorate ! videoscale ! videoconvert"
-# interlace-mode=progressive: WebRTC is progressive-only; also stops the tee
-# LO branch from fighting an interleaved HI capsfilter.
-PIPELINE+=" ! video/x-raw,format=NV12,width=${OUTPUT_WIDTH},height=${OUTPUT_HEIGHT},framerate=${OUTPUT_FPS},pixel-aspect-ratio=1/1,interlace-mode=progressive"
+PIPELINE+=" ! video/x-raw,format=NV12,width=${OUTPUT_WIDTH},height=${OUTPUT_HEIGHT},framerate=${OUTPUT_FPS},pixel-aspect-ratio=1/1"
 
 if [ "${LO_ENABLE}" = "true" ]; then
   PIPELINE+=" ! tee name=vt"
   PIPELINE+=" vt. ! queue max-size-buffers=4 leaky=downstream"
   PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1 ! sink."
-  # LO: rate first, then bilinear scale (nearest looked like combing on
-  # graphics at 480p). Force progressive caps. qos=false avoids ~1 fps starve.
+  # LO: rate then scale. Keep qos=false / deeper queue (starve fix). Do not
+  # force interlace-mode or bilinear method — those broke caps negotiation
+  # on the edge after the supervisor-era LO tweaks.
   PIPELINE+=" vt. ! queue max-size-buffers=${LO_QUEUE_BUFFERS} max-size-time=0 max-size-bytes=0 leaky=downstream"
   PIPELINE+=" ! videorate qos=false skip-to-first=true"
-  PIPELINE+=" ! videoscale qos=false method=bilinear add-borders=false"
-  PIPELINE+=" ! videoconvert qos=false"
-  PIPELINE+=" ! video/x-raw,format=NV12,width=${LO_WIDTH},height=${LO_HEIGHT},framerate=${LO_FPS},pixel-aspect-ratio=1/1,interlace-mode=progressive"
+  PIPELINE+=" ! videoscale qos=false"
+  PIPELINE+=" ! video/x-raw,format=NV12,width=${LO_WIDTH},height=${LO_HEIGHT},framerate=${LO_FPS},pixel-aspect-ratio=1/1"
   PIPELINE+=" ! ${ENC_LO} ! h264parse config-interval=-1 ! sinklo."
 else
   PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1 ! sink."
