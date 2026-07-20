@@ -421,9 +421,10 @@ latency than the test player shows.
 
 Leave **only populated** channels running for 72h before calling Phase 1 done.
 **Prefer disabling `nexvue-encode@N` on empty Quad ports rather than leaving
-it running against nothing** — the Phase 1.5 supervisor now serves a NO
-SIGNAL slate instead of restart-looping, but an encoder with no intended
-feed is still needless load and journal noise. Disable empty channels:
+it running against nothing** — leave empty BNCs disabled (Services
+Enable/Disable or `systemctl disable --now`). Phase 1.5 slate was rolled
+back; an enabled encode on an unlocked port restart-loops. Disable empty
+channels:
 
 ```bash
 # example: devices 4–7 unlocked / unpatched
@@ -437,7 +438,7 @@ encoder unit (see the ops-pages note under Operational notes).
 On the edge box, from the repo root (or `/usr/local/bin` after `setup.sh`):
 
 ```bash
-# Deploy / Temperature verify (schema + API + docroot + supervisor ExecStart):
+# Deploy / Temperature verify (schema + API + docroot + encode ExecStart):
 sudo ./setup.sh
 sudo systemctl restart nexvue-metrics
 sudo nexvue-phase1-deploy-verify.sh
@@ -473,14 +474,14 @@ more code). Current hardware: **DeckLink Quad 2** (already installed at
 | Deploy UI + Temperature metrics | Re-run `setup.sh` + `nexvue-phase1-deploy-verify.sh` after each pull |
 | 72h soak (clean Started window) | Operator — start after deploy-verify; use `--since 1h` until journal is clean |
 | Captions probe + Player CC | Operator on a captioned feed |
-| Phase 1.5 supervisor assumptions | Confirmed (see below) — implementation shipped |
+| Phase 1.5 supervisor assumptions | Rolled back — ExecStart is `nexvue-encode.sh` again |
 
 1. **Quad 2 connectors → Input** for every intended capture BNC
    (`BlackmagicDesktopVideoSetup`). Confirm with `decklink-status` (lock +
    mode per device; order is not guaranteed sequential). Set
    `MAX_DEVICES=8` in `/etc/nexvue/nexvue.env`; enable `nexvue-encode@N`
-   **only** for patched inputs (leave empty BNCs disabled — Phase 1.5
-   slates instead of restart-looping, but empty encoders are still waste).
+   **only** for patched inputs (leave empty BNCs disabled — without slate,
+   empty encoders restart-loop and waste load).
 2. **Latency:** RTT-based estimate recorded above (~200 ms). Glass-to-glass
    photo deferred (remote rack) — not a Phase 1 blocker.
 3. **72h soak** with intended (locked) `nexvue-encode@N` up; closeout script
@@ -951,7 +952,7 @@ Services/Settings).
 - **Closed captions are a side channel**, not MediaMTX tracks. Encode writes
   `/run/nexvue/captions/<path>.json`; Apache serves SSE via
   `nexvue-captions.php`. HI/LO reconnect keeps the same channel subscription.
-  The Phase 1.5 supervisor keeps `output-cc` / `ccextractor` running on the
+  The gst-launch encoder keeps `output-cc` / `ccextractor` on the DeckLink
   DeckLink branch continuously (even while SLATE is the selected output) and
   sends a control-FIFO `CLEAR` on every SLATE entry so the overlay blanks
   immediately rather than waiting out the decoder's own idle-erase timeout.
@@ -969,57 +970,61 @@ Services/Settings).
   deeper LO queue, `qos=false` on LO videorate/scale so encoder QoS cannot
   starve the branch) alongside the HI rendition — one live source, two QSV encodes
   via tee. Station-wide `MAX_LO_RENDITIONS` (default 6 in `/etc/nexvue/nexvue.env`)
-  is a floating pool: Settings refuses a 7th enable; the supervisor grants LO
-  only to the first N requesters by ascending channel id (deterministic clamp).
+  is a floating pool: Settings refuses a 7th enable; `nexvue-ops-env-update.py`
+  enforces the same pool when writing channel envs (ascending channel id).
   HI and LO both default to `target-usage=7` for realtime throughput; lower
   `LO_TARGET_USAGE` trades speed for quality. Settings only offers curated `LO_FPS` / `LO_TARGET_USAGE` /
-  `LO_QUEUE_BUFFERS` values; ops/supervisor also map legacy aliases
+  `LO_QUEUE_BUFFERS` values; ops also map legacy aliases
   (`60`/`30`/`15`, `59.94`/`29.97`) to GStreamer fractions — bare integers
   used to become `framerate=(int)N` and break the LO pipeline. Viewers on bad links get switched to it by the
   portal player (Phase 2). Tune `LO_BITRATE_KBPS` / `LO_PRESET` /
   `LO_TARGET_USAGE` / `LO_QUEUE_BUFFERS` in Settings if LO still looks choppy
   — under multi-channel load keep usage at 7 or use a lower preset.
-- **SRT inputs:** set `INPUT_TYPE=srt` and `SRT_URI=srt://…` (caller or
-  listener). The supervisor always decode+re-encodes into the same slate /
-  normalize / HI(+LO) path as DeckLink. Captions stay DeckLink-only for now
-  (no `output-cc` on SRT). Slots `@8`/`@9` are typical SRT add-ons under
-  `MAX_CHANNELS=10`.
+- **SRT inputs:** deferred with the Phase 1.5 rollback — production encode
+  is DeckLink-only (`nexvue-encode.sh`). `INPUT_TYPE=srt` remains in Settings
+  for a future redesign; do not enable it on live units today.
 - **Self-healing model:** constant output caps mean input format changes never
   drop viewer sessions; the watchdog turns capture hangs into clean systemd
-  restarts; black frames ride through signal loss. A channel with no signal
-  at boot (or that loses lock later) now serves a generated "NO SIGNAL"
-  slate instead of restarting or showing nothing — the Phase 1.5
-  `nexvue-supervisor.py` (persistent RTSP session, DeckLink/slate input
-  switching via `input-selector`).
+  restarts; black frames ride through brief signal loss. Unlocked channels
+  still restart (`RestartSec=3`) — park empty ports. Phase 1.5 NO SIGNAL
+  slate was rolled back; production ExecStart is `nexvue-encode.sh` again.
 - **Signal-present alarming** belongs in CheckMK (Phase 4): the status daemon
   JSON is the data source (local check or HTTP agent), alongside the
   MediaMTX API (`/v3/paths/list`) for stream/session state.
 - **Format changes:** normalized away — output caps are constant per channel.
 - **No Docker, no Node** — two binaries, two scripts, systemd.
 
-## Phase 1.5 supervisor — implemented (`nexvue-supervisor.py`)
+## Phase 1.5 supervisor — rolled back (deferred redesign)
 
-`nexvue-encode@.service`'s ExecStart now execs `/usr/local/bin/nexvue-supervisor.py`
-directly (sourced channel env unchanged). `nexvue-encode.sh` remains in the repo
-as a standalone, hand-invocable reference/debug pipeline (and its own unit
-test, `test/test-pipeline-assembly.sh`, keeps covering the gst-launch string
-it builds) but is no longer what systemd runs.
+**Status (2026-07-20):** production ExecStart is again
+`/usr/local/bin/nexvue-encode.sh`. The supervisor/`input-selector`/slate path
+was pulled after repeated LIVE↔SLATE flaps and DeckLink
+`not-negotiated`/`error (-5)` storms on real hardware. `nexvue-supervisor.py`
+and its unit tests remain in the tree as a starting point for a future
+redesign only — systemd does not run them. Captions, LO, metrics, and the
+ops UI continue to work on the gst-launch encoder.
+
+Historical notes below describe the rolled-back design.
 
 Decisions taken (the three "open decisions" below were resolved this way):
 
 1. **Switch mechanism:** a persistent `input-selector` (video) + `input-selector`
    (audio) pair, each with a permanent "slate" sink pad and a **dynamically
-   added/removed** "DeckLink" sink pad. Selector output caps never change
-   (both branches normalize to the same NV12/48kHz caps), so flipping
-   `active-pad` never renegotiates the encoder or drops the RTSP/WHEP
-   session. Selectors use `sync-streams=false` (with sync on, the element
+   added/removed** "DeckLink" sink pad. Both branches feed size-matched
+   progressive NV12 into the selector; **framerate is locked after**
+   `input-selector` (`identity single-segment=true ! videorate ! … caps`)
+   so LIVE↔SLATE never renegotiates the encoder or drops the RTSP/WHEP
+   session, and pad switches do not hand `vah264enc` a new segment
+   timeline (that was posting basesrc `error (-5)` / `not-negotiated`).
+   Selectors use `sync-streams=false` (with sync on, the element
    paces like a sink and the LO tee branch starved to ~1–2 fps). While
    LIVE, slate `videotestsrc`/`textoverlay`/`audiotestsrc` are **PAUSED**
-   so they do not keep rendering 1080p behind the inactive pad. The DeckLink
-   capture branch itself is torn down and rebuilt
-   (not just re-selected) only on a hard GStreamer ERROR/EOS — normal
-   signal loss/acquire never touches the pipeline graph, only `active-pad`
-   (plus slate pause/resume).
+   (deferred ~2s after the pad switch) so they do not keep rendering 1080p
+   behind the inactive pad. The DeckLink capture branch itself is torn
+   down and rebuilt (not just re-selected) only on a hard GStreamer
+   ERROR/EOS — with exponential reopen backoff until LIVE is stable —
+   normal signal loss/acquire never touches the pipeline graph, only
+   `active-pad` (plus slate pause/resume).
 2. **Lock signal source:** `decklinkvideosrc`'s read-only `signal` GObject
    property (via `notify::signal`), corroborated by a buffer pad probe that
    requires at least one real (non-`GAP`) buffer before promoting to LIVE —
@@ -1188,7 +1193,7 @@ and implemented — see the decisions list above the collapsed spec.
 | Phase | Scope |
 |---|---|
 | 1 (this) | Single edge, LAN WHEP, no auth. Prove stability + latency. |
-| 1.5 | **Implemented** — `nexvue-supervisor.py`: DeckLink ↔ NO SIGNAL slate via a persistent `input-selector` pipeline, signal+buffer debounce state machine, captions preserved/cleared via a control FIFO. See "Phase 1.5 supervisor" below. |
+| 1.5 | **Rolled back** — production encode is `nexvue-encode.sh` again. Supervisor/slate deferred for redesign after field instability. See "Phase 1.5 supervisor" below. |
 | 2 | PHP portal: channel catalog, local bcrypt auth, JWT issuance, MediaMTX JWKS integration. Decide publisher-auth pattern (see comment in `mediamtx.yml`). |
 | 3 | DMZ exposure: TLS on 443, `webrtcAdditionalHosts` = public FQDN, single UDP 8189 rule + ICE-TCP fallback, Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
 | 4 | Fleet rollout: per-station config management, CheckMK checks (encoder-alive, signal-present, session counts), portal ops dashboard fed by outbound edge heartbeats. |

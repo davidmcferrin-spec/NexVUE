@@ -424,8 +424,25 @@ class TestPureHelpers(unittest.TestCase):
         caps = mod.norm_caps_string(1920, 1080, "60000/1001")
         self.assertEqual(
             caps,
-            "video/x-raw,format=NV12,width=1920,height=1080,framerate=60000/1001,pixel-aspect-ratio=1/1",
+            "video/x-raw,format=NV12,width=1920,height=1080,framerate=60000/1001,"
+            "pixel-aspect-ratio=1/1,interlace-mode=progressive",
         )
+
+    def test_size_caps_string_omits_framerate(self) -> None:
+        caps = mod.size_caps_string(1920, 1080)
+        self.assertEqual(
+            caps,
+            "video/x-raw,format=NV12,width=1920,height=1080,"
+            "pixel-aspect-ratio=1/1,interlace-mode=progressive",
+        )
+        self.assertNotIn("framerate", caps)
+
+    def test_live_retry_delay_backoff(self) -> None:
+        self.assertEqual(mod.live_retry_delay_s(3.0, 1), 3.0)
+        self.assertEqual(mod.live_retry_delay_s(3.0, 2), 6.0)
+        self.assertEqual(mod.live_retry_delay_s(3.0, 3), 12.0)
+        self.assertEqual(mod.live_retry_delay_s(3.0, 5), 30.0)
+        self.assertEqual(mod.live_retry_delay_s(3.0, 99), 30.0)
 
     def test_build_encoder_desc_vah264enc(self) -> None:
         cfg = mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0"})
@@ -471,6 +488,8 @@ class TestPureHelpers(unittest.TestCase):
         )
         desc = mod.Supervisor(cfg)._build_static_desc()
         self.assertIn("sync-streams=false", desc)
+        self.assertIn("identity name=vseg single-segment=true", desc)
+        self.assertIn("vsel. ! identity name=vseg", desc)
         self.assertIn("videoscale qos=false", desc)
         self.assertIn("videorate qos=false", desc)
         self.assertIn("videoconvert qos=false", desc)
@@ -479,6 +498,9 @@ class TestPureHelpers(unittest.TestCase):
         self.assertIn("interlace-mode=progressive", desc)
         self.assertIn("max-size-time=0 max-size-bytes=0", desc)
         self.assertIn("target-usage=7", desc)
+        # Post-selector locks HI framerate; pre-selector size caps omit it.
+        self.assertIn(f"framerate={cfg.output_fps}", desc)
+        self.assertRegex(desc, r"vsel\. ! identity.*! videorate !")
         # rtspclientsink must not set sync= (property missing on our gst build).
         self.assertRegex(desc, r"rtspclientsink name=sink location=\S+ protocols=tcp(?!\s+sync)")
         self.assertRegex(desc, r"rtspclientsink name=sinklo location=\S+ protocols=tcp(?!\s+sync)")

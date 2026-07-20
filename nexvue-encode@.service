@@ -1,16 +1,17 @@
 # /etc/systemd/system/nexvue-encode@.service
 #
-# Template unit: one instance per channel slot (DeckLink SDI and/or SRT).
+# Template unit: one instance per DeckLink channel.
 #   systemctl enable --now nexvue-encode@0 nexvue-encode@1 ...
-# Instance name %i selects /etc/nexvue/channels/%i.env and exports CHANNEL_ID.
+# Instance name %i selects /etc/nexvue/channels/%i.env
 #
-# Phase 1.5: ExecStart runs nexvue-supervisor.py (persistent RTSP + live/
-# slate switching). Encoders restart independently of each other and of
-# MediaMTX; if MediaMTX bounces, rtspclientsink fails, the unit exits, and
-# systemd relaunches it.
+# ExecStart runs nexvue-encode.sh (gst-launch DeckLink → MediaMTX). The
+# Phase 1.5 supervisor/slate path was rolled back after field instability;
+# nexvue-supervisor.py remains in the tree for a future redesign only.
+# Encoders restart independently of each other and of MediaMTX; if MediaMTX
+# bounces, rtspclientsink fails, the unit exits, and systemd relaunches it.
 
 [Unit]
-Description=NexVUE encoder channel %i (live source -> MediaMTX)
+Description=NexVUE encoder channel %i (DeckLink -> MediaMTX)
 After=network-online.target mediamtx.service
 Wants=mediamtx.service
 StartLimitIntervalSec=0
@@ -37,19 +38,19 @@ Environment=GST_REGISTRY=/tmp/.gstreamer-registry.bin
 # "# comments" or surrounding whitespace — a line like "MAX_DEVICES=4  # note"
 # would pass the comment through as part of the value. Sourcing in bash gives
 # normal shell semantics (comments and whitespace handled correctly).
-# `set -a` exports every assignment so the supervisor sees them as environment.
+# `set -a` exports every assignment so the script sees them as environment.
 #
 # Precedence: channel file first, then station-wide /etc/nexvue/nexvue.env so
 # global keys (e.g. MAX_DEVICES) override legacy per-channel copies. Missing
 # global file is fine — channel + script defaults still apply.
-# CHANNEL_ID=%i is set after sourcing so the floating LO pool and SRT slots
-# always know their systemd instance (channel .env must not override it).
-ExecStart=/usr/bin/bash -c 'set -a; f="/etc/nexvue/channels/%i.env"; [ -r "$f" ] || { echo "missing env file: $f" >&2; exit 71; }; . "$f"; g="/etc/nexvue/nexvue.env"; [ -r "$g" ] && . "$g"; CHANNEL_ID=%i; exec /usr/local/bin/nexvue-supervisor.py'
+# CHANNEL_ID=%i is set after sourcing for tooling consistency (encode.sh does
+# not require it).
+ExecStart=/usr/bin/bash -c 'set -a; f="/etc/nexvue/channels/%i.env"; [ -r "$f" ] || { echo "missing env file: $f" >&2; exit 71; }; . "$f"; g="/etc/nexvue/nexvue.env"; [ -r "$g" ] && . "$g"; CHANNEL_ID=%i; exec /usr/local/bin/nexvue-encode.sh'
 
 Restart=always
 RestartSec=3
 # Bound stop so a stuck Gst NULL (rtspclientsink TCP) cannot sit on the
-# default 90s TimeoutStopSec — supervisor also caps its own teardown.
+# default 90s TimeoutStopSec.
 TimeoutStopSec=12
 # If the pipeline crash-loops (e.g. driver fault), keep trying forever —
 # an unattended edge node must recover without hands. Rate-limited so the

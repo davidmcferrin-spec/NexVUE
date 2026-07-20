@@ -876,11 +876,32 @@ class CaptionsSupervisor:
 # ---------------------------------------------------------------------------
 # Pure helpers shared by pipeline assembly (no GI needed — testable).
 # ---------------------------------------------------------------------------
+def size_caps_string(width: int, height: int) -> str:
+    """Pre-selector caps: same raster/format on slate and live, no framerate.
+
+    Framerate is locked *after* input-selector (see norm_caps_string) so a
+    DeckLink/deinterlace rate that briefly disagrees with the slate rate
+    cannot not-negotiate the live branch while it is still probing.
+    """
+    return (
+        f"video/x-raw,format=NV12,width={width},height={height},"
+        f"pixel-aspect-ratio=1/1,interlace-mode=progressive"
+    )
+
+
 def norm_caps_string(width: int, height: int, fps: str) -> str:
-    """The normalization capsfilter shared by slate and DeckLink branches —
-    identical caps on both selector inputs means switching never
-    renegotiates the encoder or drops the WHEP session."""
-    return f"video/x-raw,format=NV12,width={width},height={height},framerate={fps},pixel-aspect-ratio=1/1"
+    """Post-selector encoder caps — constant raster/rate for HI/LO/WHEP."""
+    return (
+        f"video/x-raw,format=NV12,width={width},height={height},framerate={fps},"
+        f"pixel-aspect-ratio=1/1,interlace-mode=progressive"
+    )
+
+
+def live_retry_delay_s(base_s: float, failures: int, *, cap_s: float = 30.0) -> float:
+    """Exponential backoff for DeckLink/SRT reopen after hard branch errors."""
+    if failures < 1:
+        return max(0.1, base_s)
+    return min(cap_s, max(base_s, base_s * (2 ** min(failures - 1, 4))))
 
 
 def build_encoder_desc(
@@ -1010,6 +1031,7 @@ class Supervisor:
         self._live_bins_active = False
         self._live_error_grace_until = 0.0
         self._live_retry_failures = 0
+        self._live_stable_timeout_id = 0
         self._slate_pause_timeout_id = 0
         self._srt_elements: list = []
         self._srt_video_linked = False
@@ -1023,7 +1045,8 @@ class Supervisor:
     # -- pipeline assembly --------------------------------------------------
     def _build_static_desc(self) -> str:
         cfg = self._config
-        caps = norm_caps_string(cfg.output_width, cfg.output_height, cfg.output_fps)
+        size_caps = size_caps_string(cfg.output_width, cfg.output_height)
+        norm_caps = norm_caps_string(cfg.output_width, cfg.output_height, cfg.output_fps)
         text = slate_overlay_text(cfg).replace('"', "'")
         parts = [
             # sync-streams=false: with true, the selector holds buffers to the
@@ -1034,12 +1057,19 @@ class Supervisor:
                 "videotestsrc name=slatevideo is-live=true pattern=black "
                 f'! textoverlay name=slatetext text="{text}" valignment=center '
                 'halignment=center font-desc="Sans Bold 48" '
-                f"! videorate ! videoscale ! videoconvert ! {caps} "
+                f"! videoscale ! videoconvert ! {size_caps} "
                 f"! {_leaky_queue(4)} ! vsel.sink_0"
             ),
         ]
 
-        vout = f"vsel. ! {_leaky_queue(4, name='vout')}"
+        # identity single-segment: pad switches otherwise hand the encoder a
+        # new segment/timeline and vah264enc often returns FLOW_ERROR (-5).
+        # videorate + norm caps after the selector lock output fps for WHEP.
+        vout = (
+            f"vsel. ! identity name=vseg single-segment=true "
+            f"! videorate ! videoscale ! videoconvert ! {norm_caps} "
+            f"! {_leaky_queue(4, name='vout')}"
+        )
         if cfg.lo_enable:
             hi_enc = build_encoder_desc(cfg, cfg.bitrate_kbps)
             lo_enc = build_encoder_desc(cfg, cfg.lo_bitrate_kbps, for_lo=True)
@@ -1083,7 +1113,8 @@ class Supervisor:
                 f"! {_leaky_queue(cfg.audio_queue_buffers)} ! asel.sink_0"
             )
             audio_chain = (
-                f"asel. ! {_leaky_queue(cfg.audio_queue_buffers)} "
+                f"asel. ! identity name=aseg single-segment=true "
+                f"! {_leaky_queue(cfg.audio_queue_buffers)} "
                 "! audiorate ! audioconvert "
                 f"! audioresample quality={cfg.audio_resample_quality} "
                 "! audio/x-raw,rate=48000,channels=2 "
@@ -1114,27 +1145,33 @@ class Supervisor:
 
     def _create_decklink_video_bin(self):
         cfg = self._config
-        caps = norm_caps_string(cfg.output_width, cfg.output_height, cfg.output_fps)
+        # Size-only caps here; framerate is locked after input-selector.
+        caps = size_caps_string(cfg.output_width, cfg.output_height)
         head = (
             f"decklinkvideosrc name=dlvideo device-number={cfg.device_number} mode=auto "
             f"buffer-size={cfg.decklink_buffer_frames} drop-no-signal-frames=false"
         )
         if self._captions.enabled:
             head += " output-cc=true"
-        chain = [head, "queue name=dlq0 max-size-buffers=4 leaky=downstream"]
+        head_q = f"{head} ! queue name=dlq0 max-size-buffers=4 leaky=downstream"
+        # Match nexvue-encode.sh: `ccextractor name=cc` then `cc. ! queue`
+        # (not `cc ! queue` — keeps caption pad free for the side branch).
         if self._captions.enabled:
-            chain.append("ccextractor name=cc")
+            head_q += (
+                " ! ccextractor name=cc cc. ! queue name=dlq1 "
+                "max-size-buffers=4 leaky=downstream"
+            )
+        body = []
         if cfg.watchdog_ms > 0:
-            chain.append(f"watchdog timeout={cfg.watchdog_ms}")
-        chain += [
+            body.append(f"watchdog timeout={cfg.watchdog_ms}")
+        body += [
             f"deinterlace fields={cfg.deint_fields} method=greedyh",
-            "videorate",
             "videoscale",
             "videoconvert",
             caps,
             "queue name=dlqout max-size-buffers=4 leaky=downstream",
         ]
-        desc = " ! ".join(chain)
+        desc = head_q + " ! " + " ! ".join(body)
         if self._captions.enabled:
             desc += " cc.caption ! queue name=dlccout max-size-buffers=8 leaky=downstream"
 
@@ -1357,7 +1394,9 @@ class Supervisor:
 
         self._live_bins_active = True
         self._live_error_grace_until = 0.0
-        self._live_retry_failures = 0
+        # Do not reset _live_retry_failures here — only after LIVE is stable
+        # (see _on_live_stable). Attach success alone used to zero the counter
+        # and keep hammering DeckLink every 3s through a flap.
         # notify::signal only fires on CHANGE — read the current value once
         # right after linking in case the card already had lock the whole
         # time we were waiting out DECKLINK_RETRY_S.
@@ -1425,13 +1464,12 @@ class Supervisor:
         cfg = self._config
 
         if media.startswith("video/") and not self._srt_video_linked:
-            norm = norm_caps_string(cfg.output_width, cfg.output_height, cfg.output_fps)
+            size = size_caps_string(cfg.output_width, cfg.output_height)
             try:
                 chain = Gst.parse_bin_from_description(
                     "queue name=srtvq0 max-size-buffers=4 leaky=downstream "
                     f"! deinterlace fields={cfg.deint_fields} method=greedyh "
-                    "! videorate ! videoscale ! videoconvert "
-                    f"! {norm} "
+                    f"! videoscale ! videoconvert ! {size} "
                     "! queue name=srtvqout max-size-buffers=4 leaky=downstream",
                     False,
                 )
@@ -1529,6 +1567,16 @@ class Supervisor:
         ):
             if bin_ is None:
                 continue
+            # Unlink caption side-channel before NULL so ccq is free to re-link.
+            if bin_ is self._live_video_bin and self._cc_queue is not None:
+                try:
+                    cap = bin_.get_static_pad("caption_src")
+                    if cap is not None:
+                        peer = cap.get_peer()
+                        if peer is not None:
+                            cap.unlink(peer)
+                except Exception:  # noqa: BLE001
+                    pass
             bin_.set_state(Gst.State.NULL)
             if pad is not None and selector is not None:
                 peer = pad.get_peer()
@@ -1550,14 +1598,11 @@ class Supervisor:
         # being classified as fatal while teardown drains.
         self._live_error_grace_until = time.monotonic() + 5.0
         self._cancel_slate_pause()
+        self._cancel_live_stable()
         self._state_machine.on_live_error()
         self._teardown_live()
         self._live_retry_failures += 1
-        # Back off reopen storms — hammering DeckLink every 3s yields error (-5).
-        delay = min(
-            30.0,
-            max(self._config.live_retry_s, self._config.live_retry_s * (2 ** min(self._live_retry_failures - 1, 4))),
-        )
+        delay = live_retry_delay_s(self._config.live_retry_s, self._live_retry_failures)
         label = "SRT" if self._config.input_type == "srt" else "DeckLink"
         self._log.warning("%s branch down — retrying in %.1fs", label, delay)
         GLib.timeout_add(int(delay * 1000), self._attach_live)
@@ -1738,6 +1783,21 @@ class Supervisor:
             except Exception as exc:  # noqa: BLE001
                 self._log.debug("slate %s -> %s failed (%s)", name, state, exc)
 
+    def _cancel_live_stable(self) -> None:
+        if self._live_stable_timeout_id:
+            try:
+                GLib.source_remove(self._live_stable_timeout_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._live_stable_timeout_id = 0
+
+    def _on_live_stable(self) -> bool:
+        self._live_stable_timeout_id = 0
+        if self._state_machine.state == State.LIVE:
+            self._live_retry_failures = 0
+            self._log.debug("LIVE stable — live retry backoff reset")
+        return False
+
     def _cancel_slate_pause(self) -> None:
         if self._slate_pause_timeout_id:
             try:
@@ -1764,6 +1824,9 @@ class Supervisor:
         # flush the selector and bounce DeckLink with basesrc error (-5).
         self._cancel_slate_pause()
         self._slate_pause_timeout_id = GLib.timeout_add(2000, self._deferred_pause_slate)
+        # Reset reopen backoff only after LIVE holds (not on every attach).
+        self._cancel_live_stable()
+        self._live_stable_timeout_id = GLib.timeout_add(10000, self._on_live_stable)
         # Reopen caption valve only after the live source is the active pad.
         if self._cc_valve is not None:
             self._cc_valve.set_property("drop", False)
@@ -1772,6 +1835,7 @@ class Supervisor:
     def _on_enter_slate(self) -> None:
         self._log.info("state -> SLATE")
         self._cancel_slate_pause()
+        self._cancel_live_stable()
         # Close the caption valve BEFORE flipping to slate so late 608 pairs
         # from the still-running DeckLink branch cannot land in the decoder
         # after CLEAR (plan: valve closes before entering SLATE).

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 ###############################################################################
-# nexvue-encode.sh — reference / debug DeckLink → H.264/Opus → MediaMTX (RTSP)
+# nexvue-encode.sh — one DeckLink input → H.264/Opus → MediaMTX (RTSP)
 #
-# Production ExecStart is nexvue-supervisor.py (Phase 1.5). This script remains
-# as a hand-invocable gst-launch pipeline for bring-up and assembly tests.
-#
-# Invoked historically by systemd with environment from
-# /etc/nexvue/channels/<n>.env (plus optional /etc/nexvue/nexvue.env).
+# Production ExecStart for nexvue-encode@N (Phase 1.5 supervisor/slate was
+# rolled back after field instability; this gst-launch path is the stable
+# encoder again). Environment from /etc/nexvue/channels/<n>.env plus optional
+# /etc/nexvue/nexvue.env.
 #
 # v3: adds optional LO rendition ("poor man's ABR").
 #   LO_ENABLE=true adds a second, lower-bitrate encode of the SAME capture via
@@ -82,8 +81,8 @@ AUDIO_QUEUE_BUFFERS="$(strip_inline "${AUDIO_QUEUE_BUFFERS:-100}")"
 # one audio stream, standard fix for this symptom.
 AUDIO_RESAMPLE_QUALITY="$(strip_inline "${AUDIO_RESAMPLE_QUALITY:-9}")"
 DECKLINK_BUFFER_FRAMES="$(strip_inline "${DECKLINK_BUFFER_FRAMES:-2}")"
-# Debug/reference pipeline only — production uses nexvue-supervisor.py
-# (WATCHDOG_MS default 0). Keep ≥ (SIGNAL_LOSS_DEBOUNCE_S+5)*1000 if enabled.
+# 0 = off. A short watchdog turns brief DeckLink unlocks into unit restarts;
+# prefer leaving this off unless diagnosing a hard capture hang.
 WATCHDOG_MS="${WATCHDOG_MS:-0}"
 OUTPUT_WIDTH="${OUTPUT_WIDTH:-1920}"        # normalized HI raster — constant
 OUTPUT_HEIGHT="${OUTPUT_HEIGHT:-1080}"      # regardless of input format

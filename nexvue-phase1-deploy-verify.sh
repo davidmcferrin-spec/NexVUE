@@ -8,7 +8,7 @@
 #   - PHP host API returns temperature fields
 #   - Apache docroot has current UI (no obsolete cast.html)
 #   - MAX_DEVICES in /etc/nexvue/nexvue.env
-#   - encode units use nexvue-supervisor.py
+#   - encode units use nexvue-encode.sh
 #
 # Usage:
 #   sudo ./nexvue-phase1-deploy-verify.sh
@@ -145,16 +145,10 @@ else
 fi
 
 exec_line="$(systemctl show -p ExecStart --value nexvue-encode@0 2>/dev/null || true)"
-if grep -q 'nexvue-supervisor.py' <<<"$exec_line"; then
-  ok "nexvue-encode@0 ExecStart → nexvue-supervisor.py"
+if grep -q 'nexvue-encode.sh' <<<"$exec_line"; then
+  ok "nexvue-encode@0 ExecStart → nexvue-encode.sh"
 else
-  fail "nexvue-encode@0 ExecStart is not supervisor — redeploy unit: sudo ./setup.sh && sudo systemctl daemon-reload"
-fi
-
-if python3 -c 'import gi; gi.require_version("Gst","1.0"); from gi.repository import Gst' 2>/dev/null; then
-  ok "PyGObject / Gst importable"
-else
-  fail "GI import failed — apt packages from setup.sh step 1 missing"
+  fail "nexvue-encode@0 ExecStart is not nexvue-encode.sh — redeploy unit: sudo ./setup.sh && sudo systemctl daemon-reload"
 fi
 echo
 

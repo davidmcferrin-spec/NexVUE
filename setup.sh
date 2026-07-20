@@ -296,7 +296,7 @@ fi
 # GStreamer elements (encode path + Phase 1.5 slate supervisor)
 for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc \
           rtspclientsink ccextractor ccconverter \
-          input-selector videotestsrc audiotestsrc textoverlay valve; do
+          input-selector videotestsrc audiotestsrc textoverlay valve identity; do
   if gst-inspect-1.0 "$el" >/dev/null 2>&1; then
     ok "gstreamer element: $el"
   else
@@ -304,7 +304,7 @@ for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc \
       decklinkvideosrc) warn "missing $el — install Blackmagic Desktop Video (deb) and reboot" ;;
       vah264enc)        warn "missing $el — VA driver issue (see vainfo above); x264enc fallback works for 1-2 channels only" ;;
       ccextractor|ccconverter) warn "missing $el — caption side channel needs gstreamer1.0-plugins-bad" ;;
-      input-selector|videotestsrc|audiotestsrc|textoverlay|valve)
+      input-selector|videotestsrc|audiotestsrc|textoverlay|valve|identity)
         warn "missing $el — Phase 1.5 supervisor needs gstreamer1.0-plugins-base / good" ;;
       *)                warn "missing $el — check gstreamer package install" ;;
     esac
@@ -314,16 +314,13 @@ done
   && ok "nexvue-captions-decode.py present" \
   || warn "nexvue-captions-decode.py missing — CC side channel will stay off"
 
-# Phase 1.5 supervisor: PyGObject/GStreamer GI bindings. Stdlib-only policy
-# still holds — python3-gi is an apt package, never pip (see setup.sh step 1).
+[ -x /usr/local/bin/nexvue-encode.sh ] \
+  && ok "nexvue-encode.sh present" \
+  || warn "nexvue-encode.sh missing — nexvue-encode@N will not start"
+# Supervisor is installed but not used by ExecStart (Phase 1.5 rolled back).
 [ -x /usr/local/bin/nexvue-supervisor.py ] \
-  && ok "nexvue-supervisor.py present" \
-  || warn "nexvue-supervisor.py missing — nexvue-encode@N will not start (ExecStart targets it directly)"
-if python3 -c "import gi; gi.require_version('Gst','1.0'); from gi.repository import Gst" >/dev/null 2>&1; then
-  ok "PyGObject GStreamer bindings importable (python3-gi + gir1.2-gstreamer-1.0)"
-else
-  warn "python3 cannot import gi/Gst — nexvue-supervisor.py will exit 69 at startup; apt install python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0"
-fi
+  && ok "nexvue-supervisor.py present (deferred — not ExecStart)" \
+  || true
 
 # MediaMTX + units
 [ -x /usr/local/bin/mediamtx ] && ok "mediamtx binary present" || warn "mediamtx binary missing"

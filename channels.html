@@ -500,7 +500,7 @@
       label: "INPUT_TYPE",
       type: "select",
       options: ["decklink", "srt"],
-      tip: "Live source for this channel. decklink = SDI capture (DEVICE_NUMBER). srt = Haivision (or other) SRT stream — always decode+re-encode so slate / normalize / LO stay valid. Blank = decklink.",
+      tip: "Live source for this channel. decklink = SDI capture (DEVICE_NUMBER). srt is reserved for a future Phase 1.5 redesign — production ExecStart is nexvue-encode.sh (DeckLink only). Blank = decklink.",
     },
     SRT_URI: {
       label: "SRT_URI",
@@ -679,11 +679,6 @@
       id: "encoder-advanced",
       title: "Encoder advanced",
       keys: ["EXTRA_ENC_ARGS"],
-    },
-    {
-      id: "supervisor",
-      title: "Signal / slate (Phase 1.5)",
-      keys: ["SIGNAL_LOSS_DEBOUNCE_S", "SIGNAL_ACQUIRE_DEBOUNCE_S", "DECKLINK_RETRY_S"],
     },
   ];
 

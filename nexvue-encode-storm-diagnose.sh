@@ -3,7 +3,7 @@
 # nexvue-encode-storm-diagnose.sh — classify encode Restart storms on the edge
 #
 # Run on the edge box when nexvue-phase1-closeout.sh reports high Started
-# counts. Prints ExecStart/GI status, Started counts for 1h vs 72h, and a
+# counts. Prints ExecStart status, Started counts for 1h vs 72h, and a
 # filtered journal tail per active encoder.
 #
 # Usage:
@@ -20,13 +20,18 @@ echo
 
 echo "-- ExecStart / binary --"
 systemctl show -p FragmentPath -p ExecStart nexvue-encode@0 2>/dev/null || true
-for f in /usr/local/bin/nexvue-supervisor.py /usr/local/bin/nexvue-encode.sh; do
+for f in /usr/local/bin/nexvue-encode.sh /usr/local/bin/nexvue-supervisor.py; do
   if [ -x "$f" ] || [ -f "$f" ]; then
     ls -l "$f"
   else
     echo "MISSING: $f"
   fi
 done
+if systemctl show -p ExecStart --value nexvue-encode@0 2>/dev/null | grep -q nexvue-encode.sh; then
+  echo "ExecStart OK: nexvue-encode.sh"
+else
+  echo "WARN: ExecStart does not point at nexvue-encode.sh — redeploy unit"
+fi
 echo
 
 echo "-- PyGObject / GStreamer --"
