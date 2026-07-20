@@ -252,10 +252,10 @@ fi
 #        -> tee -> HI encode -> sink   [-> LO scale/rate -> LO encode -> sinklo]
 # Captions (optional): ccextractor.caption -> ccconverter -> FIFO -> decode.py
 # Audio: capture -> Opus once -> tee -> both sinks (same encoded track).
-PIPELINE="rtspclientsink name=sink location=${RTSP_URL} protocols=tcp"
+PIPELINE="rtspclientsink name=sink location=${RTSP_URL} protocols=tcp sync=false"
 
 if [ "${LO_ENABLE}" = "true" ]; then
-  PIPELINE+=" rtspclientsink name=sinklo location=${LO_RTSP_URL} protocols=tcp"
+  PIPELINE+=" rtspclientsink name=sinklo location=${LO_RTSP_URL} protocols=tcp sync=false"
 fi
 
 PIPELINE+=" decklinkvideosrc device-number=${DEVICE_NUMBER} mode=auto"
@@ -280,12 +280,13 @@ if [ "${LO_ENABLE}" = "true" ]; then
   PIPELINE+=" ! tee name=vt"
   PIPELINE+=" vt. ! queue max-size-buffers=4 leaky=downstream"
   PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1 ! sink."
-  # LO branch: drop to LO_FPS first (cheap), then scale down, then encode.
-  # qos=false: LO encoder QoS otherwise makes videorate/videoscale over-drop
-  # (~1 fps symptom). max-size-time/bytes=0 so only the buffer count limits.
+  # LO: scale geometry first, then rate. qos=false avoids ~1 fps QoS starve.
   PIPELINE+=" vt. ! queue max-size-buffers=${LO_QUEUE_BUFFERS} max-size-time=0 max-size-bytes=0 leaky=downstream"
-  PIPELINE+=" ! videorate qos=false ! videoscale qos=false ! videoconvert qos=false"
-  PIPELINE+=" ! video/x-raw,format=NV12,width=${LO_WIDTH},height=${LO_HEIGHT},framerate=${LO_FPS},pixel-aspect-ratio=1/1"
+  PIPELINE+=" ! videoscale qos=false method=nearest-neighbour add-borders=false"
+  PIPELINE+=" ! videoconvert qos=false"
+  PIPELINE+=" ! video/x-raw,format=NV12,width=${LO_WIDTH},height=${LO_HEIGHT},pixel-aspect-ratio=1/1"
+  PIPELINE+=" ! videorate qos=false skip-to-first=true"
+  PIPELINE+=" ! video/x-raw,framerate=${LO_FPS}"
   PIPELINE+=" ! ${ENC_LO} ! h264parse config-interval=-1 ! sinklo."
 else
   PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1 ! sink."

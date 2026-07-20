@@ -461,11 +461,21 @@ class TestPureHelpers(unittest.TestCase):
             }
         )
         desc = mod.Supervisor(cfg)._build_static_desc()
-        self.assertIn("videorate qos=false", desc)
+        self.assertIn("sync-streams=false", desc)
         self.assertIn("videoscale qos=false", desc)
+        self.assertIn("videorate qos=false", desc)
         self.assertIn("videoconvert qos=false", desc)
+        self.assertIn("method=nearest-neighbour", desc)
+        self.assertIn("skip-to-first=true", desc)
         self.assertIn("max-size-time=0 max-size-bytes=0", desc)
         self.assertIn("target-usage=7", desc)
+        self.assertIn("sync=false", desc)
+        # Geometry and rate are separate capsfilters (scale then rate).
+        self.assertIn(
+            f"width={cfg.lo_width},height={cfg.lo_height}",
+            desc,
+        )
+        self.assertIn(f"framerate={cfg.lo_fps}", desc)
 
     def test_build_encoder_desc_x264_fallback(self) -> None:
         cfg = mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "VIDEO_ENCODER": "x264enc"})

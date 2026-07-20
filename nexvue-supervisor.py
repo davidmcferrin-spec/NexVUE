@@ -973,7 +973,10 @@ class Supervisor:
         caps = norm_caps_string(cfg.output_width, cfg.output_height, cfg.output_fps)
         text = slate_overlay_text(cfg).replace('"', "'")
         parts = [
-            "input-selector name=vsel sync-streams=true",
+            # sync-streams=false: with true, the selector holds buffers to the
+            # clock like a sink and the LO tee branch starves (~1–2 fps) while
+            # HI still looks mostly ok. Brief glitch on LIVE↔SLATE is fine.
+            "input-selector name=vsel sync-streams=false",
             (
                 "videotestsrc name=slatevideo is-live=true pattern=black "
                 f'! textoverlay name=slatetext text="{text}" valignment=center '
@@ -987,39 +990,51 @@ class Supervisor:
         if cfg.lo_enable:
             hi_enc = build_encoder_desc(cfg, cfg.bitrate_kbps)
             lo_enc = build_encoder_desc(cfg, cfg.lo_bitrate_kbps, for_lo=True)
-            lo_caps = norm_caps_string(cfg.lo_width, cfg.lo_height, cfg.lo_fps)
+            lo_geom = (
+                f"video/x-raw,format=NV12,width={cfg.lo_width},height={cfg.lo_height},"
+                f"pixel-aspect-ratio=1/1"
+            )
+            lo_rate = f"video/x-raw,framerate={cfg.lo_fps}"
             lo_q = cfg.lo_queue_buffers
             parts.append(f"{vout} ! tee name=vt")
             parts.append(
                 f"vt. ! {_leaky_queue(4)} ! {hi_enc} "
                 "! h264parse name=hiparse config-interval=-1 ! sink."
             )
-            # qos=false on LO filters: encoder QoS otherwise makes videorate/
-            # videoscale over-drop (symptom: ~1 fps LO while HI stays smooth).
+            # Scale geometry first (cheap nearest), then rate — split caps so
+            # videorate is not fighting videoscale. qos=false stops encoder QoS
+            # from starving this branch. sync=false on sinks is set below.
             parts.append(
                 f"vt. ! {_leaky_queue(lo_q)} "
-                f"! videorate qos=false ! videoscale qos=false "
-                f"! videoconvert qos=false ! {lo_caps} "
+                f"! videoscale qos=false method=nearest-neighbour add-borders=false "
+                f"! videoconvert qos=false ! {lo_geom} "
+                f"! videorate qos=false skip-to-first=true ! {lo_rate} "
                 f"! {lo_enc} ! h264parse name=loparse config-interval=-1 ! sinklo."
             )
         else:
             hi_enc = build_encoder_desc(cfg, cfg.bitrate_kbps)
             parts.append(f"{vout} ! {hi_enc} ! h264parse name=hiparse config-interval=-1 ! sink.")
 
-        parts.append(f"rtspclientsink name=sink location={cfg.rtsp_url} protocols=tcp")
+        # Live WHEP: do not clock-sync the RTSP publish sinks (adds latency and
+        # can backpressure the LO branch under dual-encode load).
+        parts.append(
+            f"rtspclientsink name=sink location={cfg.rtsp_url} protocols=tcp sync=false"
+        )
         if cfg.lo_enable:
-            parts.append(f"rtspclientsink name=sinklo location={cfg.lo_rtsp_url} protocols=tcp")
+            parts.append(
+                f"rtspclientsink name=sinklo location={cfg.lo_rtsp_url} protocols=tcp sync=false"
+            )
 
         if cfg.enable_audio:
-            parts.append("input-selector name=asel sync-streams=true")
+            parts.append("input-selector name=asel sync-streams=false")
             parts.append(
                 "audiotestsrc name=slateaudio is-live=true wave=silence "
                 f"! audioconvert ! audioresample quality={cfg.audio_resample_quality} "
                 "! audio/x-raw,format=S16LE,rate=48000,channels=2 "
-                f"! queue max-size-buffers={cfg.audio_queue_buffers} leaky=downstream ! asel.sink_0"
+                f"! {_leaky_queue(cfg.audio_queue_buffers)} ! asel.sink_0"
             )
             audio_chain = (
-                f"asel. ! queue max-size-buffers={cfg.audio_queue_buffers} leaky=downstream "
+                f"asel. ! {_leaky_queue(cfg.audio_queue_buffers)} "
                 "! audiorate ! audioconvert "
                 f"! audioresample quality={cfg.audio_resample_quality} "
                 "! audio/x-raw,rate=48000,channels=2 "
@@ -1028,17 +1043,18 @@ class Supervisor:
             if cfg.lo_enable:
                 parts.append(f"{audio_chain} ! tee name=at")
                 parts.append(
-                    f"at. ! queue max-size-buffers={cfg.audio_queue_buffers} leaky=downstream ! sink."
+                    f"at. ! {_leaky_queue(cfg.audio_queue_buffers)} ! sink."
                 )
                 parts.append(
-                    f"at. ! queue max-size-buffers={cfg.audio_queue_buffers} leaky=downstream ! sinklo."
+                    f"at. ! {_leaky_queue(cfg.audio_queue_buffers)} ! sinklo."
                 )
             else:
                 parts.append(f"{audio_chain} ! sink.")
 
         if self._captions.enabled:
             parts.append(
-                "queue name=ccq max-size-buffers=8 leaky=downstream "
+                "queue name=ccq max-size-buffers=8 max-size-time=0 max-size-bytes=0 "
+                "leaky=downstream "
                 "! valve name=ccvalve drop=true "
                 "! ccconverter ! closedcaption/x-cea-608,format=raw "
                 f"! filesink name=ccsink location={self._captions.data_fifo} "
@@ -1120,11 +1136,11 @@ class Supervisor:
         self._video_selector = self._pipeline.get_by_name("vsel")
         self._slate_video_pad = self._video_selector.get_static_pad("sink_0")
         self._video_selector.set_property("active-pad", self._slate_video_pad)
+        # sync-streams is off in the launch string; do not re-enable cache/sync
+        # knobs that only matter (and can hurt pacing) when sync-streams=true.
         for sel_name in ("vsel", "asel"):
             sel = self._pipeline.get_by_name(sel_name)
-            _try_set(sel, "cache-buffers", True)
             _try_set(sel, "drop-backwards", True)
-            _try_set(sel, "sync-mode", 1)  # 1 == "clock", if the enum exists
 
         if self._config.enable_audio:
             self._audio_selector = self._pipeline.get_by_name("asel")
@@ -1140,6 +1156,8 @@ class Supervisor:
         bus.connect("message", self._on_bus_message)
 
         self._pipeline.set_state(Gst.State.PLAYING)
+        # Start on slate; keep slate running until we enter LIVE (then pause it).
+        self._set_slate_running(True)
         lo_note = (
             f"true({self._config.lo_bitrate_kbps}kbps)"
             if self._config.lo_enable
@@ -1366,7 +1384,9 @@ class Supervisor:
             self._log.info("SRT audio pad linked")
 
     def _teardown_live(self) -> None:
-        # Prefer slate pads before tearing the live branch down.
+        # Prefer slate pads before tearing the live branch down. Slate may have
+        # been PAUSED while LIVE — wake it before selecting its pad.
+        self._set_slate_running(True)
         if self._video_selector is not None and self._slate_video_pad is not None:
             self._video_selector.set_property("active-pad", self._slate_video_pad)
         if self._audio_selector is not None and self._slate_audio_pad is not None:
@@ -1524,12 +1544,29 @@ class Supervisor:
         return Gst.PadProbeReturn.OK
 
     # -- state machine callbacks ----------------------------------------------
+    def _set_slate_running(self, running: bool) -> None:
+        """Pause slate sources while LIVE so they do not burn CPU/GPU at 1080p
+        behind the inactive selector pad (was ~+10% iGPU with LO still starved)."""
+        if self._pipeline is None:
+            return
+        state = Gst.State.PLAYING if running else Gst.State.PAUSED
+        for name in ("slatevideo", "slateaudio", "slatetext"):
+            el = self._pipeline.get_by_name(name)
+            if el is None:
+                continue
+            try:
+                el.set_state(state)
+            except Exception as exc:  # noqa: BLE001
+                self._log.debug("slate %s -> %s failed (%s)", name, state, exc)
+
     def _on_enter_live(self) -> None:
         self._log.info("state -> LIVE")
         if self._live_video_pad is not None:
             self._video_selector.set_property("active-pad", self._live_video_pad)
         if self._config.enable_audio and self._live_audio_pad is not None:
             self._audio_selector.set_property("active-pad", self._live_audio_pad)
+        # Flip pad first, then stop slate generation on the inactive branch.
+        self._set_slate_running(False)
         # Reopen caption valve only after the live source is the active pad.
         if self._cc_valve is not None:
             self._cc_valve.set_property("drop", False)
@@ -1542,6 +1579,8 @@ class Supervisor:
         # after CLEAR (plan: valve closes before entering SLATE).
         if self._cc_valve is not None:
             self._cc_valve.set_property("drop", True)
+        # Resume slate before selecting its pad so the first buffers are ready.
+        self._set_slate_running(True)
         if self._video_selector is not None:
             self._video_selector.set_property("active-pad", self._slate_video_pad)
         if self._config.enable_audio and self._audio_selector is not None:

@@ -139,7 +139,9 @@ specifically because this box can't get additional ports opened.
   pad (videotestsrc+textoverlay / silent audiotestsrc) and a dynamically
   added/removed live pad — both sides normalize to identical caps so
   flipping `active-pad` never renegotiates the encoder or drops the
-  RTSP/WHEP session. A pure-Python `StateMachine`
+  RTSP/WHEP session. Selectors use `sync-streams=false` (sync-on starved
+  the LO tee to ~1–2 fps); slate sources are PAUSED while LIVE so they
+  do not keep rendering behind the inactive pad. A pure-Python `StateMachine`
  (LIVE/SLATE/RECOVERING, injectable clock, no GI dependency) drives the
  switch: LIVE→SLATE needs `SIGNAL_LOSS_DEBOUNCE_S` (default 15s — generous
  on purpose, hiccups already ride through as black frames) of continuous

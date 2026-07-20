@@ -1012,9 +1012,14 @@ Decisions taken (the three "open decisions" below were resolved this way):
    added/removed** "DeckLink" sink pad. Selector output caps never change
    (both branches normalize to the same NV12/48kHz caps), so flipping
    `active-pad` never renegotiates the encoder or drops the RTSP/WHEP
-   session. The DeckLink capture branch itself is torn down and rebuilt
+   session. Selectors use `sync-streams=false` (with sync on, the element
+   paces like a sink and the LO tee branch starved to ~1–2 fps). While
+   LIVE, slate `videotestsrc`/`textoverlay`/`audiotestsrc` are **PAUSED**
+   so they do not keep rendering 1080p behind the inactive pad. The DeckLink
+   capture branch itself is torn down and rebuilt
    (not just re-selected) only on a hard GStreamer ERROR/EOS — normal
-   signal loss/acquire never touches the pipeline graph, only `active-pad`.
+   signal loss/acquire never touches the pipeline graph, only `active-pad`
+   (plus slate pause/resume).
 2. **Lock signal source:** `decklinkvideosrc`'s read-only `signal` GObject
    property (via `notify::signal`), corroborated by a buffer pad probe that
    requires at least one real (non-`GAP`) buffer before promoting to LIVE —
