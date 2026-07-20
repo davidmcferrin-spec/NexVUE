@@ -31,6 +31,10 @@ grep -q "watchdog" <<<"$out" && fail "T1 watchdog off by default (WATCHDOG_MS=0)
 out_wd=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 WATCHDOG_MS=20000 run_encode)
 grep -q "watchdog timeout=20000" <<<"$out_wd" || fail "T1 watchdog present when WATCHDOG_MS>0"
 grep -q "width=1920,height=1080,framerate=60000/1001" <<<"$out" || fail "T1 normalization caps"
+grep -q "interlace-mode=progressive" <<<"$out" || fail "T1 HI progressive caps"
+grep -q "drop-no-signal-frames=true" <<<"$out" || fail "T1 drop-no-signal-frames default true"
+out_keep=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 DECKLINK_DROP_NO_SIGNAL_FRAMES=false run_encode)
+grep -q "drop-no-signal-frames=false" <<<"$out_keep" || fail "T1 drop-no-signal-frames=false override"
 grep -q "opusenc" <<<"$out" || fail "T1 audio present by default"
 grep -q "audiorate" <<<"$out" || fail "T1 audiorate present (gapless timestamp fix)"
 grep -q "tee" <<<"$out" && fail "T1 no tee when LO disabled"

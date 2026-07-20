@@ -81,6 +81,10 @@ AUDIO_QUEUE_BUFFERS="$(strip_inline "${AUDIO_QUEUE_BUFFERS:-100}")"
 # one audio stream, standard fix for this symptom.
 AUDIO_RESAMPLE_QUALITY="$(strip_inline "${AUDIO_RESAMPLE_QUALITY:-9}")"
 DECKLINK_BUFFER_FRAMES="$(strip_inline "${DECKLINK_BUFFER_FRAMES:-2}")"
+# true = do not push placeholder black while unlocked. false negotiates on
+# no-signal frames first; when the real SDI mode appears, DeckLink often dies
+# with basesrc not-negotiated (-4) ("Input source detected" then ERROR).
+DECKLINK_DROP_NO_SIGNAL="$(strip_inline "${DECKLINK_DROP_NO_SIGNAL_FRAMES:-true}")"
 # 0 = off. A short watchdog turns brief DeckLink unlocks into unit restarts;
 # prefer leaving this off unless diagnosing a hard capture hang.
 WATCHDOG_MS="${WATCHDOG_MS:-0}"
@@ -143,6 +147,9 @@ case "${LO_ENABLE}" in true|false) ;; *)
 esac
 case "${CAPTIONS_ENABLE}" in true|false) ;; *)
     log "ERROR: CAPTIONS_ENABLE must be 'true' or 'false'"; exit 64 ;;
+esac
+case "${DECKLINK_DROP_NO_SIGNAL}" in true|false) ;; *)
+    log "ERROR: DECKLINK_DROP_NO_SIGNAL_FRAMES must be 'true' or 'false'"; exit 64 ;;
 esac
 case "${LO_TARGET_USAGE}" in
   [1-7]) ;;
@@ -258,7 +265,8 @@ if [ "${LO_ENABLE}" = "true" ]; then
 fi
 
 PIPELINE+=" decklinkvideosrc device-number=${DEVICE_NUMBER} mode=auto"
-PIPELINE+=" buffer-size=${DECKLINK_BUFFER_FRAMES} drop-no-signal-frames=false"
+PIPELINE+=" buffer-size=${DECKLINK_BUFFER_FRAMES}"
+PIPELINE+=" drop-no-signal-frames=${DECKLINK_DROP_NO_SIGNAL}"
 if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
   PIPELINE+=" output-cc=true"
 fi
@@ -273,7 +281,9 @@ if [ "${WATCHDOG_MS}" -gt 0 ] 2>/dev/null; then
 fi
 PIPELINE+=" ! deinterlace fields=${DEINT_FIELDS} method=greedyh"
 PIPELINE+=" ! videorate ! videoscale ! videoconvert"
-PIPELINE+=" ! video/x-raw,format=NV12,width=${OUTPUT_WIDTH},height=${OUTPUT_HEIGHT},framerate=${OUTPUT_FPS},pixel-aspect-ratio=1/1"
+# interlace-mode=progressive: WebRTC is progressive-only; also stops the tee
+# LO branch from fighting an interleaved HI capsfilter.
+PIPELINE+=" ! video/x-raw,format=NV12,width=${OUTPUT_WIDTH},height=${OUTPUT_HEIGHT},framerate=${OUTPUT_FPS},pixel-aspect-ratio=1/1,interlace-mode=progressive"
 
 if [ "${LO_ENABLE}" = "true" ]; then
   PIPELINE+=" ! tee name=vt"

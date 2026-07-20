@@ -557,6 +557,12 @@
       options: ["1", "2", "3", "4"],
       tip: "DeckLink driver frame queue depth. Keep small for latency (2 is recommended). Blank = 2.",
     },
+    DECKLINK_DROP_NO_SIGNAL_FRAMES: {
+      label: "DECKLINK_DROP_NO_SIGNAL_FRAMES",
+      type: "select",
+      options: ["true", "false"],
+      tip: "true (default) = drop frames while unlocked so caps negotiate on real SDI lock. false = push black while unlocked (can die with not-negotiated when lock appears). Blank = true.",
+    },
     VIDEO_ENCODER: {
       label: "VIDEO_ENCODER",
       type: "select",
@@ -654,7 +660,7 @@
       title: "Video",
       keys: [
         "BITRATE_KBPS", "GOP_FRAMES", "DEINT_FIELDS", "VIDEO_ENCODER",
-        "DECKLINK_BUFFER_FRAMES",
+        "DECKLINK_BUFFER_FRAMES", "DECKLINK_DROP_NO_SIGNAL_FRAMES",
       ],
     },
     {

@@ -38,6 +38,7 @@ EDITABLE_KEYS = frozenset({
     "AUDIO_BITRATE_BPS",
     "AUDIO_CHANNELS",
     "DECKLINK_BUFFER_FRAMES",
+    "DECKLINK_DROP_NO_SIGNAL_FRAMES",
     "VIDEO_ENCODER",
     "EXTRA_ENC_ARGS",
     "LO_ENABLE",
@@ -215,6 +216,12 @@ def sanitize_value(key: str, value: str) -> str:
         return value
     if key == "DECKLINK_BUFFER_FRAMES":
         return _require_int(key, value, lo=1, hi=16)
+    if key == "DECKLINK_DROP_NO_SIGNAL_FRAMES":
+        if value == "":
+            return value
+        if value not in ("true", "false"):
+            raise ValueError("DECKLINK_DROP_NO_SIGNAL_FRAMES must be true or false")
+        return value
     if key == "VIDEO_ENCODER":
         if value == "":
             return value
