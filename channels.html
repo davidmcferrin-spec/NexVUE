@@ -554,7 +554,7 @@
       label: "LO_PRESET",
       type: "select",
       options: ["720p", "540p", "480p", "360p", "240p", "180p"],
-      tip: "LO resolution ladder (height): 720p / 540p / 480p / 360p / 240p / 180p with default bitrates 1200 / 800 / 700 / 500 / 300 / 200 kbps. The \"p\" number is height (480p = 854×480). Blank = 720p when LO is enabled.",
+      tip: "LO resolution ladder (height): 720p / 540p / 480p / 360p / 240p / 180p with default bitrates 2500 / 1500 / 1200 / 800 / 500 / 350 kbps. The \"p\" number is height (480p = 854×480). Blank = 720p when LO is enabled.",
     },
     LO_WIDTH: {
       label: "LO_WIDTH",
@@ -569,12 +569,27 @@
     LO_BITRATE_KBPS: {
       label: "LO_BITRATE_KBPS",
       type: "text",
-      tip: "Explicit LO CBR bitrate in kbps; overrides the preset default. Blank = use the preset bitrate for LO_PRESET (recommended).",
+      tip: "Explicit LO CBR bitrate in kbps; overrides the preset default. Raise this if LO looks blocky/choppy under motion (e.g. 2500–3000 for 720p). Blank = use the preset bitrate for LO_PRESET.",
     },
     LO_FPS: {
       label: "LO_FPS",
       type: "text",
-      tip: "LO framerate as a GStreamer fraction (e.g. 30000/1001 ≈ 29.97p, cellular-friendly). Blank = 30000/1001.",
+      tip: "LO framerate as a GStreamer fraction (e.g. 30000/1001 ≈ 29.97p, cellular-friendly; 60000/1001 matches HI). Blank = 30000/1001.",
+    },
+    LO_TARGET_USAGE: {
+      label: "LO_TARGET_USAGE",
+      type: "text",
+      tip: "vah264enc target-usage for LO only (1 = best quality / slowest, 7 = fastest). HI stays at 7 for latency. Default 4 for smoother LO. Typical range 3–5.",
+    },
+    LO_QUEUE_BUFFERS: {
+      label: "LO_QUEUE_BUFFERS",
+      type: "text",
+      tip: "GStreamer queue depth (buffers) on the LO video branch before scale/encode. Deeper = fewer dropped frames under iGPU pressure, slightly more latency on LO only. Default 16. HI keeps a shallow queue.",
+    },
+    LO_GOP_FRAMES: {
+      label: "LO_GOP_FRAMES",
+      type: "text",
+      tip: "LO keyframe interval in frames. Blank inherits GOP_FRAMES (HI). At 29.97 fps, 30 ≈ 1 s; 60 ≈ 2 s.",
     },
     SIGNAL_LOSS_DEBOUNCE_S: {
       label: "SIGNAL_LOSS_DEBOUNCE_S",
@@ -611,7 +626,10 @@
     {
       id: "lo",
       title: "Low-res rendition",
-      keys: ["LO_ENABLE", "LO_PRESET", "LO_WIDTH", "LO_HEIGHT", "LO_BITRATE_KBPS", "LO_FPS"],
+      keys: [
+        "LO_ENABLE", "LO_PRESET", "LO_WIDTH", "LO_HEIGHT", "LO_BITRATE_KBPS",
+        "LO_FPS", "LO_TARGET_USAGE", "LO_QUEUE_BUFFERS", "LO_GOP_FRAMES",
+      ],
     },
     {
       id: "supervisor",

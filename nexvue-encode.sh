@@ -96,6 +96,11 @@ LO_ENABLE="${LO_ENABLE:-false}"
 LO_PRESET="${LO_PRESET:-720p}"              # 720p|540p|480p|360p|240p|180p
 LO_FPS="${LO_FPS:-30000/1001}"              # 29.97p default: cellular-friendly
 LO_RTSP_URL="${LO_RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}lo}"
+# LO quality (vah264enc target-usage 1–7) and queue depth — HI stays usage=7 /
+# 4-buffer queues for latency; LO defaults favor smoother motion.
+LO_TARGET_USAGE="$(strip_inline "${LO_TARGET_USAGE:-4}")"
+LO_QUEUE_BUFFERS="$(strip_inline "${LO_QUEUE_BUFFERS:-16}")"
+LO_GOP_FRAMES="$(strip_inline "${LO_GOP_FRAMES:-}")"
 
 # Caption side channel (CEA-608/CC1 → /run/nexvue/captions/<path>.json).
 # Not burned into video; not a second encode. Extract in-pipeline because
@@ -110,17 +115,18 @@ CAPTIONS_PIPELINE_ONLY="$(strip_inline "${CAPTIONS_PIPELINE_ONLY:-false}")"
 # (480p = 854x480). All dimensions even, as H.264 requires. Explicit
 # LO_WIDTH/LO_HEIGHT/LO_BITRATE_KBPS below override the preset.
 case "${LO_PRESET}" in
-  720p) LO_W_DEF=1280; LO_H_DEF=720; LO_BR_DEF=1200 ;;
-  540p) LO_W_DEF=960;  LO_H_DEF=540; LO_BR_DEF=800  ;;
-  480p) LO_W_DEF=854;  LO_H_DEF=480; LO_BR_DEF=700  ;;
-  360p) LO_W_DEF=640;  LO_H_DEF=360; LO_BR_DEF=500  ;;
-  240p) LO_W_DEF=426;  LO_H_DEF=240; LO_BR_DEF=300  ;;
-  180p) LO_W_DEF=320;  LO_H_DEF=180; LO_BR_DEF=200  ;;
+  720p) LO_W_DEF=1280; LO_H_DEF=720; LO_BR_DEF=2500 ;;
+  540p) LO_W_DEF=960;  LO_H_DEF=540; LO_BR_DEF=1500 ;;
+  480p) LO_W_DEF=854;  LO_H_DEF=480; LO_BR_DEF=1200 ;;
+  360p) LO_W_DEF=640;  LO_H_DEF=360; LO_BR_DEF=800  ;;
+  240p) LO_W_DEF=426;  LO_H_DEF=240; LO_BR_DEF=500  ;;
+  180p) LO_W_DEF=320;  LO_H_DEF=180; LO_BR_DEF=350  ;;
   *) log "ERROR: LO_PRESET must be one of 720p,540p,480p,360p,240p,180p — got '${LO_PRESET}'"; exit 64 ;;
 esac
 LO_WIDTH="${LO_WIDTH:-${LO_W_DEF}}"
 LO_HEIGHT="${LO_HEIGHT:-${LO_H_DEF}}"
 LO_BITRATE_KBPS="${LO_BITRATE_KBPS:-${LO_BR_DEF}}"
+[ -n "${LO_GOP_FRAMES}" ] || LO_GOP_FRAMES="${GOP_FRAMES}"
 
 # ---- Sanity checks ------------------------------------------------------------
 if ! [[ "${DEVICE_NUMBER}" =~ ^[0-9]+$ ]] || [ "${DEVICE_NUMBER}" -ge "${MAX_DEVICES}" ]; then
@@ -138,6 +144,16 @@ esac
 case "${CAPTIONS_ENABLE}" in true|false) ;; *)
     log "ERROR: CAPTIONS_ENABLE must be 'true' or 'false'"; exit 64 ;;
 esac
+case "${LO_TARGET_USAGE}" in
+  [1-7]) ;;
+  *) log "ERROR: LO_TARGET_USAGE must be an integer 1-7 — got '${LO_TARGET_USAGE}'"; exit 64 ;;
+esac
+if ! [[ "${LO_QUEUE_BUFFERS}" =~ ^[1-9][0-9]*$ ]]; then
+    log "ERROR: LO_QUEUE_BUFFERS must be a positive integer — got '${LO_QUEUE_BUFFERS}'"; exit 64
+fi
+if ! [[ "${LO_GOP_FRAMES}" =~ ^[1-9][0-9]*$ ]]; then
+    log "ERROR: LO_GOP_FRAMES must be a positive integer — got '${LO_GOP_FRAMES}'"; exit 64
+fi
 case "${AUDIO_FRAME_MS}" in 2|5|10|20|40|60) ;; *)
     log "ERROR: AUDIO_FRAME_MS must be one of 2,5,10,20,40,60"; exit 64 ;;
 esac
@@ -152,13 +168,16 @@ gst-inspect-1.0 decklinkvideosrc >/dev/null 2>&1 \
     || { log "ERROR: GStreamer decklink plugin missing (install Desktop Video + gst-plugins-bad)"; exit 69; }
 
 # ---- Encoder selection ---------------------------------------------------------
-build_enc() { # $1 = bitrate kbps
+build_enc() { # $1 = bitrate kbps, $2 = gop, $3 = target-usage (va) / unused (x264), $4 = lo|hi
+  local br="$1" gop="$2" usage="$3" role="${4:-hi}"
   case "${VIDEO_ENCODER}" in
     vah264enc)
-      echo "vah264enc rate-control=cbr bitrate=$1 key-int-max=${GOP_FRAMES} b-frames=0 target-usage=7 ${EXTRA_ENC_ARGS}"
+      echo "vah264enc rate-control=cbr bitrate=${br} key-int-max=${gop} b-frames=0 target-usage=${usage} ${EXTRA_ENC_ARGS}"
       ;;
     x264enc)
-      echo "x264enc tune=zerolatency speed-preset=veryfast bitrate=$1 key-int-max=${GOP_FRAMES} bframes=0 ${EXTRA_ENC_ARGS}"
+      local preset="veryfast"
+      [ "${role}" = "lo" ] && preset="fast"
+      echo "x264enc tune=zerolatency speed-preset=${preset} bitrate=${br} key-int-max=${gop} bframes=0 ${EXTRA_ENC_ARGS}"
       ;;
   esac
 }
@@ -170,8 +189,8 @@ case "${VIDEO_ENCODER}" in
   x264enc) ;;
   *) log "ERROR: unsupported VIDEO_ENCODER '${VIDEO_ENCODER}'"; exit 64 ;;
 esac
-ENC_HI="$(build_enc "${BITRATE_KBPS}")"
-ENC_LO="$(build_enc "${LO_BITRATE_KBPS}")"
+ENC_HI="$(build_enc "${BITRATE_KBPS}" "${GOP_FRAMES}" 7 hi)"
+ENC_LO="$(build_enc "${LO_BITRATE_KBPS}" "${LO_GOP_FRAMES}" "${LO_TARGET_USAGE}" lo)"
 
 # ---- Fixed output framerate (drives the normalization capsfilter) -------------
 case "${DEINT_FIELDS}" in
@@ -255,7 +274,8 @@ if [ "${LO_ENABLE}" = "true" ]; then
   PIPELINE+=" vt. ! queue max-size-buffers=4 leaky=downstream"
   PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1 ! sink."
   # LO branch: drop to LO_FPS first (cheap), then scale down, then encode.
-  PIPELINE+=" vt. ! queue max-size-buffers=4 leaky=downstream"
+  # Deeper queue than HI so momentary iGPU contention drops fewer LO frames.
+  PIPELINE+=" vt. ! queue max-size-buffers=${LO_QUEUE_BUFFERS} leaky=downstream"
   PIPELINE+=" ! videorate ! videoscale"
   PIPELINE+=" ! video/x-raw,format=NV12,width=${LO_WIDTH},height=${LO_HEIGHT},framerate=${LO_FPS},pixel-aspect-ratio=1/1"
   PIPELINE+=" ! ${ENC_LO} ! h264parse config-interval=-1 ! sinklo."

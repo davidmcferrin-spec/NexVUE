@@ -106,10 +106,36 @@ class TestLoadConfig(unittest.TestCase):
         cfg = mod.load_config(
             {"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "LO_ENABLE": "true", "LO_PRESET": "360p"}
         )
-        self.assertEqual((cfg.lo_width, cfg.lo_height, cfg.lo_bitrate_kbps), (640, 360, 500))
+        self.assertEqual((cfg.lo_width, cfg.lo_height, cfg.lo_bitrate_kbps), (640, 360, 800))
+        self.assertEqual(cfg.lo_target_usage, 4)
+        self.assertEqual(cfg.lo_queue_buffers, 16)
         with self.assertRaises(mod.ConfigError):
             mod.load_config(
                 {"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "LO_ENABLE": "true", "LO_PRESET": "1080p"}
+            )
+
+    def test_lo_smooth_knobs_validated(self) -> None:
+        cfg = mod.load_config(
+            {
+                "DEVICE_NUMBER": "0",
+                "CHANNEL_PATH": "ch0",
+                "LO_ENABLE": "true",
+                "LO_TARGET_USAGE": "3",
+                "LO_QUEUE_BUFFERS": "24",
+                "LO_GOP_FRAMES": "30",
+            }
+        )
+        self.assertEqual(cfg.lo_target_usage, 3)
+        self.assertEqual(cfg.lo_queue_buffers, 24)
+        self.assertEqual(cfg.lo_gop_frames, 30)
+        self.assertEqual(cfg.lo_bitrate_kbps, 2500)  # 720p default
+        with self.assertRaises(mod.ConfigError):
+            mod.load_config(
+                {"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "LO_TARGET_USAGE": "8"}
+            )
+        with self.assertRaises(mod.ConfigError):
+            mod.load_config(
+                {"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "LO_QUEUE_BUFFERS": "0"}
             )
 
     def test_lo_explicit_overrides_beat_preset(self) -> None:
@@ -371,12 +397,33 @@ class TestPureHelpers(unittest.TestCase):
         self.assertIn("bitrate=5000", desc)
         self.assertIn("key-int-max=60", desc)
         self.assertIn("b-frames=0", desc)
+        self.assertIn("target-usage=7", desc)
+
+    def test_build_encoder_desc_lo_uses_lo_target_usage(self) -> None:
+        cfg = mod.load_config(
+            {
+                "DEVICE_NUMBER": "0",
+                "CHANNEL_PATH": "ch0",
+                "LO_ENABLE": "true",
+                "LO_TARGET_USAGE": "4",
+                "LO_GOP_FRAMES": "30",
+            }
+        )
+        hi = mod.build_encoder_desc(cfg, cfg.bitrate_kbps)
+        lo = mod.build_encoder_desc(cfg, cfg.lo_bitrate_kbps, for_lo=True)
+        self.assertIn("target-usage=7", hi)
+        self.assertIn("target-usage=4", lo)
+        self.assertIn("key-int-max=30", lo)
+        self.assertIn("bitrate=2500", lo)
 
     def test_build_encoder_desc_x264_fallback(self) -> None:
         cfg = mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "VIDEO_ENCODER": "x264enc"})
         desc = mod.build_encoder_desc(cfg, 2500)
         self.assertIn("x264enc tune=zerolatency", desc)
+        self.assertIn("speed-preset=veryfast", desc)
         self.assertIn("bitrate=2500", desc)
+        lo = mod.build_encoder_desc(cfg, 800, for_lo=True)
+        self.assertIn("speed-preset=fast", lo)
 
     def test_slate_overlay_text_with_and_without_alias(self) -> None:
         cfg = mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0"})

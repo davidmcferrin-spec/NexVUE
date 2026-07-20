@@ -87,13 +87,15 @@ class ConfigError(Exception):
 
 # LO_PRESET ladder -> (width, height, default bitrate kbps). Matches
 # nexvue-encode.sh exactly — the "p" number is the HEIGHT (480p = 854x480).
+# Bitrate defaults are sized for CBR + target-usage=4 so motion stays watchable
+# (the old 720p@1200 ladder looked choppy under typical sports/news content).
 LO_PRESETS: Dict[str, Tuple[int, int, int]] = {
-    "720p": (1280, 720, 1200),
-    "540p": (960, 540, 800),
-    "480p": (854, 480, 700),
-    "360p": (640, 360, 500),
-    "240p": (426, 240, 300),
-    "180p": (320, 180, 200),
+    "720p": (1280, 720, 2500),
+    "540p": (960, 540, 1500),
+    "480p": (854, 480, 1200),
+    "360p": (640, 360, 800),
+    "240p": (426, 240, 500),
+    "180p": (320, 180, 350),
 }
 
 
@@ -132,7 +134,11 @@ class SupervisorConfig:
     lo_rtsp_url: str = ""
     lo_width: int = 1280
     lo_height: int = 720
-    lo_bitrate_kbps: int = 1200
+    lo_bitrate_kbps: int = 2500
+    # LO quality / buffering (HI keeps target-usage=7 and shallow queues for latency).
+    lo_target_usage: int = 4
+    lo_queue_buffers: int = 16
+    lo_gop_frames: int = 60
     captions_enable: bool = True
     captions_dir: str = "/run/nexvue/captions"
     captions_decode_bin: str = "/usr/local/bin/nexvue-captions-decode.py"
@@ -289,6 +295,19 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
     lo_fps = opt("LO_FPS", "30000/1001")
     lo_rtsp_url = opt("LO_RTSP_URL", f"rtsp://127.0.0.1:8554/{channel_path}lo")
 
+    # vah264enc target-usage: 1 = slow/best, 7 = fastest (HI default). LO defaults
+    # to 4 so the second encode is less blocky without eating the whole media engine.
+    lo_target_usage = opt_int("LO_TARGET_USAGE", 4)
+    if not (1 <= lo_target_usage <= 7):
+        raise ConfigError(f"LO_TARGET_USAGE must be an integer 1-7, got {lo_target_usage}")
+    lo_queue_buffers = opt_int("LO_QUEUE_BUFFERS", 16)
+    if lo_queue_buffers < 1:
+        raise ConfigError(f"LO_QUEUE_BUFFERS must be a positive integer, got {lo_queue_buffers}")
+    # Blank / unset → inherit HI GOP_FRAMES.
+    lo_gop_frames = opt_int("LO_GOP_FRAMES", gop_frames)
+    if lo_gop_frames <= 0:
+        raise ConfigError(f"LO_GOP_FRAMES must be positive, got {lo_gop_frames}")
+
     captions_enable = opt_bool("CAPTIONS_ENABLE", True)
     captions_dir = opt("CAPTIONS_DIR", "/run/nexvue/captions")
     captions_decode_bin = opt("CAPTIONS_DECODE_BIN", "/usr/local/bin/nexvue-captions-decode.py")
@@ -346,6 +365,9 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
         lo_width=lo_width,
         lo_height=lo_height,
         lo_bitrate_kbps=lo_bitrate_kbps,
+        lo_target_usage=lo_target_usage,
+        lo_queue_buffers=lo_queue_buffers,
+        lo_gop_frames=lo_gop_frames,
         captions_enable=captions_enable,
         captions_dir=captions_dir,
         captions_decode_bin=captions_decode_bin,
@@ -651,17 +673,30 @@ def norm_caps_string(width: int, height: int, fps: str) -> str:
     return f"video/x-raw,format=NV12,width={width},height={height},framerate={fps},pixel-aspect-ratio=1/1"
 
 
-def build_encoder_desc(config: SupervisorConfig, bitrate_kbps: int) -> str:
-    """Same encoder property set as nexvue-encode.sh's build_enc()."""
+def build_encoder_desc(
+    config: SupervisorConfig,
+    bitrate_kbps: int,
+    *,
+    for_lo: bool = False,
+) -> str:
+    """Same encoder property set as nexvue-encode.sh's build_enc().
+
+    HI keeps target-usage=7 / veryfast for glass-to-glass latency. LO uses
+    LO_TARGET_USAGE (default 4) and a slightly slower x264 preset so the
+    adaptive rendition is watchable under motion.
+    """
     extra = f" {config.extra_enc_args}" if config.extra_enc_args else ""
+    gop = config.lo_gop_frames if for_lo else config.gop_frames
     if config.video_encoder == "vah264enc":
+        usage = config.lo_target_usage if for_lo else 7
         return (
             f"vah264enc rate-control=cbr bitrate={bitrate_kbps} "
-            f"key-int-max={config.gop_frames} b-frames=0 target-usage=7{extra}"
+            f"key-int-max={gop} b-frames=0 target-usage={usage}{extra}"
         )
+    x264_preset = "fast" if for_lo else "veryfast"
     return (
-        f"x264enc tune=zerolatency speed-preset=veryfast bitrate={bitrate_kbps} "
-        f"key-int-max={config.gop_frames} bframes=0{extra}"
+        f"x264enc tune=zerolatency speed-preset={x264_preset} bitrate={bitrate_kbps} "
+        f"key-int-max={gop} bframes=0{extra}"
     )
 
 
@@ -745,15 +780,16 @@ class Supervisor:
         vout = "vsel. ! queue name=vout max-size-buffers=4 leaky=downstream"
         if cfg.lo_enable:
             hi_enc = build_encoder_desc(cfg, cfg.bitrate_kbps)
-            lo_enc = build_encoder_desc(cfg, cfg.lo_bitrate_kbps)
+            lo_enc = build_encoder_desc(cfg, cfg.lo_bitrate_kbps, for_lo=True)
             lo_caps = norm_caps_string(cfg.lo_width, cfg.lo_height, cfg.lo_fps)
+            lo_q = cfg.lo_queue_buffers
             parts.append(f"{vout} ! tee name=vt")
             parts.append(
                 f"vt. ! queue max-size-buffers=4 leaky=downstream ! {hi_enc} "
                 "! h264parse name=hiparse config-interval=-1 ! sink."
             )
             parts.append(
-                "vt. ! queue max-size-buffers=4 leaky=downstream ! videorate ! videoscale "
+                f"vt. ! queue max-size-buffers={lo_q} leaky=downstream ! videorate ! videoscale "
                 f"! {lo_caps} ! {lo_enc} ! h264parse name=loparse config-interval=-1 ! sinklo."
             )
         else:

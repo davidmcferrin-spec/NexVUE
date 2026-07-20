@@ -959,11 +959,14 @@ Services/Settings).
   `systemctl enable --now nexvue-status`. Status queries coexist safely with an
   active capture.
 - **LO renditions (adaptive bandwidth):** `LO_ENABLE=true` in a channel env
-  publishes `<path>lo` (default 720p29.97 @ 1.2 Mbps) alongside the HI
-  rendition — one capture, two QSV encodes via tee. Viewers on bad links get
-  switched to it by the portal player (Phase 2). Enable per channel, not
-  globally: each LO adds an encode, and the practical envelope is ~8 HI
-  59.94p + 8 LO on the Arrow Lake media engine. Verify in the soak.
+  publishes `<path>lo` (default 720p29.97 @ 2.5 Mbps, `LO_TARGET_USAGE=4`,
+  deeper LO queue) alongside the HI rendition — one capture, two QSV encodes
+  via tee. HI keeps `target-usage=7` for latency; LO defaults favor smoother
+  motion. Viewers on bad links get switched to it by the portal player
+  (Phase 2). Enable per channel, not globally: each LO adds an encode, and
+  the practical envelope is ~8 HI 59.94p + 8 LO on the Arrow Lake media
+  engine. Verify in the soak. Tune `LO_BITRATE_KBPS` / `LO_PRESET` /
+  `LO_TARGET_USAGE` / `LO_QUEUE_BUFFERS` in Settings if LO still looks choppy.
 - **Self-healing model:** constant output caps mean input format changes never
   drop viewer sessions; the watchdog turns capture hangs into clean systemd
   restarts; black frames ride through signal loss. A channel with no signal
