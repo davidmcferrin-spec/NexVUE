@@ -26,7 +26,10 @@ expect_usage_64() {
 # T1: default single-rendition pipeline
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 run_encode)
 grep -q "rtsp://127.0.0.1:8554/ch0" <<<"$out" || fail "T1 default RTSP url"
-grep -q "watchdog" <<<"$out" || fail "T1 watchdog present"
+grep -q "watchdog" <<<"$out" && fail "T1 watchdog off by default (WATCHDOG_MS=0)"
+# Optional watchdog when explicitly enabled (debug path only)
+out_wd=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 WATCHDOG_MS=20000 run_encode)
+grep -q "watchdog timeout=20000" <<<"$out_wd" || fail "T1 watchdog present when WATCHDOG_MS>0"
 grep -q "width=1920,height=1080,framerate=60000/1001" <<<"$out" || fail "T1 normalization caps"
 grep -q "opusenc" <<<"$out" || fail "T1 audio present by default"
 grep -q "audiorate" <<<"$out" || fail "T1 audiorate present (gapless timestamp fix)"

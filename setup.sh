@@ -57,6 +57,8 @@ REQUIRED_FILES=(
   nexvue-ops.php services.html channels.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
   nexvue-phase1-closeout.sh
+  nexvue-phase1-deploy-verify.sh
+  nexvue-encode-storm-diagnose.sh
   nexvue-ops-env-update.py nexvue-ops.sudoers
   nexvue-ops-status.sh nexvue-ops-journal.sh
   nexvue-ops-env-read.sh nexvue-ops-env-write.sh nexvue-ops-restart.sh
@@ -89,8 +91,9 @@ apt-get install -y -qq \
   intel-media-va-driver-non-free vainfo intel-gpu-tools \
   build-essential curl ca-certificates jq \
   php-sqlite3 \
-  python3-gi gir1.2-glib-2.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0
-ok "apt packages installed (python: stdlib + apt-only python3-gi for the Phase 1.5 supervisor — never pip; php-sqlite3 for metrics.php)"
+  python3-gi python3-gst-1.0 gir1.2-glib-2.0 gir1.2-gstreamer-1.0
+  gir1.2-gst-plugins-base-1.0
+ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for the Phase 1.5 supervisor — never pip; php-sqlite3 for metrics.php)"
 
 # Allow the metrics collector (user nexvue) to read iGPU PMU without root.
 # AmbientCapabilities on the unit also requests CAP_PERFMON; setcap covers
@@ -189,6 +192,8 @@ install -m 755 "${REPO_DIR}/nexvue-metrics-server.py" /usr/local/bin/nexvue-metr
 install -m 755 "${REPO_DIR}/nexvue-captions-decode.py" /usr/local/bin/nexvue-captions-decode.py
 install -m 755 "${REPO_DIR}/nexvue-captions-probe.sh" /usr/local/bin/nexvue-captions-probe.sh
 install -m 755 "${REPO_DIR}/nexvue-phase1-closeout.sh" /usr/local/bin/nexvue-phase1-closeout.sh
+install -m 755 "${REPO_DIR}/nexvue-phase1-deploy-verify.sh" /usr/local/bin/nexvue-phase1-deploy-verify.sh
+install -m 755 "${REPO_DIR}/nexvue-encode-storm-diagnose.sh" /usr/local/bin/nexvue-encode-storm-diagnose.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-env-update.py" /usr/local/bin/nexvue-ops-env-update.py
 install -m 755 "${REPO_DIR}/nexvue-ops-status.sh" /usr/local/bin/nexvue-ops-status.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-journal.sh" /usr/local/bin/nexvue-ops-journal.sh
@@ -288,8 +293,10 @@ else
   warn "no H.264 encode entrypoints in vainfo — headless iGPU disabled in BIOS, pre-reboot HWE state, or (Arrow Lake) media driver too old: use Intel's apt repo"
 fi
 
-# GStreamer elements
-for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc rtspclientsink ccextractor ccconverter; do
+# GStreamer elements (encode path + Phase 1.5 slate supervisor)
+for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc \
+          rtspclientsink ccextractor ccconverter \
+          input-selector videotestsrc audiotestsrc textoverlay valve; do
   if gst-inspect-1.0 "$el" >/dev/null 2>&1; then
     ok "gstreamer element: $el"
   else
@@ -297,6 +304,8 @@ for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc rtspcl
       decklinkvideosrc) warn "missing $el — install Blackmagic Desktop Video (deb) and reboot" ;;
       vah264enc)        warn "missing $el — VA driver issue (see vainfo above); x264enc fallback works for 1-2 channels only" ;;
       ccextractor|ccconverter) warn "missing $el — caption side channel needs gstreamer1.0-plugins-bad" ;;
+      input-selector|videotestsrc|audiotestsrc|textoverlay|valve)
+        warn "missing $el — Phase 1.5 supervisor needs gstreamer1.0-plugins-base / good" ;;
       *)                warn "missing $el — check gstreamer package install" ;;
     esac
   fi
@@ -345,7 +354,8 @@ fi
 # Ops wrappers + sudoers
 for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
          nexvue-ops-env-write.sh nexvue-ops-restart.sh nexvue-ops-enable.sh \
-         nexvue-ops-env-update.py nexvue-phase1-closeout.sh; do
+         nexvue-ops-env-update.py nexvue-phase1-closeout.sh \
+         nexvue-phase1-deploy-verify.sh nexvue-encode-storm-diagnose.sh; do
   [ -x "/usr/local/bin/$w" ] || [ -f "/usr/local/bin/$w" ] \
     && ok "ops helper: $w" || warn "ops helper missing: /usr/local/bin/$w"
 done

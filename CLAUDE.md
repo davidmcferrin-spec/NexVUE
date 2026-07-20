@@ -94,11 +94,12 @@ specifically because this box can't get additional ports opened.
  entering roll-up erases pop-on leftovers, so no stale line can stick.
  Overlay CSS reserves a constant two-line box (no resize jitter) in
  Player / Multiview.
- Caption reliability: decoder is crash-proof per pair (a dead FIFO reader
- EPIPEs filesink and restarts the WHOLE encode pipeline — never let bad
- data kill it); ~16s idle erase (`NEXVUE_CAPTIONS_IDLE_ERASE_S`, non-null
- pairs only) matches CEA-608 receivers and clears stale text; PHP serves
- stale-mtime non-empty state as cleared (`NEXVUE_CAPTIONS_STALE_S`, 60s);
+ Caption reliability: decoder is crash-proof per pair; supervisor treats
+ caption `filesink`/EPIPE bus ERROR as non-fatal so a dead FIFO reader
+ never systemd-restarts encode; ~16s idle erase
+ (`NEXVUE_CAPTIONS_IDLE_ERASE_S`, non-null pairs only) matches CEA-608
+ receivers and clears stale text; PHP serves stale-mtime non-empty state
+ as cleared (`NEXVUE_CAPTIONS_STALE_S`, 60s);
  SSE disables mod_deflate per-response, sends `retry: 1000`, polls at 50ms.
  The FIFO `filesink` MUST be `buffer-mode=unbuffered`: the default mode
  accumulates ~64KB before flushing and raw 608 arrives at ~60-120 B/s, so
@@ -112,10 +113,11 @@ specifically because this box can't get additional ports opened.
   stayed empty on real hardware even though interactive `intel_gpu_top`
   worked. `NEXVUE_INTEL_GPU_TOP_PERIOD_MS` (default 1000) replaced the old
   `NEXVUE_INTEL_GPU_TOP_TIMEOUT_S` knob.
-  Remaining before Phase 1 soak is formally "done" (hardware/operator):
-  Quad 2 inputs + 72h soak with supervisor; deploy current UI. Station-wide
-  `MAX_DEVICES` lives in `/etc/nexvue/nexvue.env`. Glass-to-glass latency
-  photos remain deferred until on-site/bench access.
+  Remaining before Phase 1 soak is formally "done" (hardware/operator on
+  `dcwasof2nexvue01`): re-deploy (`setup.sh` + `nexvue-phase1-deploy-verify.sh`
+  for Temperature schema/API/chart), then a clean 72h closeout window with
+  supervisor. Station-wide `MAX_DEVICES` lives in `/etc/nexvue/nexvue.env`.
+  Glass-to-glass latency photos remain deferred until on-site/bench access.
 - **Phase 1.5: implemented (`nexvue-supervisor.py`)** — persistent RTSP
  session with DeckLink/slate input switching ("NO SIGNAL" burn-in) so
  no-signal-at-boot serves a slate instead of a restart loop.
@@ -135,17 +137,26 @@ specifically because this box can't get additional ports opened.
  parameter lock alone is not proof frames are flowing. A GStreamer
  ERROR/EOS on the DeckLink branch only (never the shared RTSP/encode path)
  tears down and rebuilds just that capture bin after `DECKLINK_RETRY_S`
- (default 3s); a common-path error exits non-zero for systemd `Restart=`.
- Captions: `output-cc`/`ccextractor` stay attached to the DeckLink branch
- continuously (even while SLATE is selected); entering SLATE sends one
- `CLEAR` line over a new control FIFO to `nexvue-captions-decode.py`
- (`Cea608Cc1.reset()` — a full reset, not just erase-displayed-memory) so
- the overlay blanks immediately instead of waiting out the idle-erase
- timer. New apt deps (never pip): `python3-gi gir1.2-glib-2.0
- gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0`, added to `setup.sh`.
- The module is import-safe with zero GI installed (`GST_AVAILABLE` guard) —
- `load_config()` and `StateMachine` are unit-tested without GStreamer at
- all (`test/test_nexvue_supervisor.py`).
+ (default 3s); a common-path error exits non-zero for systemd `Restart=`;
+ caption side-channel ERROR/EOS is logged and ignored. `WATCHDOG_MS`
+ defaults to 0 (off); if set, clamped to ≥ `(SIGNAL_LOSS_DEBOUNCE_S+5)*1000`
+ so a short Gst watchdog cannot undercut hiccup debounce and storm
+ `Restart=`. Captions: `output-cc`/`ccextractor` stay attached to the
+ DeckLink branch continuously (even while SLATE is selected); entering
+ SLATE sends one `CLEAR` line over a new control FIFO to
+ `nexvue-captions-decode.py` (`Cea608Cc1.reset()` — a full reset, not just
+ erase-displayed-memory) so the overlay blanks immediately instead of
+ waiting out the idle-erase timer. New apt deps (never pip): `python3-gi
+ gir1.2-glib-2.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0`, added
+ to `setup.sh`. The module is import-safe with zero GI installed
+ (`GST_AVAILABLE` guard) — `load_config()` and `StateMachine` are
+ unit-tested without GStreamer at all (`test/test_nexvue_supervisor.py`).
+ Closeout compares long-window vs last-hour `Started` counts (historical
+ WARN vs live FAIL); `nexvue-encode-storm-diagnose.sh` classifies journals.
+ Hardware acceptance (Quad 2): boot empty→slate, cable insert/remove,
+ format change, flap under 15s, HI/LO+audio continuity, captions
+ clear/resume, WHEP session stays up, 72h soak — procedure in README
+ "Phase 1.5 hardware acceptance".
 - **Phase 2: PHP portal** — channel catalog, local bcrypt + JWT issuance,
   MediaMTX JWKS auth. Open decision: publisher auth pattern (long-lived
   publish JWT vs authMethod:http with loopback exemption) — see mediamtx.yml.

@@ -64,6 +64,9 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(cfg.signal_loss_debounce_s, 15.0)
         self.assertEqual(cfg.signal_acquire_debounce_s, 1.0)
         self.assertEqual(cfg.decklink_retry_s, 3.0)
+        # Watchdog off by default so a brief unlock cannot ERROR the DeckLink
+        # bin before SIGNAL_LOSS_DEBOUNCE_S can ride it out as black frames.
+        self.assertEqual(cfg.watchdog_ms, 0)
 
     def test_missing_required_raises_exit_1(self) -> None:
         with self.assertRaises(mod.ConfigError) as ctx:
@@ -159,6 +162,48 @@ class TestLoadConfig(unittest.TestCase):
             mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "SIGNAL_LOSS_DEBOUNCE_S": "-1"})
         with self.assertRaises(mod.ConfigError):
             mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "DECKLINK_RETRY_S": "0"})
+
+    def test_watchdog_ms_clamped_above_loss_debounce(self) -> None:
+        # Short WATCHDOG_MS undercuts 15s loss debounce → raise to debounce+5s.
+        cfg = mod.load_config(
+            {
+                "DEVICE_NUMBER": "0",
+                "CHANNEL_PATH": "ch0",
+                "WATCHDOG_MS": "3000",
+                "SIGNAL_LOSS_DEBOUNCE_S": "15",
+            }
+        )
+        self.assertEqual(cfg.watchdog_ms, 20000)
+        cfg2 = mod.load_config(
+            {
+                "DEVICE_NUMBER": "0",
+                "CHANNEL_PATH": "ch0",
+                "WATCHDOG_MS": "25000",
+                "SIGNAL_LOSS_DEBOUNCE_S": "15",
+            }
+        )
+        self.assertEqual(cfg2.watchdog_ms, 25000)
+        with self.assertRaises(mod.ConfigError):
+            mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "WATCHDOG_MS": "-1"})
+
+    def test_is_caption_element_matches_side_channel_names(self) -> None:
+        class FakeEl:
+            def __init__(self, name, parent=None):
+                self._name = name
+                self._parent = parent
+
+            def get_name(self):
+                return self._name
+
+            def get_parent(self):
+                return self._parent
+
+        root = FakeEl("pipeline0")
+        self.assertTrue(mod.Supervisor._is_caption_element(FakeEl("ccsink", root)))
+        self.assertTrue(mod.Supervisor._is_caption_element(FakeEl("ccvalve0", root)))
+        self.assertTrue(mod.Supervisor._is_caption_element(FakeEl("ccconverter", root)))
+        self.assertFalse(mod.Supervisor._is_caption_element(FakeEl("vah264enc0", root)))
+        self.assertFalse(mod.Supervisor._is_caption_element(FakeEl("decklinkvideosrc0", root)))
 
     def test_inline_whitespace_is_trimmed(self) -> None:
         # Values arrive already sourced by bash (see nexvue-encode@.service),

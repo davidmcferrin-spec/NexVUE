@@ -305,6 +305,20 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
     if decklink_retry_s <= 0:
         raise ConfigError(f"DECKLINK_RETRY_S must be > 0, got {decklink_retry_s}")
 
+    # A short watchdog undercuts loss debounce (tears down DeckLink before the
+    # state machine can ride out a hiccup). Bump it if the operator set both.
+    if watchdog_ms > 0:
+        min_watchdog_ms = int((signal_loss_debounce_s + 5.0) * 1000)
+        if watchdog_ms < min_watchdog_ms:
+            log.warning(
+                "WATCHDOG_MS=%d is shorter than SIGNAL_LOSS_DEBOUNCE_S+5s (%d); "
+                "raising to %d so hiccups do not bypass slate debounce",
+                watchdog_ms,
+                min_watchdog_ms,
+                min_watchdog_ms,
+            )
+            watchdog_ms = min_watchdog_ms
+
     return SupervisorConfig(
         device_number=device_number,
         channel_path=channel_path,
@@ -1011,6 +1025,25 @@ class Supervisor:
                 node = node.get_parent()
         return False
 
+    @staticmethod
+    def _is_caption_element(element) -> bool:
+        """Caption side-channel elements live in the static pipeline (not the
+        DeckLink bin). A dead FIFO reader EPIPs filesink — that must never
+        take down HI/LO encode / RTSP (same rule as the old gst-launch path).
+        """
+        prefixes = ("ccsink", "ccvalve", "ccq", "ccconverter")
+        node = element
+        while node is not None:
+            try:
+                name = node.get_name() or ""
+            except Exception:  # noqa: BLE001
+                name = ""
+            for p in prefixes:
+                if name == p or name.startswith(p):
+                    return True
+            node = node.get_parent()
+        return False
+
     def _on_bus_message(self, _bus, message) -> bool:
         mtype = message.type
         if mtype == Gst.MessageType.ERROR:
@@ -1018,6 +1051,13 @@ class Supervisor:
             if self._is_decklink_source(message.src):
                 self._log.warning("DeckLink branch error: %s (%s)", err.message, debug)
                 self._handle_decklink_failure()
+            elif self._is_caption_element(message.src):
+                self._log.warning(
+                    "caption side-channel error (non-fatal): %s (%s) — "
+                    "decoder will respawn; encode continues",
+                    err.message,
+                    debug,
+                )
             else:
                 self._log.error("fatal pipeline error: %s (%s)", err.message, debug)
                 self._fatal(1)
@@ -1025,6 +1065,8 @@ class Supervisor:
             if self._is_decklink_source(message.src):
                 self._log.warning("DeckLink branch EOS")
                 self._handle_decklink_failure()
+            elif self._is_caption_element(message.src):
+                self._log.warning("caption side-channel EOS (non-fatal)")
             else:
                 self._log.error("unexpected EOS on common (non-DeckLink) path")
                 self._fatal(1)
@@ -1055,18 +1097,22 @@ class Supervisor:
             self._video_selector.set_property("active-pad", self._decklink_video_pad)
         if self._config.enable_audio and self._decklink_audio_pad is not None:
             self._audio_selector.set_property("active-pad", self._decklink_audio_pad)
+        # Reopen caption valve only after DeckLink is the active pad.
         if self._cc_valve is not None:
             self._cc_valve.set_property("drop", False)
         self._force_keyframe()
 
     def _on_enter_slate(self) -> None:
         self._log.info("state -> SLATE")
+        # Close the caption valve BEFORE flipping to slate so late 608 pairs
+        # from the still-running DeckLink branch cannot land in the decoder
+        # after CLEAR (plan: valve closes before entering SLATE).
+        if self._cc_valve is not None:
+            self._cc_valve.set_property("drop", True)
         if self._video_selector is not None:
             self._video_selector.set_property("active-pad", self._slate_video_pad)
         if self._config.enable_audio and self._audio_selector is not None:
             self._audio_selector.set_property("active-pad", self._slate_audio_pad)
-        if self._cc_valve is not None:
-            self._cc_valve.set_property("drop", True)
         self._force_keyframe()
 
     def _on_enter_recovering(self) -> None:

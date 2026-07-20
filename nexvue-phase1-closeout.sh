@@ -14,13 +14,14 @@
 #   sudo ./nexvue-phase1-closeout.sh
 #   sudo ./nexvue-phase1-closeout.sh --since 24h   # shorter soak window
 #
-# Only enable nexvue-encode@N for patched Input connectors. Empty Quad ports
-# left enabled restart-loop (RestartSec=3) until Phase 1.5 slate supervisor.
+# Phase 1.5: an unlocked active encoder is healthy when it holds slate without
+# systemd restarting (Started counts). Prefer disabling empty ports anyway
+# (needless load). Long-window Started with a quiet last hour → WARN historical.
 #
 # Manual items this script cannot finish:
 #   - confirm Quad 2 connectors are Input (BlackmagicDesktopVideoSetup)
 #   - glass-to-glass latency photos (deferred on remote datacenter; see README)
-#   - disable empty-channel units (script prints the command when needed)
+#   - 72h wall-clock soak (use --since after a clean window accumulates)
 ###############################################################################
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
@@ -127,15 +128,15 @@ fi
 
 # ---- Soak: per-instance encoder Started counts ------------------------------
 # Phase 1.5: an unlocked active encoder is healthy if it is NOT restarting
-# (supervisor holds slate). Fail only when Started storms regardless of lock.
-DISABLE_CANDIDATES=()
+# (supervisor holds slate). Fail on live storms; WARN when the long window is
+# polluted but the last hour is quiet (bring-up / emptied-port history).
 if command -v journalctl >/dev/null 2>&1; then
   if [ "${#ACTIVE_NS[@]}" -eq 0 ]; then
     warn "no active encoders — skip soak Started counts"
   else
     echo
-    echo "Encode soak (Started lines in last ${SINCE}):"
-    printf '  %-18s %-8s %-8s %-8s %s\n' "unit" "device" "locked" "Started" "verdict"
+    echo "Encode soak (Started lines in last ${SINCE}; also last 1h for live check):"
+    printf '  %-18s %-8s %-8s %-8s %-8s %s\n' "unit" "device" "locked" "${SINCE}" "1h" "verdict"
     for n in "${ACTIVE_NS[@]}"; do
       unit="nexvue-encode@${n}"
       dev="$(read_device_number "$n")"
@@ -143,6 +144,10 @@ if command -v journalctl >/dev/null 2>&1; then
         | grep -ciE 'Started NexVUE|Started nexvue-encode' || true)"
       started="${started//$'\r'/}"
       started="${started:-0}"
+      recent="$(journalctl -u "$unit" --since "-1h" --no-pager 2>/dev/null \
+        | grep -ciE 'Started NexVUE|Started nexvue-encode' || true)"
+      recent="${recent//$'\r'/}"
+      recent="${recent:-0}"
 
       locked_raw="${LOCKED_BY_IDX[$dev]:-unknown}"
       case "$locked_raw" in
@@ -157,18 +162,21 @@ if command -v journalctl >/dev/null 2>&1; then
         else
           verdict="ok"
         fi
-        printf '  %-18s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$verdict"
-        ok "${unit}: Started=${started} (device ${dev}, locked=${locked})"
+        printf '  %-18s %-8s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$recent" "$verdict"
+        ok "${unit}: Started=${started} in ${SINCE} (1h=${recent}, device ${dev}, locked=${locked})"
+      elif [ "$recent" -le "$STARTED_OK_MAX" ] && [ "$SINCE" != "1h" ]; then
+        # Long-window noise from earlier storms/deploys; unit is quiet now.
+        verdict="WARN historical (quiet 1h)"
+        printf '  %-18s %-8s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$recent" "$verdict"
+        warn "${unit}: Started=${started} in ${SINCE} but only ${recent} in last 1h — historical; re-soak or run nexvue-encode-storm-diagnose.sh"
       elif [ "$locked" = "true" ]; then
-        verdict="FAIL storm on locked input"
-        printf '  %-18s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$verdict"
-        fail "${unit}: Started=${started} on locked device ${dev} (want ≤${STARTED_OK_MAX}; inspect journal)"
+        verdict="FAIL live storm on locked input"
+        printf '  %-18s %-8s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$recent" "$verdict"
+        fail "${unit}: Started=${recent} in last 1h on locked device ${dev} (want ≤${STARTED_OK_MAX}); sudo nexvue-encode-storm-diagnose.sh"
       else
-        # Unlocked + storming: still a problem (supervisor should hold slate
-        # without systemd cycling). Fail so the soak catches it.
-        verdict="FAIL storm while unlocked/slate"
-        printf '  %-18s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$verdict"
-        fail "${unit}: Started=${started} while unlocked (supervisor should slate without restarting)"
+        verdict="FAIL live storm while unlocked/slate"
+        printf '  %-18s %-8s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$recent" "$verdict"
+        fail "${unit}: Started=${recent} in last 1h while unlocked (supervisor should slate without restarting)"
       fi
     done
   fi

@@ -433,16 +433,24 @@ encoder unit (see the ops-pages note under Operational notes).
 On the edge box, from the repo root (or `/usr/local/bin` after `setup.sh`):
 
 ```bash
-sudo ./nexvue-phase1-closeout.sh              # units, lock, per-instance Started
-# or after a shorter bench soak / after stopping a storm:
-sudo ./nexvue-phase1-closeout.sh --since 1h
-sudo ./nexvue-phase1-closeout.sh --since 24h
+# Deploy / Temperature verify (schema + API + docroot + supervisor ExecStart):
+sudo ./setup.sh
+sudo systemctl restart nexvue-metrics
+sudo nexvue-phase1-deploy-verify.sh
+# then soak / storm classification:
+sudo nexvue-phase1-closeout.sh --since 1h
+sudo nexvue-phase1-closeout.sh --since 24h
+sudo nexvue-phase1-closeout.sh              # default 72h window
+sudo nexvue-encode-storm-diagnose.sh        # if Started looks high on locked channels
 ```
 
-The closeout script counts `Started` **per** `nexvue-encode@N`, fails only when
-a **locked** input is storming, and warns (with a `disable --now` hint) when an
-unlocked port still has an encoder enabled. After stopping a storm, start a
-**clean** soak clock — the prior 72h journal stays polluted.
+The closeout script counts `Started` **per** `nexvue-encode@N` for the
+requested window **and** the last hour. A high long-window count with a quiet
+last hour is a **WARN** (historical pollution from empty-port storms /
+bring-up), not a FAIL. A live storm (last hour above threshold) fails so you
+can run `nexvue-encode-storm-diagnose.sh`. Unlocked-but-enabled ports still
+get a `disable --now` hint. After remediating a real storm, prefer
+`--since 1h` until a clean 24h/72h window accumulates.
 
 Watch for iGPU thermal throttling (`intel_gpu_top`) with all *intended*
 channels hot (up to 8 on Quad 2). Confirm HI/LO both play and CC overlay stays
@@ -451,25 +459,49 @@ live on a captioned feed for the soak window.
 ### Phase 1 closeout checklist
 
 Do these on the edge before calling Phase 1 done (card config + soak, not
-more code). Current hardware: **DeckLink Quad 2**.
+more code). Current hardware: **DeckLink Quad 2** (already installed at
+`dcwasof2nexvue01`).
+
+| Gate | Status |
+|------|--------|
+| Quad 2 Input connectors + `MAX_DEVICES=8` | Done on edge (4/8 locked feeds typical; park `@4..7` when empty) |
+| RTT-based latency estimate (~200 ms) | Recorded above; glass-to-glass photo deferred |
+| Deploy UI + Temperature metrics | Re-run `setup.sh` + `nexvue-phase1-deploy-verify.sh` after each pull |
+| 72h soak (clean Started window) | Operator — start after deploy-verify; use `--since 1h` until journal is clean |
+| Captions probe + Player CC | Operator on a captioned feed |
+| Phase 1.5 supervisor assumptions | Confirmed (see below) — implementation shipped |
 
 1. **Quad 2 connectors → Input** for every intended capture BNC
    (`BlackmagicDesktopVideoSetup`). Confirm with `decklink-status` (lock +
    mode per device; order is not guaranteed sequential). Set
-   `MAX_DEVICES=8`; enable `nexvue-encode@N` **only** for patched inputs
-   (leave empty BNCs disabled until a feed is present — Phase 1.5 means an
-   enabled-but-unpatched port now shows a slate instead of restart-looping,
-   but there is still no reason to run it).
+   `MAX_DEVICES=8` in `/etc/nexvue/nexvue.env`; enable `nexvue-encode@N`
+   **only** for patched inputs (leave empty BNCs disabled — Phase 1.5
+   slates instead of restart-looping, but empty encoders are still waste).
 2. **Latency:** RTT-based estimate recorded above (~200 ms). Glass-to-glass
    photo deferred (remote rack) — not a Phase 1 blocker.
 3. **72h soak** with intended (locked) `nexvue-encode@N` up; closeout script
-   green (or only expected warnings on empty ports); locked channels show
+   green (or only historical WARN on long windows); locked channels show
    Started ≤ 2 in a clean window after any storm remediation.
-4. **Deploy current web UI** (`setup.sh` or manual `cp` of player / multiview /
-   metrics / ops pages into the Apache docroot). Restart `nexvue-metrics` so
-   Temperature columns migrate; confirm Metrics Temperature chart.
+4. **Deploy current web UI** — `sudo ./setup.sh`, then
+   `sudo systemctl restart nexvue-metrics` and
+   `sudo nexvue-phase1-deploy-verify.sh`. Confirm Metrics Temperature chart
+   (CPU °C + 95 °C line) in the browser.
 5. **Captions**: probe at least one live feed with `nexvue-captions-probe.sh`;
    Player/Multiview **CC** toggles overlay.
+
+### Phase 1.5 gate (assumptions confirmed from hardware)
+
+Hardware results at the Quad 2 edge gated the supervisor before code landed
+(and the implementation is now in-tree):
+
+- DeckLink exclusive-open and empty-port restart storms proved a persistent
+  RTSP session with slate is required (not a second encode process).
+- Locked `@0..3` at 1080i59.94 validated the normalize-constant-caps path;
+  hiccups must ride as black frames → `SIGNAL_LOSS_DEBOUNCE_S=15`.
+- Status daemon already holds devices open via encoders → lock source is
+  `decklinkvideosrc` `signal` + non-GAP buffer, not a second SDK probe.
+- Apt GI stack approved (no pip). Caption side channel must survive
+  LIVE↔SLATE (`CLEAR` FIFO) and must not fatal the encode unit.
 
 ## TLS / HTTPS (WHEP / API / status — metrics rides on Apache)
 
@@ -984,6 +1016,35 @@ control-FIFO CLEAR command and `Cea608Cc1.reset()`.
 **Hiccup tolerance:** `SIGNAL_LOSS_DEBOUNCE_S` defaults to **15 seconds**.
 Brief unlocks stay on the DeckLink pad (black frames, same as Phase 1) and
 do not flash the NO SIGNAL slate. Tune per channel in Settings if needed.
+`WATCHDOG_MS` defaults to **0** (off); a short Gst watchdog would tear down
+the DeckLink bin before debounce could ride out a hiccup. Caption
+`filesink`/decoder EPIPE is logged and non-fatal so the side channel cannot
+systemd-restart the encode unit.
+
+### Phase 1.5 hardware acceptance (Quad 2)
+
+Run on the edge after `sudo ./setup.sh` (GI + `input-selector` /
+`videotestsrc` / `valve` present). Prefer parking empty ports; enabling all
+eight is optional capacity soak.
+
+1. **Boot empty ports** — with a channel unlocked, supervisor stays up and
+   publishes NO SIGNAL slate (WHEP plays slate; unit does not restart-loop).
+2. **Insert / remove cable** — LIVE within ~1s of lock+frames; after
+   `SIGNAL_LOSS_DEBOUNCE_S` (15s) of unlock, picture returns to slate without
+   dropping the RTSP/WHEP session.
+3. **Format change** — switch SDI mode on a live feed; normalized HI caps
+   hold; viewers do not renegotiate.
+4. **Signal flap** — brief unlocks under 15s stay on DeckLink (black frames),
+   no slate flash.
+5. **HI / LO + audio** — both renditions play; audio continuous across
+   LIVE↔SLATE (silent slate when `ENABLE_AUDIO=true`).
+6. **Captions** — on a 608 feed, CC clears on SLATE and resumes on LIVE;
+   overlay does not stick stale lines.
+7. **WHEP continuity** — leave a Player/Multiview session connected through
+   steps 2–6; session UUID stays up (picture changes, connection does not).
+8. **Soak** — intended channels (or all eight) for 72h; then
+   `sudo nexvue-phase1-closeout.sh` (compare `--since 1h` if the 72h journal
+   is polluted by earlier bring-up).
 
 <details>
 <summary>Original specification (historical reference)</summary>

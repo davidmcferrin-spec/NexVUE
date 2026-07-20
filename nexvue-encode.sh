@@ -82,7 +82,9 @@ AUDIO_QUEUE_BUFFERS="$(strip_inline "${AUDIO_QUEUE_BUFFERS:-100}")"
 # one audio stream, standard fix for this symptom.
 AUDIO_RESAMPLE_QUALITY="$(strip_inline "${AUDIO_RESAMPLE_QUALITY:-9}")"
 DECKLINK_BUFFER_FRAMES="$(strip_inline "${DECKLINK_BUFFER_FRAMES:-2}")"
-WATCHDOG_MS="${WATCHDOG_MS:-3000}"
+# Debug/reference pipeline only — production uses nexvue-supervisor.py
+# (WATCHDOG_MS default 0). Keep ≥ (SIGNAL_LOSS_DEBOUNCE_S+5)*1000 if enabled.
+WATCHDOG_MS="${WATCHDOG_MS:-0}"
 OUTPUT_WIDTH="${OUTPUT_WIDTH:-1920}"        # normalized HI raster — constant
 OUTPUT_HEIGHT="${OUTPUT_HEIGHT:-1080}"      # regardless of input format
 RTSP_URL="${RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}}"
@@ -241,7 +243,9 @@ if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
   PIPELINE+=" ! ccextractor name=cc"
   PIPELINE+=" cc. ! queue max-size-buffers=4 leaky=downstream"
 fi
-PIPELINE+=" ! watchdog timeout=${WATCHDOG_MS}"
+if [ "${WATCHDOG_MS}" -gt 0 ] 2>/dev/null; then
+  PIPELINE+=" ! watchdog timeout=${WATCHDOG_MS}"
+fi
 PIPELINE+=" ! deinterlace fields=${DEINT_FIELDS} method=greedyh"
 PIPELINE+=" ! videorate ! videoscale ! videoconvert"
 PIPELINE+=" ! video/x-raw,format=NV12,width=${OUTPUT_WIDTH},height=${OUTPUT_HEIGHT},framerate=${OUTPUT_FPS},pixel-aspect-ratio=1/1"
