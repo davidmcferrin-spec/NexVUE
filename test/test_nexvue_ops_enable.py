@@ -58,6 +58,8 @@ echo json_encode([
   'enc0' => unit_enable_allowed('nexvue-encode@0'),
   'enc7' => unit_enable_allowed('nexvue-encode@7'),
   'enc8' => unit_enable_allowed('nexvue-encode@8'),
+  'enc9' => unit_enable_allowed('nexvue-encode@9'),
+  'enc10' => unit_enable_allowed('nexvue-encode@10'),
   'mediamtx' => unit_enable_allowed('mediamtx'),
   'status' => unit_enable_allowed('nexvue-status'),
   'metrics' => unit_enable_allowed('nexvue-metrics'),
@@ -66,7 +68,9 @@ echo json_encode([
 """)
         self.assertTrue(data["enc0"])
         self.assertTrue(data["enc7"])
-        self.assertFalse(data["enc8"])
+        self.assertTrue(data["enc8"])
+        self.assertTrue(data["enc9"])
+        self.assertFalse(data["enc10"])
         self.assertFalse(data["mediamtx"])
         self.assertFalse(data["status"])
         self.assertFalse(data["metrics"])
@@ -156,7 +160,7 @@ class TestEnableWrapper(unittest.TestCase):
 
     def test_rejects_core_units_and_bad_instances(self) -> None:
         for unit in ("mediamtx", "nexvue-status", "nexvue-metrics",
-                     "nexvue-encode@8", "nexvue-encode@", "sshd"):
+                     "nexvue-encode@10", "nexvue-encode@", "sshd"):
             r = self._run("disable", unit)
             self.assertEqual(r.returncode, 2, f"{unit}: {r.stderr}")
             self.assertIn("disallowed unit", r.stderr)

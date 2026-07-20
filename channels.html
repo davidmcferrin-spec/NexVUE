@@ -296,7 +296,7 @@
   <table>
     <thead>
       <tr>
-        <th></th><th>ID</th><th>Path</th><th>Alias</th><th>Bitrate</th>
+        <th></th><th>ID</th><th>Path</th><th>Alias</th><th>Src</th><th>Bitrate</th>
         <th>Deint</th><th>Audio</th><th>LO</th><th>Status</th>
       </tr>
     </thead>
@@ -491,6 +491,22 @@
       type: "text",
       tip: "Friendly label shown in Player, Multiview, and Settings. Does not change the MediaMTX path — WHEP still uses CHANNEL_PATH (ch0, ch1, …). Spaces are fine (quoted on write). Blank = UIs show the path only.",
     },
+    INPUT_TYPE: {
+      label: "INPUT_TYPE",
+      type: "select",
+      options: ["decklink", "srt"],
+      tip: "Live source for this channel. decklink = SDI capture (DEVICE_NUMBER). srt = Haivision (or other) SRT stream — always decode+re-encode so slate / normalize / LO stay valid. Blank = decklink.",
+    },
+    SRT_URI: {
+      label: "SRT_URI",
+      type: "text",
+      tip: "Full srt:// URI. Caller example: srt://encoder:9000?mode=caller. Listener example: srt://:9001?mode=listener&latency=120. Required when INPUT_TYPE=srt.",
+    },
+    SRT_LATENCY_MS: {
+      label: "SRT_LATENCY_MS",
+      type: "text",
+      tip: "SRT receiver latency in milliseconds (srtsrc latency property). Typical 80–200. Blank = 120.",
+    },
     DEINT_FIELDS: {
       label: "DEINT_FIELDS",
       type: "select",
@@ -515,8 +531,9 @@
     },
     AUDIO_FRAME_MS: {
       label: "AUDIO_FRAME_MS",
-      type: "text",
-      tip: "Opus frame size in milliseconds. Must be one of 2, 5, 10, 20, 40, 60. 10 is the low-latency default. Blank = 10.",
+      type: "select",
+      options: ["2", "5", "10", "20", "40", "60"],
+      tip: "Opus frame size in milliseconds. 10 is the low-latency default. Blank = 10.",
     },
     AUDIO_BITRATE_BPS: {
       label: "AUDIO_BITRATE_BPS",
@@ -525,13 +542,15 @@
     },
     AUDIO_CHANNELS: {
       label: "AUDIO_CHANNELS",
-      type: "text",
-      tip: "SDI embedded audio channels to capture. Must be 2, 8, or 16. Default 2 (one stereo pair). Blank = 2.",
+      type: "select",
+      options: ["2", "8", "16"],
+      tip: "SDI embedded audio channels to capture. Default 2 (one stereo pair). Blank = 2.",
     },
     DECKLINK_BUFFER_FRAMES: {
       label: "DECKLINK_BUFFER_FRAMES",
-      type: "text",
-      tip: "DeckLink driver frame queue depth. Keep small for latency (2 is recommended). Raising it can help under load but adds delay. Blank = 2.",
+      type: "select",
+      options: ["1", "2", "3", "4"],
+      tip: "DeckLink driver frame queue depth. Keep small for latency (2 is recommended). Blank = 2.",
     },
     VIDEO_ENCODER: {
       label: "VIDEO_ENCODER",
@@ -548,53 +567,68 @@
       label: "LO_ENABLE",
       type: "select",
       options: ["true", "false"],
-      tip: "Publish a second lower-bitrate encode as <path>lo (e.g. ch0lo) for player auto-switch under packet loss. Same pipeline tee — never a second process on the DeckLink. Enable for external / cellular viewers. Blank = false.",
+      tip: "Request a second lower-bitrate encode as <path>lo for player auto-switch under packet loss. Station-wide floating pool (MAX_LO_RENDITIONS, default 6): only the first N requesters by channel id actually get LO. Settings rejects a 7th enable. Blank = false.",
     },
     LO_PRESET: {
       label: "LO_PRESET",
       type: "select",
       options: ["720p", "540p", "480p", "360p", "240p", "180p"],
-      tip: "LO resolution ladder (height): 720p / 540p / 480p / 360p / 240p / 180p with default bitrates 2500 / 1500 / 1200 / 800 / 500 / 350 kbps. The \"p\" number is height (480p = 854×480). Blank = 720p when LO is enabled.",
+      tip: "LO resolution ladder (height) with safe default bitrates. Prefer this over custom LO_WIDTH/HEIGHT. Blank = 720p when LO is enabled.",
     },
-    LO_WIDTH: {
-      label: "LO_WIDTH",
-      type: "text",
-      tip: "Explicit LO width in pixels; overrides LO_PRESET. Must be an even number. Blank = use the preset width (recommended unless you need a custom raster).",
+    LO_FPS: {
+      label: "LO_FPS",
+      type: "select",
+      options: ["30000/1001", "60000/1001", "15000/1001"],
+      optionLabels: {
+        "30000/1001": "29.97 (default)",
+        "60000/1001": "59.94 (match HI)",
+        "15000/1001": "14.99 (lowest bandwidth)",
+      },
+      tip: "LO output framerate (GStreamer fraction only). Free-form values like 29.97 break the pipeline. Blank = 30000/1001.",
     },
-    LO_HEIGHT: {
-      label: "LO_HEIGHT",
-      type: "text",
-      tip: "Explicit LO height in pixels; overrides LO_PRESET. Must be an even number. Blank = use the preset height (recommended unless you need a custom raster).",
+    LO_TARGET_USAGE: {
+      label: "LO_TARGET_USAGE",
+      type: "select",
+      options: ["3", "4", "5", "7"],
+      optionLabels: {
+        "3": "3 (better quality)",
+        "4": "4 (default)",
+        "5": "5 (faster)",
+        "7": "7 (fastest — if LO drops frames under load)",
+      },
+      tip: "vah264enc target-usage for LO only (1–7). HI stays at 7. If LO plays at a few fps under multi-channel load, pick 7. Blank = 4.",
+    },
+    LO_QUEUE_BUFFERS: {
+      label: "LO_QUEUE_BUFFERS",
+      type: "select",
+      options: ["8", "16", "24", "32"],
+      tip: "LO video queue depth before scale/encode. Deeper = fewer drops under iGPU pressure. Blank = 16.",
     },
     LO_BITRATE_KBPS: {
       label: "LO_BITRATE_KBPS",
       type: "text",
-      tip: "Explicit LO CBR bitrate in kbps; overrides the preset default. Raise this if LO looks blocky/choppy under motion (e.g. 2500–3000 for 720p). Blank = use the preset bitrate for LO_PRESET.",
+      tip: "Explicit LO CBR bitrate in kbps; overrides the preset default. Blank = use the preset bitrate for LO_PRESET.",
     },
-    LO_FPS: {
-      label: "LO_FPS",
+    LO_WIDTH: {
+      label: "LO_WIDTH",
       type: "text",
-      tip: "LO framerate as a GStreamer fraction (e.g. 30000/1001 ≈ 29.97p, cellular-friendly; 60000/1001 matches HI). Blank = 30000/1001.",
+      tip: "Advanced: explicit LO width (even pixels). Leave blank to use LO_PRESET.",
     },
-    LO_TARGET_USAGE: {
-      label: "LO_TARGET_USAGE",
+    LO_HEIGHT: {
+      label: "LO_HEIGHT",
       type: "text",
-      tip: "vah264enc target-usage for LO only (1 = best quality / slowest, 7 = fastest). HI stays at 7 for latency. Default 4 for smoother LO. Typical range 3–5.",
-    },
-    LO_QUEUE_BUFFERS: {
-      label: "LO_QUEUE_BUFFERS",
-      type: "text",
-      tip: "GStreamer queue depth (buffers) on the LO video branch before scale/encode. Deeper = fewer dropped frames under iGPU pressure, slightly more latency on LO only. Default 16. HI keeps a shallow queue.",
+      tip: "Advanced: explicit LO height (even pixels). Leave blank to use LO_PRESET.",
     },
     LO_GOP_FRAMES: {
       label: "LO_GOP_FRAMES",
-      type: "text",
-      tip: "LO keyframe interval in frames. Blank inherits GOP_FRAMES (HI). At 29.97 fps, 30 ≈ 1 s; 60 ≈ 2 s.",
+      type: "select",
+      options: ["30", "60"],
+      tip: "LO keyframe interval. Blank inherits GOP_FRAMES (HI).",
     },
     SIGNAL_LOSS_DEBOUNCE_S: {
       label: "SIGNAL_LOSS_DEBOUNCE_S",
       type: "text",
-      tip: "Seconds of continuous DeckLink unlock before switching LIVE → NO SIGNAL slate. Keep generous so brief hiccups heal as black frames without a slate flash (matches the stable Phase 1 healing behavior). Default 15. Typical range 5–30.",
+      tip: "Seconds of continuous live-source unlock before switching LIVE → NO SIGNAL slate. Keep generous so brief hiccups heal as black frames without a slate flash. Default 15. Typical range 5–30.",
     },
     SIGNAL_ACQUIRE_DEBOUNCE_S: {
       label: "SIGNAL_ACQUIRE_DEBOUNCE_S",
@@ -604,18 +638,18 @@
     DECKLINK_RETRY_S: {
       label: "DECKLINK_RETRY_S",
       type: "text",
-      tip: "Seconds to wait before rebuilding a DeckLink capture branch after a hard ERROR/EOS. Slate keeps publishing in the meantime. Default 3.",
+      tip: "Seconds to wait before rebuilding the live capture/decode branch (DeckLink or SRT) after a hard ERROR/EOS. Slate keeps publishing in the meantime. Default 3.",
     },
   };
 
   const FIELD_GROUPS = [
-    { id: "general", title: "General", keys: ["CHANNEL_ALIAS"] },
+    { id: "general", title: "General", keys: ["CHANNEL_ALIAS", "INPUT_TYPE", "SRT_URI", "SRT_LATENCY_MS"] },
     {
       id: "video",
       title: "Video",
       keys: [
         "BITRATE_KBPS", "GOP_FRAMES", "DEINT_FIELDS", "VIDEO_ENCODER",
-        "EXTRA_ENC_ARGS", "DECKLINK_BUFFER_FRAMES",
+        "DECKLINK_BUFFER_FRAMES",
       ],
     },
     {
@@ -625,11 +659,21 @@
     },
     {
       id: "lo",
-      title: "Low-res rendition",
+      title: "Low-res rendition (floating pool)",
       keys: [
-        "LO_ENABLE", "LO_PRESET", "LO_WIDTH", "LO_HEIGHT", "LO_BITRATE_KBPS",
-        "LO_FPS", "LO_TARGET_USAGE", "LO_QUEUE_BUFFERS", "LO_GOP_FRAMES",
+        "LO_ENABLE", "LO_PRESET", "LO_FPS", "LO_TARGET_USAGE",
+        "LO_QUEUE_BUFFERS", "LO_BITRATE_KBPS",
       ],
+    },
+    {
+      id: "lo-advanced",
+      title: "LO advanced (leave blank)",
+      keys: ["LO_WIDTH", "LO_HEIGHT", "LO_GOP_FRAMES"],
+    },
+    {
+      id: "encoder-advanced",
+      title: "Encoder advanced",
+      keys: ["EXTRA_ENC_ARGS"],
     },
     {
       id: "supervisor",
@@ -683,14 +727,29 @@
       if (blankUnset) {
         const blank = document.createElement("option");
         blank.value = "";
-        blank.textContent = "(unset)";
+        blank.textContent = "(unset / default)";
         control.appendChild(blank);
       }
+      const labels = meta.optionLabels || {};
+      const cur = value == null ? "" : String(value);
+      let matched = false;
       for (const opt of meta.options) {
         const o = document.createElement("option");
         o.value = opt;
-        o.textContent = opt;
-        if (String(value) === opt) o.selected = true;
+        o.textContent = labels[opt] || opt;
+        if (cur === opt) {
+          o.selected = true;
+          matched = true;
+        }
+        control.appendChild(o);
+      }
+      // Legacy value not in the curated list — keep it visible so Save does not
+      // silently change it; server will reject on next intentional change.
+      if (cur && !matched) {
+        const o = document.createElement("option");
+        o.value = cur;
+        o.textContent = `${cur} (unsupported — pick a listed value)`;
+        o.selected = true;
         control.appendChild(o);
       }
     } else {
@@ -723,7 +782,10 @@
   function renderTable() {
     tbody.innerHTML = channels.map(c => {
       const alias = c.CHANNEL_ALIAS || "—";
-      const lo = c.LO_ENABLE === "true" ? (c.LO_PRESET || "on") : "off";
+      const lo = c.LO_ENABLE === "true"
+        ? (c.LO_GRANTED === false ? "req (denied)" : (c.LO_PRESET || "on"))
+        : "off";
+      const src = (c.INPUT_TYPE || "decklink") === "srt" ? "SRT" : "SDI";
       // Disabled + not running = parked: neutral dot and "disabled" label,
       // even if the last run left a stale `failed` behind — no live fault.
       const parked = c.enabled === "disabled" && !c.active;
@@ -739,6 +801,7 @@
         <td><span class="dot ${dot}"></span>${c.id}</td>
         <td>${esc(c.CHANNEL_PATH || ("ch" + c.id))}</td>
         <td>${esc(alias)}</td>
+        <td>${esc(src)}</td>
         <td>${esc(c.BITRATE_KBPS || "—")}</td>
         <td>${esc(c.DEINT_FIELDS || "—")}</td>
         <td>${esc(c.ENABLE_AUDIO || "—")}</td>
@@ -766,7 +829,11 @@
       channels = data.channels || [];
       editableKeys = data.editable_keys || Object.keys(FIELD_META);
       renderTable();
-      stateEl.textContent = `${channels.length} channel(s)`;
+      const pool = data.lo_pool;
+      const poolTxt = pool
+        ? ` · LO pool ${pool.used}/${pool.max}`
+        : "";
+      stateEl.textContent = `${channels.length} channel(s)${poolTxt}`;
     } catch (err) {
       stateEl.textContent = `error: ${err.message}`;
     }

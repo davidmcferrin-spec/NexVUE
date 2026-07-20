@@ -3,7 +3,7 @@
 # the NexVUE ops UI.
 # Usage: nexvue-ops-enable.sh <enable|disable|start|stop> <unit>
 #
-# Deliberately restricted to nexvue-encode@0-7: the Phase 1 LAN-trust ops page
+# Deliberately restricted to nexvue-encode@0-9: the Phase 1 LAN-trust ops page
 # must not be able to disable or stop mediamtx / nexvue-status /
 # nexvue-metrics (that would take down every channel or the shared status
 # daemon). Restart of those core units stays available via
@@ -23,7 +23,7 @@ case "$VERB" in
   *) echo "disallowed verb: $VERB" >&2; exit 2 ;;
 esac
 case "$UNIT" in
-  nexvue-encode@[0-7]) ;;
+  nexvue-encode@[0-9]) ;;
   *) echo "disallowed unit: $UNIT" >&2; exit 2 ;;
 esac
 

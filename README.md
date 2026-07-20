@@ -43,8 +43,11 @@ SDI 1080i59.94 (4 or 8) --> [DeckLink card]
 - Ubuntu 24.04 LTS Server
 - Optional: HP Care Pack to 3yr for unattended remote sites (base is 1/1/1)
 
-Capacity guidance: 8x 1080p59.94 HI encodes (plus enabled LO renditions) is
-near the practical ceiling for the Arrow Lake media engine.
+Capacity guidance: 8x 1080p59.94 HI encodes (plus up to
+`MAX_LO_RENDITIONS=6` floating LO tees) is near the practical ceiling for
+the Arrow Lake media engine. SRT channels add decode load on the same
+Video engine — prefer HI-only for add-on SRT slots. Channel slots default
+to `MAX_CHANNELS=10` (0–9); DeckLink card size remains `MAX_DEVICES` (4 or 8).
 Run motion-critical channels (program, director) at 59.94p (`DEINT_FIELDS=all`)
 and monitoring channels (multiview, prompter) at 29.97p (`DEINT_FIELDS=top`) to
 stay comfortably inside it.
@@ -133,7 +136,7 @@ sudo cp mediamtx.service nexvue-encode@.service \
        nexvue-status.service nexvue-metrics.service /etc/systemd/system/
 
 # Station-wide card size (install only if absent — setup.sh also migrates):
-sudo cp -n nexvue-example.env /etc/nexvue/nexvue.env   # MAX_DEVICES=8; Duo 2 → 4
+sudo cp -n nexvue-example.env /etc/nexvue/nexvue.env   # MAX_DEVICES=8; MAX_CHANNELS=10; MAX_LO_RENDITIONS=6
 
 # One env file per channel you want live (see channels-example.env):
 sudo cp channels-example.env /etc/nexvue/channels/0.env
@@ -919,7 +922,7 @@ Services/Settings).
   DMZ-expose without auth.
   The Services page also shows each unit's systemd enable state
   (`nexvue-ops-status.sh` prints `<is-active> <is-enabled>`) and offers two
-  toggles for **encoder units only** (`nexvue-encode@0-7`, via
+  toggles for **encoder units only** (`nexvue-encode@0-9`, via
   `nexvue-ops-enable.sh`): Enable/Disable (`set_enabled`, boot config +
   immediate `--now` effect — parking an unpatched Quad port from the UI
   instead of SSH) and Start/Stop (`set_running`, runtime only — boot config
@@ -959,14 +962,23 @@ Services/Settings).
   `systemctl enable --now nexvue-status`. Status queries coexist safely with an
   active capture.
 - **LO renditions (adaptive bandwidth):** `LO_ENABLE=true` in a channel env
-  publishes `<path>lo` (default 720p29.97 @ 2.5 Mbps, `LO_TARGET_USAGE=4`,
-  deeper LO queue) alongside the HI rendition — one capture, two QSV encodes
-  via tee. HI keeps `target-usage=7` for latency; LO defaults favor smoother
-  motion. Viewers on bad links get switched to it by the portal player
-  (Phase 2). Enable per channel, not globally: each LO adds an encode, and
-  the practical envelope is ~8 HI 59.94p + 8 LO on the Arrow Lake media
-  engine. Verify in the soak. Tune `LO_BITRATE_KBPS` / `LO_PRESET` /
-  `LO_TARGET_USAGE` / `LO_QUEUE_BUFFERS` in Settings if LO still looks choppy.
+  requests a `<path>lo` publish (default 720p29.97 @ 2.5 Mbps, `LO_TARGET_USAGE=4`,
+  deeper LO queue) alongside the HI rendition — one live source, two QSV encodes
+  via tee. Station-wide `MAX_LO_RENDITIONS` (default 6 in `/etc/nexvue/nexvue.env`)
+  is a floating pool: Settings refuses a 7th enable; the supervisor grants LO
+  only to the first N requesters by ascending channel id (deterministic clamp).
+  HI keeps `target-usage=7` for latency; LO defaults favor smoother
+  motion. Settings only offers curated `LO_FPS` / `LO_TARGET_USAGE` /
+  `LO_QUEUE_BUFFERS` values (ops write rejects free-form fps like `29.97`
+  that break GStreamer). Viewers on bad links get switched to it by the
+  portal player (Phase 2). Tune `LO_BITRATE_KBPS` / `LO_PRESET` /
+  `LO_TARGET_USAGE` / `LO_QUEUE_BUFFERS` in Settings if LO still looks choppy
+  — under multi-channel load try `LO_TARGET_USAGE=7` or a lower preset.
+- **SRT inputs:** set `INPUT_TYPE=srt` and `SRT_URI=srt://…` (caller or
+  listener). The supervisor always decode+re-encodes into the same slate /
+  normalize / HI(+LO) path as DeckLink. Captions stay DeckLink-only for now
+  (no `output-cc` on SRT). Slots `@8`/`@9` are typical SRT add-ons under
+  `MAX_CHANNELS=10`.
 - **Self-healing model:** constant output caps mean input format changes never
   drop viewer sessions; the watchdog turns capture hangs into clean systemd
   restarts; black frames ride through signal loss. A channel with no signal

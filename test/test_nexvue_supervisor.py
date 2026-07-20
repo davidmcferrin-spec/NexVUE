@@ -63,7 +63,7 @@ class TestLoadConfig(unittest.TestCase):
         # Phase 1.5 knobs — generous loss debounce, quick acquire, 3s retry.
         self.assertEqual(cfg.signal_loss_debounce_s, 15.0)
         self.assertEqual(cfg.signal_acquire_debounce_s, 1.0)
-        self.assertEqual(cfg.decklink_retry_s, 3.0)
+        self.assertEqual(cfg.live_retry_s, 3.0)
         # Watchdog off by default so a brief unlock cannot ERROR the DeckLink
         # bin before SIGNAL_LOSS_DEBOUNCE_S can ride it out as black frames.
         self.assertEqual(cfg.watchdog_ms, 0)
@@ -137,6 +137,24 @@ class TestLoadConfig(unittest.TestCase):
             mod.load_config(
                 {"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "LO_QUEUE_BUFFERS": "0"}
             )
+        with self.assertRaises(mod.ConfigError):
+            mod.load_config(
+                {
+                    "DEVICE_NUMBER": "0",
+                    "CHANNEL_PATH": "ch0",
+                    "LO_ENABLE": "true",
+                    "LO_FPS": "29.97",
+                }
+            )
+        cfg_fps = mod.load_config(
+            {
+                "DEVICE_NUMBER": "0",
+                "CHANNEL_PATH": "ch0",
+                "LO_ENABLE": "true",
+                "LO_FPS": "15000/1001",
+            }
+        )
+        self.assertEqual(cfg_fps.lo_fps, "15000/1001")
 
     def test_lo_explicit_overrides_beat_preset(self) -> None:
         cfg = mod.load_config(
@@ -183,7 +201,7 @@ class TestLoadConfig(unittest.TestCase):
         )
         self.assertEqual(cfg.signal_loss_debounce_s, 20.0)
         self.assertEqual(cfg.signal_acquire_debounce_s, 2.5)
-        self.assertEqual(cfg.decklink_retry_s, 5.0)
+        self.assertEqual(cfg.live_retry_s, 5.0)
         with self.assertRaises(mod.ConfigError):
             mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "SIGNAL_LOSS_DEBOUNCE_S": "-1"})
         with self.assertRaises(mod.ConfigError):
@@ -438,6 +456,98 @@ class TestPureHelpers(unittest.TestCase):
             {"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "CHANNEL_ALIAS": 'Cam "1"'}
         )
         self.assertNotIn('"', mod.slate_overlay_text(cfg))
+
+
+class TestSrtAndLoPool(unittest.TestCase):
+    def test_srt_config_requires_uri_and_disables_captions(self) -> None:
+        cfg = mod.load_config(
+            {
+                "INPUT_TYPE": "srt",
+                "CHANNEL_PATH": "ch8",
+                "CHANNEL_ID": "8",
+                "SRT_URI": "srt://10.0.0.5:9000?mode=caller",
+            }
+        )
+        self.assertEqual(cfg.input_type, "srt")
+        self.assertEqual(cfg.channel_id, 8)
+        self.assertEqual(cfg.srt_uri, "srt://10.0.0.5:9000?mode=caller")
+        self.assertFalse(cfg.captions_enable)
+        with self.assertRaises(mod.ConfigError):
+            mod.load_config(
+                {"INPUT_TYPE": "srt", "CHANNEL_PATH": "ch8", "CHANNEL_ID": "8"}
+            )
+
+    def test_srt_rejects_non_srt_uri(self) -> None:
+        with self.assertRaises(mod.ConfigError):
+            mod.load_config(
+                {
+                    "INPUT_TYPE": "srt",
+                    "CHANNEL_PATH": "ch8",
+                    "CHANNEL_ID": "8",
+                    "SRT_URI": "rtsp://127.0.0.1/x",
+                }
+            )
+
+    def test_lo_pool_grants_first_max_by_ascending_id(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for i in range(8):
+                (root / f"{i}.env").write_text(f"LO_ENABLE=true\nCHANNEL_PATH=ch{i}\n", encoding="utf-8")
+            # Channel 6 is the 7th requester (0..6) → denied when max=6
+            denied = mod.load_config(
+                {
+                    "DEVICE_NUMBER": "0",
+                    "CHANNEL_PATH": "ch6",
+                    "CHANNEL_ID": "6",
+                    "LO_ENABLE": "true",
+                    "MAX_LO_RENDITIONS": "6",
+                },
+                channels_dir=root,
+            )
+            self.assertTrue(denied.lo_requested)
+            self.assertFalse(denied.lo_enable)
+            # Channel 5 is within the first 6 (0..5)
+            granted = mod.load_config(
+                {
+                    "DEVICE_NUMBER": "0",
+                    "CHANNEL_PATH": "ch5",
+                    "CHANNEL_ID": "5",
+                    "LO_ENABLE": "true",
+                    "MAX_LO_RENDITIONS": "6",
+                },
+                channels_dir=root,
+            )
+            self.assertTrue(granted.lo_enable)
+
+    def test_lo_pool_allows_sparse_assignment(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for i in (1, 2, 4, 5, 8, 9):
+                (root / f"{i}.env").write_text("LO_ENABLE=true\n", encoding="utf-8")
+            for i in (1, 2, 4, 5, 8, 9):
+                cfg = mod.load_config(
+                    {
+                        "DEVICE_NUMBER": "0" if i < 8 else "0",
+                        "CHANNEL_PATH": f"ch{i}",
+                        "CHANNEL_ID": str(i),
+                        "LO_ENABLE": "true",
+                        "MAX_LO_RENDITIONS": "6",
+                        "INPUT_TYPE": "decklink" if i < 8 else "srt",
+                        **(
+                            {"SRT_URI": "srt://127.0.0.1:9000?mode=caller"}
+                            if i >= 8
+                            else {}
+                        ),
+                    },
+                    channels_dir=root,
+                )
+                self.assertTrue(cfg.lo_enable, f"channel {i} should get LO")
 
 
 class TestCaptionsSupervisorWithoutHelper(unittest.TestCase):

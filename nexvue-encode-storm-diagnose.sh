@@ -39,7 +39,7 @@ echo
 
 echo "-- Started counts (historical vs recent) --"
 printf '%-18s %8s %8s %s\n' "unit" "72h" "1h" "hint"
-for n in 0 1 2 3 4 5 6 7; do
+for n in 0 1 2 3 4 5 6 7 8 9; do
   unit="nexvue-encode@${n}"
   systemctl is-active --quiet "$unit" 2>/dev/null || continue
   c72="$(journalctl -u "$unit" --since -72h --no-pager 2>/dev/null \
@@ -58,7 +58,7 @@ done
 echo
 
 echo "-- Journal tails (errors / supervisor, last 2h) --"
-for n in 0 1 2 3 4 5 6 7; do
+for n in 0 1 2 3 4 5 6 7 8 9; do
   unit="nexvue-encode@${n}"
   systemctl is-active --quiet "$unit" 2>/dev/null || continue
   echo "======== ${unit} ========"

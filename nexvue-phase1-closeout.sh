@@ -84,7 +84,7 @@ done
 
 ENC_ACTIVE=0
 ACTIVE_NS=()
-for n in 0 1 2 3 4 5 6 7; do
+for n in 0 1 2 3 4 5 6 7 8 9; do
   if systemctl is-active --quiet "nexvue-encode@${n}"; then
     ENC_ACTIVE=$((ENC_ACTIVE + 1))
     ACTIVE_NS+=("$n")

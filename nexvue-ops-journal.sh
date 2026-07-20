@@ -10,7 +10,7 @@ LINES="${2:-100}"
 SINCE="${3:-}"
 
 case "$UNIT" in
-  mediamtx|nexvue-status|nexvue-metrics|nexvue-encode@[0-7]) ;;
+  mediamtx|nexvue-status|nexvue-metrics|nexvue-encode@[0-9]) ;;
   *) echo "disallowed unit: $UNIT" >&2; exit 2 ;;
 esac
 

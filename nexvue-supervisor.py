@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-nexvue-supervisor.py — Phase 1.5 persistent RTSP publisher with DeckLink <->
+nexvue-supervisor.py — Phase 1.5 persistent RTSP publisher with live-source <->
 NO SIGNAL slate switching (replaces the bare gst-launch ExecStart in
 nexvue-encode@.service).
 
 Goal (README "Phase 1.5 supervisor — specification"): eliminate the
-no-signal-at-boot restart loop. A channel with no DeckLink lock at start (or
+no-signal-at-boot restart loop. A channel with no live lock at start (or
 that loses lock later) serves a generated slate instead of failing/restart-
 looping — viewers stay connected (same RTSP/WHEP session, same output caps);
 only the picture changes.
@@ -13,11 +13,16 @@ only the picture changes.
 Architecture:
     nexvue-encode@N.service (ExecStart) -> this process, one per channel
         gst pipeline: persistent slate (videotestsrc+textoverlay,
-        silent audiotestsrc) + input-selector, with a DYNAMIC DeckLink
-        capture bin added/removed as it comes up/errors. Downstream of the
-        selectors is unchanged from nexvue-encode.sh: normalize -> HI encode
-        (+ optional LO tee) -> rtspclientsink(s); audio -> shared opusenc.
+        silent audiotestsrc) + input-selector, with a DYNAMIC live source
+        bin (DeckLink SDI or SRT decode) added/removed as it comes
+        up/errors. Downstream of the selectors is unchanged from
+        nexvue-encode.sh: normalize -> HI encode (+ optional LO tee) ->
+        rtspclientsink(s); audio -> shared opusenc.
+        SRT always decode+re-encode so slate / normalize / LO stay valid.
         MediaMTX (H.264 + Opus, no transcoding) is untouched.
+        Station-wide MAX_LO_RENDITIONS (default 6) clamps which channels
+        that request LO_ENABLE actually build the LO tee (deterministic
+        by ascending channel id among requesters).
 
 Stdlib only, no pip (project policy). GStreamer access is via PyGObject
 (python3-gi + gir1.2-gstreamer-1.0 etc., from apt — see setup.sh) and is
@@ -38,12 +43,21 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Mapping, Optional, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
 LOG_PREFIX = "[nexvue-supervisor]"
 LOG_LEVEL = os.environ.get("NEXVUE_SUPERVISOR_LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format=f"{LOG_PREFIX} %(message)s")
 log = logging.getLogger("nexvue-supervisor")
+
+# Station channel slots are 0..MAX_CHANNELS-1 (independent of DeckLink
+# MAX_DEVICES). SRT-only channels can use ids above the card's connector count.
+DEFAULT_MAX_CHANNELS = 10
+DEFAULT_MAX_LO_RENDITIONS = 6
+DEFAULT_CHANNELS_DIR = Path("/etc/nexvue/channels")
+# SRT: treat "no decoded video buffer for this long" as signal=false so the
+# existing LIVE→SLATE loss debounce can run (srtsrc has no DeckLink "signal").
+SRT_SIGNAL_STALE_S = 1.0
 
 # ---------------------------------------------------------------------------
 # GStreamer / PyGObject — optional at import time (see module docstring).
@@ -85,6 +99,9 @@ class ConfigError(Exception):
         self.exit_code = exit_code
 
 
+# LO framerates accepted by Settings / ops (must be a GStreamer fraction).
+LO_FPS_ALLOWED = frozenset({"60000/1001", "30000/1001", "15000/1001"})
+
 # LO_PRESET ladder -> (width, height, default bitrate kbps). Matches
 # nexvue-encode.sh exactly — the "p" number is the HEIGHT (480p = 854x480).
 # Bitrate defaults are sized for CBR + target-usage=4 so motion stays watchable
@@ -105,9 +122,14 @@ class SupervisorConfig:
     once by load_config() — every field here is already sane, so pipeline
     code never re-validates."""
 
-    device_number: int
+    channel_id: int
     channel_path: str
+    input_type: str = "decklink"  # decklink | srt
+    device_number: int = 0
     max_devices: int = 8
+    max_channels: int = DEFAULT_MAX_CHANNELS
+    srt_uri: str = ""
+    srt_latency_ms: int = 120
     deint_fields: str = "all"
     bitrate_kbps: int = 5000
     gop_frames: int = 60
@@ -128,7 +150,9 @@ class SupervisorConfig:
     rtsp_url: str = ""
     video_encoder: str = "vah264enc"
     extra_enc_args: str = ""
+    lo_requested: bool = False
     lo_enable: bool = False
+    max_lo_renditions: int = DEFAULT_MAX_LO_RENDITIONS
     lo_preset: str = "720p"
     lo_fps: str = "30000/1001"
     lo_rtsp_url: str = ""
@@ -146,15 +170,90 @@ class SupervisorConfig:
     # Phase 1.5 knobs (README "Phase 1.5 supervisor" state machine section).
     signal_loss_debounce_s: float = 15.0
     signal_acquire_debounce_s: float = 1.0
-    decklink_retry_s: float = 3.0
+    # Retry delay after live-source branch ERROR/EOS (env: DECKLINK_RETRY_S /
+    # SOURCE_RETRY_S — same knob for DeckLink and SRT).
+    live_retry_s: float = 3.0
     # Derived, not read directly from the environment.
     output_fps: str = "60000/1001"
 
 
-def load_config(env: Mapping[str, str]) -> SupervisorConfig:
+def _parse_env_lo_enable(text: str) -> bool:
+    """Last active LO_ENABLE assignment in a channel .env body."""
+    last: Optional[str] = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        if key.strip() != "LO_ENABLE":
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] in "\"'" and value[0] == value[-1]:
+            value = value[1:-1]
+        elif " #" in value:
+            value = value.split(" #", 1)[0].strip()
+        last = value.lower()
+    return last == "true"
+
+
+def list_lo_requester_ids(channels_dir: Path, max_channels: int = DEFAULT_MAX_CHANNELS) -> List[int]:
+    """Channel ids with LO_ENABLE=true, sorted ascending (deterministic pool order)."""
+    ids: List[int] = []
+    if not channels_dir.is_dir():
+        return ids
+    for path in channels_dir.glob("*.env"):
+        stem = path.stem
+        if not stem.isdigit():
+            continue
+        cid = int(stem)
+        if not (0 <= cid < max_channels):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _parse_env_lo_enable(text):
+            ids.append(cid)
+    ids.sort()
+    return ids
+
+
+def resolve_lo_enable(
+    channel_id: int,
+    requested: bool,
+    *,
+    channels_dir: Path,
+    max_lo: int,
+    max_channels: int = DEFAULT_MAX_CHANNELS,
+) -> bool:
+    """Floating LO pool: among requesters (ascending id), only the first max_lo win."""
+    if not requested:
+        return False
+    if max_lo <= 0:
+        return False
+    requesters = list_lo_requester_ids(channels_dir, max_channels=max_channels)
+    # Count this process even if the on-disk scan missed our file (unit tests,
+    # or a write that has not hit the directory the supervisor was pointed at).
+    if channel_id not in requesters:
+        requesters = sorted(set(requesters) | {channel_id})
+    winners = requesters[:max_lo]
+    return channel_id in winners
+
+
+def load_config(
+    env: Mapping[str, str],
+    *,
+    channels_dir: Optional[Path] = None,
+) -> SupervisorConfig:
     """Validate os.environ (or any string mapping, for tests) into a
     SupervisorConfig. Raises ConfigError on the first problem found —
-    mirrors nexvue-encode.sh's fail-fast validation block."""
+    mirrors nexvue-encode.sh's fail-fast validation block.
+
+    channels_dir is used only for the floating LO pool clamp (default
+    /etc/nexvue/channels, overridable via NEXVUE_CHANNELS_DIR).
+    """
 
     def raw(name: str) -> Optional[str]:
         v = env.get(name)
@@ -202,25 +301,61 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
             return False
         raise ConfigError(f"{name} must be 'true' or 'false', got {v!r}")
 
-    device_number_raw = required("DEVICE_NUMBER")
+    input_type = opt("INPUT_TYPE", "decklink").lower()
+    if input_type not in ("decklink", "srt"):
+        raise ConfigError(f"INPUT_TYPE must be 'decklink' or 'srt', got {input_type!r}")
+
     channel_path = required("CHANNEL_PATH")
+    if not channel_path or not all(c.isalnum() or c in "-_" for c in channel_path):
+        raise ConfigError(f"CHANNEL_PATH must be alphanumeric (with -/_ ), got {channel_path!r}")
+
+    max_channels = opt_int("MAX_CHANNELS", DEFAULT_MAX_CHANNELS)
+    if not (1 <= max_channels <= 16):
+        raise ConfigError(f"MAX_CHANNELS must be an integer 1-16, got {max_channels}")
 
     max_devices = opt_int("MAX_DEVICES", 8)
     if not (1 <= max_devices <= 8):
         raise ConfigError(f"MAX_DEVICES must be an integer 1-8, got {max_devices}")
 
-    try:
-        device_number = int(device_number_raw)
-    except ValueError:
-        raise ConfigError(f"DEVICE_NUMBER must be an integer, got {device_number_raw!r}") from None
-    if not (0 <= device_number < max_devices):
-        raise ConfigError(
-            f"DEVICE_NUMBER must be 0-{max_devices - 1} for this card "
-            f"(MAX_DEVICES={max_devices}), got {device_number}"
-        )
+    srt_uri = ""
+    srt_latency_ms = opt_int("SRT_LATENCY_MS", 120)
+    if srt_latency_ms < 0:
+        raise ConfigError(f"SRT_LATENCY_MS must be >= 0, got {srt_latency_ms}")
 
-    if not channel_path or not all(c.isalnum() or c in "-_" for c in channel_path):
-        raise ConfigError(f"CHANNEL_PATH must be alphanumeric (with -/_ ), got {channel_path!r}")
+    if input_type == "decklink":
+        device_number_raw = required("DEVICE_NUMBER")
+        try:
+            device_number = int(device_number_raw)
+        except ValueError:
+            raise ConfigError(f"DEVICE_NUMBER must be an integer, got {device_number_raw!r}") from None
+        if not (0 <= device_number < max_devices):
+            raise ConfigError(
+                f"DEVICE_NUMBER must be 0-{max_devices - 1} for this card "
+                f"(MAX_DEVICES={max_devices}), got {device_number}"
+            )
+        channel_id = opt_int("CHANNEL_ID", device_number)
+    else:
+        srt_uri = required("SRT_URI")
+        if not srt_uri.lower().startswith("srt://"):
+            raise ConfigError(f"SRT_URI must start with srt://, got {srt_uri!r}")
+        # Optional; unused for capture. Kept so mixed stations can still store a slot hint.
+        device_number = opt_int("DEVICE_NUMBER", -1)
+        channel_id = opt_int("CHANNEL_ID", -1)
+        if channel_id < 0:
+            # Derive from CHANNEL_PATH like ch8 → 8 when CHANNEL_ID was not exported.
+            suffix = channel_path[2:] if channel_path.startswith("ch") else ""
+            if suffix.isdigit():
+                channel_id = int(suffix)
+            else:
+                raise ConfigError(
+                    "CHANNEL_ID is required for INPUT_TYPE=srt when CHANNEL_PATH is not chN",
+                    exit_code=1,
+                )
+
+    if not (0 <= channel_id < max_channels):
+        raise ConfigError(
+            f"CHANNEL_ID must be 0-{max_channels - 1} (MAX_CHANNELS={max_channels}), got {channel_id}"
+        )
 
     deint_fields = opt("DEINT_FIELDS", "all")
     if deint_fields not in ("all", "top"):
@@ -279,7 +414,33 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
 
     extra_enc_args = opt("EXTRA_ENC_ARGS", "")
 
-    lo_enable = opt_bool("LO_ENABLE", False)
+    lo_requested = opt_bool("LO_ENABLE", False)
+    max_lo_renditions = opt_int("MAX_LO_RENDITIONS", DEFAULT_MAX_LO_RENDITIONS)
+    if max_lo_renditions < 0:
+        raise ConfigError(f"MAX_LO_RENDITIONS must be >= 0, got {max_lo_renditions}")
+
+    pool_dir = channels_dir
+    if pool_dir is None:
+        override = raw("NEXVUE_CHANNELS_DIR")
+        pool_dir = Path(override) if override else DEFAULT_CHANNELS_DIR
+    lo_enable = resolve_lo_enable(
+        channel_id,
+        lo_requested,
+        channels_dir=pool_dir,
+        max_lo=max_lo_renditions,
+        max_channels=max_channels,
+    )
+    if lo_requested and not lo_enable:
+        requesters = list_lo_requester_ids(pool_dir, max_channels=max_channels)
+        log.warning(
+            "LO_ENABLE requested on channel %d but floating pool is full "
+            "(MAX_LO_RENDITIONS=%d; requesters=%s; winners=%s) — running HI-only",
+            channel_id,
+            max_lo_renditions,
+            requesters,
+            requesters[:max_lo_renditions],
+        )
+
     lo_preset = opt("LO_PRESET", "720p")
     if lo_preset not in LO_PRESETS:
         raise ConfigError(f"LO_PRESET must be one of {','.join(LO_PRESETS)}, got {lo_preset!r}")
@@ -287,12 +448,16 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
     lo_width = opt_int("LO_WIDTH", lo_w_def)
     lo_height = opt_int("LO_HEIGHT", lo_h_def)
     lo_bitrate_kbps = opt_int("LO_BITRATE_KBPS", lo_br_def)
-    if lo_enable:
+    if lo_enable or lo_requested:
         if lo_width <= 0 or lo_width % 2 or lo_height <= 0 or lo_height % 2:
             raise ConfigError(f"LO_WIDTH/LO_HEIGHT must be positive even integers, got {lo_width}x{lo_height}")
         if lo_bitrate_kbps <= 0:
             raise ConfigError(f"LO_BITRATE_KBPS must be positive, got {lo_bitrate_kbps}")
     lo_fps = opt("LO_FPS", "30000/1001")
+    if lo_fps not in LO_FPS_ALLOWED:
+        raise ConfigError(
+            f"LO_FPS must be one of {', '.join(sorted(LO_FPS_ALLOWED))}, got {lo_fps!r}"
+        )
     lo_rtsp_url = opt("LO_RTSP_URL", f"rtsp://127.0.0.1:8554/{channel_path}lo")
 
     # vah264enc target-usage: 1 = slow/best, 7 = fastest (HI default). LO defaults
@@ -308,7 +473,10 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
     if lo_gop_frames <= 0:
         raise ConfigError(f"LO_GOP_FRAMES must be positive, got {lo_gop_frames}")
 
+    # CEA-608 extraction is DeckLink output-cc only; SRT has no equivalent path yet.
     captions_enable = opt_bool("CAPTIONS_ENABLE", True)
+    if input_type == "srt":
+        captions_enable = False
     captions_dir = opt("CAPTIONS_DIR", "/run/nexvue/captions")
     captions_decode_bin = opt("CAPTIONS_DECODE_BIN", "/usr/local/bin/nexvue-captions-decode.py")
 
@@ -320,9 +488,13 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
     signal_acquire_debounce_s = opt_float("SIGNAL_ACQUIRE_DEBOUNCE_S", 1.0)
     if signal_acquire_debounce_s < 0:
         raise ConfigError(f"SIGNAL_ACQUIRE_DEBOUNCE_S must be >= 0, got {signal_acquire_debounce_s}")
-    decklink_retry_s = opt_float("DECKLINK_RETRY_S", 3.0)
-    if decklink_retry_s <= 0:
-        raise ConfigError(f"DECKLINK_RETRY_S must be > 0, got {decklink_retry_s}")
+    # SOURCE_RETRY_S aliases DECKLINK_RETRY_S for SRT wording; either may be set.
+    if raw("SOURCE_RETRY_S") is not None:
+        live_retry_s = opt_float("SOURCE_RETRY_S", 3.0)
+    else:
+        live_retry_s = opt_float("DECKLINK_RETRY_S", 3.0)
+    if live_retry_s <= 0:
+        raise ConfigError(f"live source retry (DECKLINK_RETRY_S/SOURCE_RETRY_S) must be > 0, got {live_retry_s}")
 
     # A short watchdog undercuts loss debounce (tears down DeckLink before the
     # state machine can ride out a hiccup). Bump it if the operator set both.
@@ -339,9 +511,14 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
             watchdog_ms = min_watchdog_ms
 
     return SupervisorConfig(
-        device_number=device_number,
+        channel_id=channel_id,
         channel_path=channel_path,
+        input_type=input_type,
+        device_number=device_number,
         max_devices=max_devices,
+        max_channels=max_channels,
+        srt_uri=srt_uri,
+        srt_latency_ms=srt_latency_ms,
         deint_fields=deint_fields,
         bitrate_kbps=bitrate_kbps,
         gop_frames=gop_frames,
@@ -358,7 +535,9 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
         rtsp_url=rtsp_url,
         video_encoder=video_encoder,
         extra_enc_args=extra_enc_args,
+        lo_requested=lo_requested,
         lo_enable=lo_enable,
+        max_lo_renditions=max_lo_renditions,
         lo_preset=lo_preset,
         lo_fps=lo_fps,
         lo_rtsp_url=lo_rtsp_url,
@@ -374,9 +553,15 @@ def load_config(env: Mapping[str, str]) -> SupervisorConfig:
         channel_alias=channel_alias,
         signal_loss_debounce_s=signal_loss_debounce_s,
         signal_acquire_debounce_s=signal_acquire_debounce_s,
-        decklink_retry_s=decklink_retry_s,
+        live_retry_s=live_retry_s,
         output_fps=output_fps,
     )
+
+
+# Keep the old name as an alias so external callers / docs that still say
+# decklink_retry_s keep working when reading configs built above.
+# (SupervisorConfig uses live_retry_s; tests that referenced .decklink_retry_s
+# are updated to .live_retry_s.)
 
 
 # ---------------------------------------------------------------------------
@@ -390,135 +575,120 @@ class State(enum.Enum):
 
 
 class StateMachine:
-    """DeckLink <-> slate state machine (README "Phase 1.5 supervisor —
+    """Live-source <-> slate state machine (README "Phase 1.5 supervisor —
     specification", State machine section).
 
     | State       | Input           | RTSP        | Captions JSON          |
     |-------------|-----------------|-------------|-------------------------|
-    | LIVE        | DeckLink        | publishing  | extract CC1 as today    |
+    | LIVE        | DeckLink / SRT  | publishing  | extract CC1 (DeckLink)  |
     | SLATE       | generated slate | publishing  | clear cue (once)        |
-    | RECOVERING  | probing DeckLink| unchanged   | unchanged until decided |
+    | RECOVERING  | probing live    | unchanged   | unchanged until decided |
 
-    Boot starts SLATE (never LIVE) so a channel with no lock at process
-    start serves a picture instead of the old restart loop.
-
-    Loss debounce is deliberately generous (SIGNAL_LOSS_DEBOUNCE_S,
-    default 15s): a brief real-world hiccup already rides through as black
-    frames (drop-no-signal-frames=false at the capture element), so there is
-    no reason to punch through to a visible slate for anything short-lived.
-
-    Acquire requires BOTH a true signal property AND at least one real
-    (non-GAP) buffer, held continuously for SIGNAL_ACQUIRE_DEBOUNCE_S — a
-    parameter lock alone is not sufficient evidence that frames are actually
-    flowing.
+    Design notes:
+    - LIVE -> SLATE needs ``loss_debounce_s`` of continuous no-signal. Brief
+      unlocks already ride through as black frames; there is deliberately
+      no reason to punch through to a visible slate for anything short-lived.
+    - SLATE -> LIVE needs signal AND a real non-GAP buffer held for
+      ``acquire_debounce_s`` — a parameter lock alone is not proof frames flow.
+    - ``on_live_error`` (DeckLink/SRT branch ERROR/EOS) forces immediate SLATE
+      and tears down that branch for retry; common-path errors exit the process.
     """
 
     def __init__(
         self,
-        loss_debounce_s: float,
-        acquire_debounce_s: float,
-        clock: Callable[[], float] = time.monotonic,
+        *,
+        loss_debounce_s: float = 15.0,
+        acquire_debounce_s: float = 1.0,
+        clock: Optional[Callable[[], float]] = None,
         on_enter_live: Optional[Callable[[], None]] = None,
         on_enter_slate: Optional[Callable[[], None]] = None,
         on_enter_recovering: Optional[Callable[[], None]] = None,
         on_caption_clear: Optional[Callable[[], None]] = None,
     ) -> None:
-        self._loss_debounce_s = loss_debounce_s
-        self._acquire_debounce_s = acquire_debounce_s
-        self._clock = clock
+        self.loss_debounce_s = loss_debounce_s
+        self.acquire_debounce_s = acquire_debounce_s
+        self._clock = clock or time.monotonic
         self._on_enter_live = on_enter_live
         self._on_enter_slate = on_enter_slate
         self._on_enter_recovering = on_enter_recovering
         self._on_caption_clear = on_caption_clear
-
-        self._state = State.SLATE
-        self._signal = False
-        self._valid_buffer = False
+        self.state = State.SLATE
         self._loss_since: Optional[float] = None
         self._acquire_since: Optional[float] = None
-
-    @property
-    def state(self) -> State:
-        return self._state
+        self._have_valid_buffer = False
+        self._signal_present = False
 
     def on_signal(self, present: bool) -> None:
-        """Feed the decklinkvideosrc "signal" property (or an equivalent
-        lock indicator). Only acts on an actual change so callers may poll
-        or wire this to a GObject notify::signal handler indifferently."""
+        """Feed the live-source lock equivalent (DeckLink ``signal`` property,
+        or SRT recent-decoded-buffer health). Only acts on an actual change
+        so callers may poll or wire this to a GObject notify handler."""
         present = bool(present)
-        if present == self._signal:
+        if present == self._signal_present:
             return
-        self._signal = present
+        self._signal_present = present
         now = self._clock()
-        if self._state is State.LIVE:
+        if self.state is State.LIVE:
             # Hiccups heal on their own: a returning signal simply cancels
             # the loss timer, no transition, no black-frame visible gap.
             self._loss_since = None if present else now
             return
         if present:
-            # Fresh signal window — needs a valid buffer before it counts
-            # toward the acquire debounce (see on_valid_buffer).
             self._acquire_since = None
-            self._valid_buffer = False
-            if self._state is State.SLATE:
+            self._have_valid_buffer = False
+            if self.state is State.SLATE:
                 self._enter(State.RECOVERING)
         else:
             self._acquire_since = None
-            self._valid_buffer = False
-            if self._state is State.RECOVERING:
-                # Never got promoted to LIVE — demote immediately, there is
-                # no "hiccup" to debounce through since we were not on air.
+            self._have_valid_buffer = False
+            if self.state is State.RECOVERING:
                 self._enter(State.SLATE)
 
     def on_valid_buffer(self) -> None:
-        """Feed a non-GAP buffer arrival from the DeckLink capture element.
-        Starts the acquire-debounce clock the first time this fires while
-        RECOVERING with signal already true; later calls just keep
-        _valid_buffer true (tick() re-checks continuously)."""
-        self._valid_buffer = True
-        if self._state is State.RECOVERING and self._signal and self._acquire_since is None:
+        """A non-GAP video buffer arrived from the live branch. Starts the
+        acquire-debounce clock the first time this fires while RECOVERING
+        with signal already true."""
+        self._have_valid_buffer = True
+        if self.state is State.RECOVERING and self._signal_present and self._acquire_since is None:
             self._acquire_since = self._clock()
 
-    def on_decklink_error(self) -> None:
-        """The DeckLink bin is being torn down (GStreamer ERROR/EOS) — there
-        is no live signal source left to debounce against, so demote
-        immediately regardless of the loss timer. The pipeline layer
-        retries after DECKLINK_RETRY_S; this machine simply starts over
-        from SLATE when that succeeds."""
-        self._signal = False
-        self._valid_buffer = False
+    def on_live_error(self) -> None:
+        """Hard failure on the live branch — immediate slate (bypass loss debounce)."""
+        self._signal_present = False
+        self._have_valid_buffer = False
         self._loss_since = None
         self._acquire_since = None
-        if self._state is not State.SLATE:
+        if self.state is not State.SLATE:
             self._enter(State.SLATE)
 
+    # Back-compat name used by older call sites / docs.
+    def on_decklink_error(self) -> None:
+        self.on_live_error()
+
     def tick(self) -> None:
-        """Call periodically (e.g. every 100-250ms) to evaluate the two
-        debounce windows using the injected clock."""
         now = self._clock()
-        if self._state is State.LIVE:
-            if self._loss_since is not None and (now - self._loss_since) >= self._loss_debounce_s:
+        if self.state is State.LIVE:
+            if self._loss_since is not None and (now - self._loss_since) >= self.loss_debounce_s:
                 self._enter(State.SLATE)
-        elif self._state is State.RECOVERING:
+        elif self.state is State.RECOVERING:
             if (
-                self._signal
-                and self._valid_buffer
+                self._signal_present
+                and self._have_valid_buffer
                 and self._acquire_since is not None
-                and (now - self._acquire_since) >= self._acquire_debounce_s
+                and (now - self._acquire_since) >= self.acquire_debounce_s
             ):
                 self._enter(State.LIVE)
 
     def _enter(self, new_state: State) -> None:
-        if new_state is self._state:
+        if new_state is self.state:
             return
-        self._state = new_state
+        self.state = new_state
         if new_state is State.LIVE:
             self._loss_since = None
             if self._on_enter_live:
                 self._on_enter_live()
         elif new_state is State.SLATE:
             self._acquire_since = None
-            self._valid_buffer = False
+            self._have_valid_buffer = False
             if self._on_enter_slate:
                 self._on_enter_slate()
             if self._on_caption_clear:
@@ -751,11 +921,16 @@ class Supervisor:
         self._audio_selector = None
         self._slate_video_pad = None
         self._slate_audio_pad = None
-        self._decklink_video_bin = None
-        self._decklink_audio_bin = None
-        self._decklink_video_pad = None
-        self._decklink_audio_pad = None
-        self._decklink_bins_active = False
+        # Live branch (DeckLink or SRT) — same selector sink_1 pads either way.
+        self._live_video_bin = None
+        self._live_audio_bin = None
+        self._live_video_pad = None
+        self._live_audio_pad = None
+        self._live_bins_active = False
+        self._srt_elements: list = []
+        self._srt_video_linked = False
+        self._srt_audio_linked = False
+        self._srt_last_buffer_mono = 0.0
         self._cc_valve = None
         self._cc_queue = None
         self._main_loop = None
@@ -930,18 +1105,25 @@ class Supervisor:
         bus.connect("message", self._on_bus_message)
 
         self._pipeline.set_state(Gst.State.PLAYING)
+        lo_note = (
+            f"true({self._config.lo_bitrate_kbps}kbps)"
+            if self._config.lo_enable
+            else ("requested-denied" if self._config.lo_requested else "false")
+        )
         self._log.info(
-            "starting: device=%d path=%s deint=%s hi=%dkbps lo=%s audio=%s captions=%s enc=%s",
-            self._config.device_number,
+            "starting: id=%d type=%s device=%s path=%s deint=%s hi=%dkbps lo=%s audio=%s captions=%s enc=%s",
+            self._config.channel_id,
+            self._config.input_type,
+            self._config.device_number if self._config.input_type == "decklink" else "-",
             self._config.channel_path,
             self._config.deint_fields,
             self._config.bitrate_kbps,
-            f"true({self._config.lo_bitrate_kbps}kbps)" if self._config.lo_enable else "false",
+            lo_note,
             self._config.enable_audio,
             self._captions.enabled,
             self._config.video_encoder,
         )
-        self._attach_decklink()
+        self._attach_live()
 
         self._main_loop = GLib.MainLoop()
         GLib.timeout_add(self.TICK_MS, self._tick)
@@ -974,9 +1156,19 @@ class Supervisor:
             self._main_loop.quit()
 
     def _tick(self) -> bool:
+        if self._config.input_type == "srt" and self._live_bins_active:
+            # srtsrc has no DeckLink-style signal property — recent decoded
+            # video buffers are the lock indicator.
+            fresh = (time.monotonic() - self._srt_last_buffer_mono) <= SRT_SIGNAL_STALE_S
+            self._state_machine.on_signal(fresh and self._srt_video_linked)
         self._state_machine.tick()
         self._captions.poll_respawn()
         return True
+
+    def _attach_live(self) -> bool:
+        if self._config.input_type == "srt":
+            return self._attach_srt()
+        return self._attach_decklink()
 
     # -- DeckLink branch attach/detach --------------------------------------
     def _attach_decklink(self) -> bool:
@@ -985,15 +1177,15 @@ class Supervisor:
             video_bin, video_src_pad, caption_pad = self._create_decklink_video_bin()
         except GLib.Error as exc:
             self._log.error(
-                "failed to build DeckLink video bin (%s) — retrying in %.1fs", exc, cfg.decklink_retry_s
+                "failed to build DeckLink video bin (%s) — retrying in %.1fs", exc, cfg.live_retry_s
             )
-            GLib.timeout_add(int(cfg.decklink_retry_s * 1000), self._attach_decklink)
+            GLib.timeout_add(int(cfg.live_retry_s * 1000), self._attach_live)
             return False
 
         self._pipeline.add(video_bin)
         sink_pad = self._video_selector.get_request_pad("sink_1")
         video_src_pad.link(sink_pad)
-        self._decklink_video_pad = sink_pad
+        self._live_video_pad = sink_pad
         if caption_pad is not None and self._cc_queue is not None:
             caption_pad.link(self._cc_queue.get_static_pad("sink"))
         video_bin.sync_state_with_parent()
@@ -1001,18 +1193,18 @@ class Supervisor:
         dlvideo = video_bin.get_by_name("dlvideo")
         dlvideo.connect("notify::signal", self._on_signal_notify)
         dlvideo.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._on_video_probe)
-        self._decklink_video_bin = video_bin
+        self._live_video_bin = video_bin
 
         if cfg.enable_audio:
             audio_bin, audio_src_pad = self._create_decklink_audio_bin()
             self._pipeline.add(audio_bin)
             asink_pad = self._audio_selector.get_request_pad("sink_1")
             audio_src_pad.link(asink_pad)
-            self._decklink_audio_pad = asink_pad
+            self._live_audio_pad = asink_pad
             audio_bin.sync_state_with_parent()
-            self._decklink_audio_bin = audio_bin
+            self._live_audio_bin = audio_bin
 
-        self._decklink_bins_active = True
+        self._live_bins_active = True
         # notify::signal only fires on CHANGE — read the current value once
         # right after linking in case the card already had lock the whole
         # time we were waiting out DECKLINK_RETRY_S.
@@ -1020,10 +1212,163 @@ class Supervisor:
         self._log.info("DeckLink branch (device %d) attached", cfg.device_number)
         return False
 
-    def _teardown_decklink(self) -> None:
+    def _attach_srt(self) -> bool:
+        """SRT → decode → normalize into the same selector pads as DeckLink.
+
+        Always decode+re-encode (never remux) so slate / constant caps / LO
+        stay valid when the Haivision encoder changes format.
+        """
+        cfg = self._config
+        self._srt_elements = []
+        self._srt_video_linked = False
+        self._srt_audio_linked = False
+        self._srt_last_buffer_mono = 0.0
+
+        src = Gst.ElementFactory.make("srtsrc", "srtsrc")
+        if src is None:
+            self._log.error("srtsrc element missing — install gstreamer1.0-plugins-bad")
+            GLib.timeout_add(int(cfg.live_retry_s * 1000), self._attach_live)
+            return False
+        src.set_property("uri", cfg.srt_uri)
+        _try_set(src, "latency", cfg.srt_latency_ms)
+        _try_set(src, "wait-for-connection", True)
+
+        q = Gst.ElementFactory.make("queue", "srtq0")
+        q.set_property("max-size-buffers", 0)
+        q.set_property("max-size-time", 0)
+        q.set_property("max-size-bytes", 0)
+        _try_set(q, "leaky", 2)  # downstream
+
+        decode = Gst.ElementFactory.make("decodebin", "srtdecode")
+        if decode is None:
+            self._log.error("decodebin missing — cannot decode SRT")
+            GLib.timeout_add(int(cfg.live_retry_s * 1000), self._attach_live)
+            return False
+
+        for el in (src, q, decode):
+            self._pipeline.add(el)
+            self._srt_elements.append(el)
+        src.link(q)
+        q.link(decode)
+        decode.connect("pad-added", self._on_srt_pad_added)
+
+        for el in (src, q, decode):
+            el.sync_state_with_parent()
+
+        self._live_bins_active = True
+        # Treat the decodebin graph as the "live video bin" for bus routing.
+        self._live_video_bin = decode
+        self._log.info("SRT branch attached (%s)", cfg.srt_uri)
+        return False
+
+    def _on_srt_pad_added(self, _decodebin, pad) -> None:
+        caps = pad.get_current_caps() or pad.query_caps(None)
+        if caps is None or caps.is_empty():
+            return
+        structure = caps.get_structure(0)
+        if structure is None:
+            return
+        media = structure.get_name() or ""
+        cfg = self._config
+
+        if media.startswith("video/") and not self._srt_video_linked:
+            norm = norm_caps_string(cfg.output_width, cfg.output_height, cfg.output_fps)
+            try:
+                chain = Gst.parse_bin_from_description(
+                    "queue name=srtvq0 max-size-buffers=4 leaky=downstream "
+                    f"! deinterlace fields={cfg.deint_fields} method=greedyh "
+                    "! videorate ! videoscale ! videoconvert "
+                    f"! {norm} "
+                    "! queue name=srtvqout max-size-buffers=4 leaky=downstream",
+                    False,
+                )
+            except GLib.Error as exc:
+                self._log.error("failed to build SRT video normalize chain (%s)", exc)
+                return
+            self._pipeline.add(chain)
+            self._srt_elements.append(chain)
+            sink = chain.get_static_pad("sink")
+            if sink is None:
+                # parse_bin without ghost pads — get first sink pad
+                sink = chain.get_by_name("srtvq0").get_static_pad("sink")
+            if pad.link(sink) != Gst.PadLinkReturn.OK:
+                self._log.error("failed to link decodebin video pad to SRT normalize chain")
+                return
+            out = chain.get_by_name("srtvqout").get_static_pad("src")
+            sel_sink = self._video_selector.get_request_pad("sink_1")
+            out.link(sel_sink)
+            self._live_video_pad = sel_sink
+            out.add_probe(Gst.PadProbeType.BUFFER, self._on_srt_video_probe)
+            chain.sync_state_with_parent()
+            self._srt_video_linked = True
+            self._log.info("SRT video pad linked")
+            return
+
+        if media.startswith("audio/") and cfg.enable_audio and not self._srt_audio_linked:
+            try:
+                chain = Gst.parse_bin_from_description(
+                    f"queue name=srtaq0 max-size-buffers={cfg.audio_queue_buffers} leaky=downstream "
+                    f"! audioconvert ! audioresample quality={cfg.audio_resample_quality} "
+                    "! audio/x-raw,format=S16LE,rate=48000,channels=2 "
+                    "! queue name=srtaqout max-size-buffers=4 leaky=downstream",
+                    False,
+                )
+            except GLib.Error as exc:
+                self._log.error("failed to build SRT audio normalize chain (%s)", exc)
+                return
+            self._pipeline.add(chain)
+            self._srt_elements.append(chain)
+            sink = chain.get_by_name("srtaq0").get_static_pad("sink")
+            if pad.link(sink) != Gst.PadLinkReturn.OK:
+                self._log.error("failed to link decodebin audio pad to SRT audio chain")
+                return
+            out = chain.get_by_name("srtaqout").get_static_pad("src")
+            asink = self._audio_selector.get_request_pad("sink_1")
+            out.link(asink)
+            self._live_audio_pad = asink
+            chain.sync_state_with_parent()
+            self._srt_audio_linked = True
+            self._log.info("SRT audio pad linked")
+
+    def _teardown_live(self) -> None:
+        # Prefer slate pads before tearing the live branch down.
+        if self._video_selector is not None and self._slate_video_pad is not None:
+            self._video_selector.set_property("active-pad", self._slate_video_pad)
+        if self._audio_selector is not None and self._slate_audio_pad is not None:
+            self._audio_selector.set_property("active-pad", self._slate_audio_pad)
+
+        if self._config.input_type == "srt":
+            for el in reversed(self._srt_elements):
+                try:
+                    el.set_state(Gst.State.NULL)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    self._pipeline.remove(el)
+                except Exception:  # noqa: BLE001
+                    pass
+            if self._live_video_pad is not None and self._video_selector is not None:
+                try:
+                    self._video_selector.release_request_pad(self._live_video_pad)
+                except Exception:  # noqa: BLE001
+                    pass
+            if self._live_audio_pad is not None and self._audio_selector is not None:
+                try:
+                    self._audio_selector.release_request_pad(self._live_audio_pad)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._srt_elements = []
+            self._srt_video_linked = False
+            self._srt_audio_linked = False
+            self._live_video_bin = None
+            self._live_audio_bin = None
+            self._live_video_pad = None
+            self._live_audio_pad = None
+            return
+
         for pad, bin_, selector in (
-            (self._decklink_video_pad, self._decklink_video_bin, self._video_selector),
-            (self._decklink_audio_pad, self._decklink_audio_bin, self._audio_selector),
+            (self._live_video_pad, self._live_video_bin, self._video_selector),
+            (self._live_audio_pad, self._live_audio_bin, self._audio_selector),
         ):
             if bin_ is None:
                 continue
@@ -1035,23 +1380,32 @@ class Supervisor:
                 selector.release_request_pad(pad)
             self._pipeline.remove(bin_)
 
-        self._decklink_video_bin = None
-        self._decklink_audio_bin = None
-        self._decklink_video_pad = None
-        self._decklink_audio_pad = None
+        self._live_video_bin = None
+        self._live_audio_bin = None
+        self._live_video_pad = None
+        self._live_audio_pad = None
 
-    def _handle_decklink_failure(self) -> None:
-        if not self._decklink_bins_active:
+    def _handle_live_failure(self) -> None:
+        if not self._live_bins_active:
             return
-        self._decklink_bins_active = False
-        self._state_machine.on_decklink_error()
-        self._teardown_decklink()
-        self._log.warning("DeckLink branch down — retrying in %.1fs", self._config.decklink_retry_s)
-        GLib.timeout_add(int(self._config.decklink_retry_s * 1000), self._attach_decklink)
+        self._live_bins_active = False
+        self._state_machine.on_live_error()
+        self._teardown_live()
+        label = "SRT" if self._config.input_type == "srt" else "DeckLink"
+        self._log.warning("%s branch down — retrying in %.1fs", label, self._config.live_retry_s)
+        GLib.timeout_add(int(self._config.live_retry_s * 1000), self._attach_live)
 
     # -- bus / probes ---------------------------------------------------------
-    def _is_decklink_source(self, element) -> bool:
-        for bin_ in (self._decklink_video_bin, self._decklink_audio_bin):
+    def _is_live_source(self, element) -> bool:
+        if self._config.input_type == "srt":
+            for el in self._srt_elements:
+                node = element
+                while node is not None:
+                    if node is el:
+                        return True
+                    node = node.get_parent()
+            return False
+        for bin_ in (self._live_video_bin, self._live_audio_bin):
             if bin_ is None:
                 continue
             node = element
@@ -1064,7 +1418,7 @@ class Supervisor:
     @staticmethod
     def _is_caption_element(element) -> bool:
         """Caption side-channel elements live in the static pipeline (not the
-        DeckLink bin). A dead FIFO reader EPIPs filesink — that must never
+        live bin). A dead FIFO reader EPIPs filesink — that must never
         take down HI/LO encode / RTSP (same rule as the old gst-launch path).
         """
         prefixes = ("ccsink", "ccvalve", "ccq", "ccconverter")
@@ -1082,11 +1436,12 @@ class Supervisor:
 
     def _on_bus_message(self, _bus, message) -> bool:
         mtype = message.type
+        label = "SRT" if self._config.input_type == "srt" else "DeckLink"
         if mtype == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
-            if self._is_decklink_source(message.src):
-                self._log.warning("DeckLink branch error: %s (%s)", err.message, debug)
-                self._handle_decklink_failure()
+            if self._is_live_source(message.src):
+                self._log.warning("%s branch error: %s (%s)", label, err.message, debug)
+                self._handle_live_failure()
             elif self._is_caption_element(message.src):
                 self._log.warning(
                     "caption side-channel error (non-fatal): %s (%s) — "
@@ -1098,21 +1453,21 @@ class Supervisor:
                 self._log.error("fatal pipeline error: %s (%s)", err.message, debug)
                 self._fatal(1)
         elif mtype == Gst.MessageType.EOS:
-            if self._is_decklink_source(message.src):
-                self._log.warning("DeckLink branch EOS")
-                self._handle_decklink_failure()
+            if self._is_live_source(message.src):
+                self._log.warning("%s branch EOS", label)
+                self._handle_live_failure()
             elif self._is_caption_element(message.src):
                 self._log.warning("caption side-channel EOS (non-fatal)")
             else:
-                self._log.error("unexpected EOS on common (non-DeckLink) path")
+                self._log.error("unexpected EOS on common (non-live) path")
                 self._fatal(1)
-        elif mtype == Gst.MessageType.WARNING and self._is_decklink_source(message.src):
+        elif mtype == Gst.MessageType.WARNING and self._is_live_source(message.src):
             # decklinkvideosrc posts a WARNING (not ERROR) on "No signal" —
             # that is routine operation already handled by the signal
             # property + state machine debounce; keep it at debug so a real
             # outage does not spam the journal once per lost frame.
             err, _debug = message.parse_warning()
-            self._log.debug("DeckLink branch warning: %s", err.message)
+            self._log.debug("%s branch warning: %s", label, err.message)
         return True
 
     def _on_signal_notify(self, element, _pspec) -> None:
@@ -1126,14 +1481,21 @@ class Supervisor:
             self._state_machine.on_valid_buffer()
         return Gst.PadProbeReturn.OK
 
+    def _on_srt_video_probe(self, _pad, info) -> "Gst.PadProbeReturn":
+        buf = info.get_buffer()
+        if buf is not None and not (buf.get_flags() & Gst.BufferFlags.GAP):
+            self._srt_last_buffer_mono = time.monotonic()
+            self._state_machine.on_valid_buffer()
+        return Gst.PadProbeReturn.OK
+
     # -- state machine callbacks ----------------------------------------------
     def _on_enter_live(self) -> None:
         self._log.info("state -> LIVE")
-        if self._decklink_video_pad is not None:
-            self._video_selector.set_property("active-pad", self._decklink_video_pad)
-        if self._config.enable_audio and self._decklink_audio_pad is not None:
-            self._audio_selector.set_property("active-pad", self._decklink_audio_pad)
-        # Reopen caption valve only after DeckLink is the active pad.
+        if self._live_video_pad is not None:
+            self._video_selector.set_property("active-pad", self._live_video_pad)
+        if self._config.enable_audio and self._live_audio_pad is not None:
+            self._audio_selector.set_property("active-pad", self._live_audio_pad)
+        # Reopen caption valve only after the live source is the active pad.
         if self._cc_valve is not None:
             self._cc_valve.set_property("drop", False)
         self._force_keyframe()
@@ -1152,7 +1514,8 @@ class Supervisor:
         self._force_keyframe()
 
     def _on_enter_recovering(self) -> None:
-        self._log.info("state -> RECOVERING (probing DeckLink)")
+        src = "SRT" if self._config.input_type == "srt" else "DeckLink"
+        self._log.info("state -> RECOVERING (probing %s)", src)
 
     def _on_caption_clear(self) -> None:
         self._captions.write_clear()

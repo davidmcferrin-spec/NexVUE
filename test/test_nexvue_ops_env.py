@@ -112,6 +112,25 @@ class TestApplyPatch(unittest.TestCase):
         self.assertIn("BITRATE_KBPS=2500\n", out)
         self.assertIn("LO_FPS=30000/1001\n", out)
 
+    def test_lo_fps_rejects_freeform(self):
+        with self.assertRaises(ValueError):
+            mod.sanitize_value("LO_FPS", "29.97")
+        with self.assertRaises(ValueError):
+            mod.sanitize_value("LO_FPS", "15")
+        self.assertEqual(mod.sanitize_value("LO_FPS", "60000/1001"), "60000/1001")
+        self.assertEqual(mod.sanitize_value("LO_FPS", ""), "")
+
+    def test_lo_geometry_must_be_even(self):
+        with self.assertRaises(ValueError):
+            mod.sanitize_value("LO_WIDTH", "641")
+        self.assertEqual(mod.sanitize_value("LO_WIDTH", "640"), "640")
+        self.assertEqual(mod.sanitize_value("LO_HEIGHT", ""), "")
+
+    def test_lo_target_usage_range(self):
+        with self.assertRaises(ValueError):
+            mod.sanitize_value("LO_TARGET_USAGE", "9")
+        self.assertEqual(mod.sanitize_value("LO_TARGET_USAGE", "7"), "7")
+
     def test_rejects_quotes_in_non_alias_values(self):
         with self.assertRaises(ValueError):
             mod.apply_patch(SAMPLE, {"EXTRA_ENC_ARGS": 'ref-frames="2"'})

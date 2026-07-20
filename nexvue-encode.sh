@@ -154,6 +154,10 @@ fi
 if ! [[ "${LO_GOP_FRAMES}" =~ ^[1-9][0-9]*$ ]]; then
     log "ERROR: LO_GOP_FRAMES must be a positive integer — got '${LO_GOP_FRAMES}'"; exit 64
 fi
+case "${LO_FPS}" in
+  60000/1001|30000/1001|15000/1001) ;;
+  *) log "ERROR: LO_FPS must be 60000/1001, 30000/1001, or 15000/1001 — got '${LO_FPS}'"; exit 64 ;;
+esac
 case "${AUDIO_FRAME_MS}" in 2|5|10|20|40|60) ;; *)
     log "ERROR: AUDIO_FRAME_MS must be one of 2,5,10,20,40,60"; exit 64 ;;
 esac

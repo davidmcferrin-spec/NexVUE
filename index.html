@@ -895,7 +895,7 @@
   function renderChannelButtons(aliases, devices) {
     const prevActive = currentBase;
     $("channels").innerHTML = "";
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 10; i++) {
       const path = `ch${i}`;
       const label = aliases[path] || aliases[String(i)] || path;
       const device = (devices && Number.isFinite(devices[path]))

@@ -7,7 +7,8 @@ README.md current as the project progresses.
 
 **NexVUE** — self-hosted SDI-to-WebRTC gateway replacing Dejero CuePoint.
 Per-station edge nodes capture 3G-SDI (DeckLink Quad 2 = 8ch, Duo 2 = 4ch;
-card-agnostic via MAX_DEVICES), encode with Intel
+card-agnostic via MAX_DEVICES) and/or ingest SRT from Haivision (or other)
+encoders (`INPUT_TYPE=srt`, always decode+re-encode), encode with Intel
 Quick Sync, and serve sub-250ms WebRTC (WHEP) to browsers. A future central
 portal (Phase 2) provides the channel catalog and auth; **video never
 transits the portal** — viewers connect directly to edge nodes. Sibling
@@ -41,8 +42,14 @@ specifically because this box can't get additional ports opened.
   format changes never renegotiate the encoder or drop viewer sessions.
 - Adaptive bandwidth = per-channel LO rendition (tee in the same pipeline —
   DeckLink sub-devices are exclusive-open, never a second process) plus
-  player-side loss-driven switching. True simulcast/SFU (Ant Media, Janus)
-  is the deliberate back-pocket option, not the plan.
+  player-side loss-driven switching. Station-wide floating pool
+  `MAX_LO_RENDITIONS` (default 6): Settings rejects a 7th `LO_ENABLE=true`;
+  supervisor clamps deterministically (ascending channel id among
+  requesters). True simulcast/SFU (Ant Media, Janus) is the deliberate
+  back-pocket option, not the plan.
+- Channel slots `MAX_CHANNELS` (default 10, ids 0–9) are independent of
+  DeckLink `MAX_DEVICES` — SRT-only channels can use `@8`/`@9` without a
+  fake connector index.
 - Latency target ~200ms glass-to-glass on LAN; ~120ms is the physics floor
   for 1080i sources. Receiver hints (jitterBufferTarget/playoutDelayHint=0)
   are mandatory in any player.
@@ -116,19 +123,23 @@ specifically because this box can't get additional ports opened.
   Remaining before Phase 1 soak is formally "done" (hardware/operator on
   `dcwasof2nexvue01`): re-deploy (`setup.sh` + `nexvue-phase1-deploy-verify.sh`
   for Temperature schema/API/chart), then a clean 72h closeout window with
-  supervisor. Station-wide `MAX_DEVICES` lives in `/etc/nexvue/nexvue.env`.
+  supervisor. Station-wide `MAX_DEVICES` / `MAX_CHANNELS` /
+  `MAX_LO_RENDITIONS` live in `/etc/nexvue/nexvue.env`.
   Glass-to-glass latency photos remain deferred until on-site/bench access.
 - **Phase 1.5: implemented (`nexvue-supervisor.py`)** — persistent RTSP
- session with DeckLink/slate input switching ("NO SIGNAL" burn-in) so
- no-signal-at-boot serves a slate instead of a restart loop.
- `nexvue-encode@.service` ExecStart now execs the supervisor directly
- (`nexvue-encode.sh` stays as a standalone reference/debug pipeline, still
- covered by its own `test/test-pipeline-assembly.sh`). Architecture: one
- persistent `input-selector` each for video/audio with a permanent "slate"
- pad (videotestsrc+textoverlay / silent audiotestsrc) and a dynamically
- added/removed "DeckLink" pad — both sides normalize to identical caps so
- flipping `active-pad` never renegotiates the encoder or drops the
- RTSP/WHEP session. A pure-Python `StateMachine`
+  session with live-source/slate input switching ("NO SIGNAL" burn-in) so
+  no-signal-at-boot serves a slate instead of a restart loop.
+  Live source is `INPUT_TYPE=decklink` (default) or `INPUT_TYPE=srt`
+  (Haivision URI via `SRT_URI` — decode+re-encode into the same normalize /
+  HI(+LO) / RTSP path). `nexvue-encode@.service` ExecStart now execs the
+  supervisor directly (`nexvue-encode.sh` stays as a standalone
+  reference/debug DeckLink pipeline, still covered by its own
+  `test/test-pipeline-assembly.sh`). Architecture: one persistent
+  `input-selector` each for video/audio with a permanent "slate"
+  pad (videotestsrc+textoverlay / silent audiotestsrc) and a dynamically
+  added/removed live pad — both sides normalize to identical caps so
+  flipping `active-pad` never renegotiates the encoder or drops the
+  RTSP/WHEP session. A pure-Python `StateMachine`
  (LIVE/SLATE/RECOVERING, injectable clock, no GI dependency) drives the
  switch: LIVE→SLATE needs `SIGNAL_LOSS_DEBOUNCE_S` (default 15s — generous
  on purpose, hiccups already ride through as black frames) of continuous
@@ -230,7 +241,7 @@ specifically because this box can't get additional ports opened.
  LAN-trust — not for DMZ without auth.
  Services shows systemd enable state (`nexvue-ops-status.sh` prints
  `<is-active> <is-enabled>`) plus Enable/Disable (`set_enabled`, --now) and
- Start/Stop (`set_running`, runtime-only) toggles for `nexvue-encode@0-7`
+ Start/Stop (`set_running`, runtime-only) toggles for `nexvue-encode@0-9`
  ONLY (`nexvue-ops-enable.sh` verbs enable|disable|start|stop) — never the
  shared units. Disable and Stop both run `reset-failed` so a parked encoder
  doesn't show stale red "failed"; any disabled + not-running unit (even
