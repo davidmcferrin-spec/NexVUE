@@ -19,6 +19,7 @@
 
   const PREF_VISIBLE = "nexvue-vu-on";
   const PREF_SCALE = "nexvue-vu-scale";
+  const PREF_MUTED = "nexvue-audio-muted";
   const PREF_SOLO = "nexvue-vu-solo";
   const PREF_PROGRAM = "nexvue-audio-program";
   const PREF_PLAYOUT = "nexvue-audio-playout";
@@ -107,6 +108,22 @@
   function setScalePref(on) {
     try {
       localStorage.setItem(PREF_SCALE, on ? "1" : "0");
+    } catch { /* private mode */ }
+    return !!on;
+  }
+
+  /** User mute — element stays muted; Web Audio master gain is the real mute. */
+  function getMutedPref() {
+    try {
+      return localStorage.getItem(PREF_MUTED) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function setMutedPref(on) {
+    try {
+      localStorage.setItem(PREF_MUTED, on ? "1" : "0");
     } catch { /* private mode */ }
     return !!on;
   }
@@ -202,27 +219,28 @@
 .nexvue-vu-toolbar button:disabled { opacity: .35; cursor: not-allowed; }
 .nexvue-vu-meter-row {
   flex: 1; min-height: 0; display: flex; flex-direction: row;
-  align-items: stretch; gap: 4px; justify-content: flex-end;
+  align-items: stretch; gap: 3px; justify-content: flex-end;
+  width: max-content; max-width: 100%; margin-left: auto;
 }
 .nexvue-vu-scale {
-  position: relative; width: 26px; flex: 0 0 26px;
-  /* Match .nexvue-vu-ch: track flexes, label sits below (~11px). */
-  margin-bottom: 13px; pointer-events: none;
+  position: relative; width: 28px; flex: 0 0 28px;
+  /* Sit beside the meter tracks (labels are ~12px under the tracks). */
+  margin-bottom: 12px; pointer-events: none;
   color: var(--dim, #98a6b5); font-size: 8px; line-height: 1;
 }
 .nexvue-vu-scale[hidden] { display: none !important; }
 .nexvue-vu-scale-mark {
-  position: absolute; left: 0; right: 0; text-align: right;
+  position: absolute; left: 0; right: 2px; text-align: right;
   transform: translateY(50%);
   white-space: nowrap;
 }
 .nexvue-vu-scale-unit {
-  position: absolute; left: 0; right: 0; top: -11px;
+  position: absolute; left: 0; right: 2px; top: -10px;
   text-align: right; font-size: 7px; letter-spacing: .04em;
   color: var(--muted, #b0bbc8);
 }
 .nexvue-vu-bars {
-  flex: 1; min-height: 0; display: flex; flex-direction: row;
+  flex: 0 0 auto; min-height: 0; display: flex; flex-direction: row;
   align-items: stretch; gap: 3px; justify-content: flex-end;
 }
 .nexvue-vu.show-scale .nexvue-vu-track {
@@ -290,6 +308,9 @@
     const container = opts && opts.container;
     const video = opts && opts.video;
     if (!container || !video) return null;
+    const onListenChange = opts && typeof opts.onListenChange === "function"
+      ? opts.onListenChange
+      : null;
 
     const root = document.createElement("div");
     root.className = "nexvue-vu";
@@ -728,8 +749,22 @@
       setSolo(-1);
     });
 
+    let syncingMute = false;
     function keepElementMuted() {
-      if (!video.muted) video.muted = true;
+      if (syncingMute) return;
+      // Native video unmute → enable Web Audio listen (element stays muted).
+      if (!video.muted) {
+        listen = true;
+        setMutedPref(false);
+        if (masterGain) masterGain.gain.value = 1;
+        resume();
+        syncingMute = true;
+        video.muted = true;
+        syncingMute = false;
+        if (typeof onListenChange === "function") {
+          try { onListenChange(true); } catch { /* ignore */ }
+        }
+      }
     }
     video.addEventListener("volumechange", keepElementMuted);
 
@@ -758,14 +793,19 @@
         }
         buildGraph(stream);
       },
-      setListen(on) {
+      setListen(on, listenOpts) {
         listen = !!on;
+        const persist = !(listenOpts && listenOpts.persist === false);
+        if (persist) setMutedPref(!listen);
         if (masterGain) masterGain.gain.value = listen ? 1 : 0;
-        if (listen) {
-          video.muted = true;
-          resume();
+        // Element must stay muted — native controls unmute is remapped below.
+        video.muted = true;
+        if (listen) resume();
+        if (onListenChange) {
+          try { onListenChange(listen); } catch { /* ignore */ }
         }
       },
+      isListening: () => listen,
       setLayout(raw) {
         const next = layoutInfo(raw);
         if (next.id === layout.id) return;
@@ -807,12 +847,15 @@
     LAYOUTS,
     PREF_VISIBLE,
     PREF_SCALE,
+    PREF_MUTED,
     normalizeLayout,
     layoutInfo,
     getVisiblePref,
     setVisiblePref,
     getScalePref,
     setScalePref,
+    getMutedPref,
+    setMutedPref,
     getProgramPref,
     setProgramPref,
     getPlayoutPref,

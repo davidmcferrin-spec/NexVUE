@@ -540,7 +540,7 @@
     }
     pane.video.srcObject = null;
     if (pane.vu) {
-      pane.vu.setListen(false);
+      pane.vu.setListen(false, { persist: false });
       pane.vu.setStream(null);
     }
     pane.path = null;
@@ -676,7 +676,7 @@
       if (pane.vu && ev.streams[0]) {
         const layout = audioLayoutByPath[pane.base] || "stereo";
         pane.vu.setStream(ev.streams[0], layout);
-        pane.vu.setListen(audioPane === pane.index);
+        pane.vu.setListen(audioPane === pane.index, { persist: false });
       }
     };
     pc.onconnectionstatechange = () => {
@@ -739,7 +739,7 @@
     panes.forEach((p, i) => {
       p.el.classList.toggle("audio-active", i === index && !!p.base);
       p.video.muted = true;
-      if (p.vu) p.vu.setListen(i === index && !!p.base);
+      if (p.vu) p.vu.setListen(i === index && !!p.base, { persist: false });
     });
     if (index >= 0) NexVueVu.resume();
     resetRtcBaseline();

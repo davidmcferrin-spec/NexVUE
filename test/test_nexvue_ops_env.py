@@ -79,6 +79,14 @@ class TestApplyPatch(unittest.TestCase):
         with self.assertRaises(ValueError):
             mod.apply_patch(SAMPLE, {"DEVICE_NUMBER": "9"})
 
+    def test_audio_layout_editable(self):
+        out = mod.apply_patch(SAMPLE, {"AUDIO_LAYOUT": "51_sap"})
+        self.assertIn("AUDIO_LAYOUT=51_sap", out)
+        self.assertEqual(mod.sanitize_value("AUDIO_LAYOUT", "5.1"), "51")
+        self.assertEqual(mod.sanitize_value("AUDIO_CHANNELS", "4"), "4")
+        with self.assertRaises(ValueError):
+            mod.sanitize_value("AUDIO_LAYOUT", "dolby")
+
     def test_rejects_shell_metachar(self):
         with self.assertRaises(ValueError):
             mod.apply_patch(SAMPLE, {"EXTRA_ENC_ARGS": "x;rm"})

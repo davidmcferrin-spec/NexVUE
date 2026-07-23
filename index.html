@@ -239,6 +239,7 @@
   <button id="flip" class="tgl" title="Reflect top-bottom (inverted mounts)">Flip ↕</button>
   <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
   <button id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
+  <button id="mute" class="tgl" title="Mute audio (this browser only — Web Audio path)">Mute</button>
   <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip)">⛶ Fullscreen</button>
 </div>
 
@@ -333,16 +334,24 @@
   paintCaptions();
 
   // VU meters + per-channel solo (browser-local; video element stays muted).
+  const muteBtn = $("mute");
+  function paintMuteBtn() {
+    const muted = !vu || !vu.isListening();
+    muteBtn.classList.toggle("active", muted);
+    muteBtn.textContent = muted ? "Muted" : "Mute";
+  }
   const vu = NexVueVu.attach({
     container: videoWrap,
     video,
     listen: false,
     layout: "stereo",
+    onListenChange: () => paintMuteBtn(),
   });
   const vuBtn = $("vu");
   let vuOn = NexVueVu.getVisiblePref();
   vuBtn.classList.toggle("active", vuOn);
   if (vu) vu.setVisible(vuOn);
+  paintMuteBtn();
 
   // Auto-switch policy constants (mirror these in the Phase 2 portal player)
   const DOWN_LOSS = 0.03, DOWN_AFTER_S = 3;
@@ -534,9 +543,10 @@
     if (pc) { pc.close(); pc = null; }
     video.srcObject = null;
     if (vu) {
-      vu.setListen(false);
+      vu.setListen(false, { persist: false });
       vu.setStream(null);
     }
+    paintMuteBtn();
     currentPath = null;
     currentSessionId = null;
     prevBytes = 0; prevTs = 0;
@@ -584,8 +594,10 @@
       if (vu && ev.streams[0]) {
         const layout = audioLayoutByPath[currentBase] || "stereo";
         vu.setStream(ev.streams[0], layout);
-        vu.setListen(true);
+        // Default audible unless user previously chose Mute (this browser).
+        vu.setListen(!NexVueVu.getMutedPref());
         NexVueVu.resume();
+        paintMuteBtn();
       }
     };
     pc.onconnectionstatechange = () => {
@@ -900,6 +912,13 @@
     NexVueVu.setVisiblePref(vuOn);
     vuBtn.classList.toggle("active", vuOn);
     if (vu) vu.setVisible(vuOn);
+  });
+
+  muteBtn.addEventListener("click", () => {
+    if (!vu) return;
+    vu.setListen(!vu.isListening());
+    NexVueVu.resume();
+    paintMuteBtn();
   });
 
   // Fullscreen the WRAPPER (not the video element), so the video's inline

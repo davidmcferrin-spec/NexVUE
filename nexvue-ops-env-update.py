@@ -37,6 +37,7 @@ EDITABLE_KEYS = frozenset({
     "AUDIO_FRAME_MS",
     "AUDIO_BITRATE_BPS",
     "AUDIO_CHANNELS",
+    "AUDIO_LAYOUT",
     "DECKLINK_BUFFER_FRAMES",
     "DECKLINK_DROP_NO_SIGNAL_FRAMES",
     "VIDEO_ENCODER",
@@ -71,7 +72,8 @@ LO_FPS_ALLOWED = frozenset({"", "60000/1001", "30000/1001", "15000/1001"})
 LO_PRESET_ALLOWED = frozenset({"720p", "540p", "480p", "360p", "240p", "180p"})
 LO_TARGET_USAGE_ALLOWED = frozenset({"1", "2", "3", "4", "5", "6", "7"})
 AUDIO_FRAME_MS_ALLOWED = frozenset({"2", "5", "10", "20", "40", "60"})
-AUDIO_CHANNELS_ALLOWED = frozenset({"2", "8", "16"})
+AUDIO_CHANNELS_ALLOWED = frozenset({"2", "4", "6", "8"})
+AUDIO_LAYOUT_ALLOWED = frozenset({"stereo", "51", "stereo_sap", "51_sap"})
 DEINT_ALLOWED = frozenset({"all", "top"})
 VIDEO_ENCODER_ALLOWED = frozenset({"vah264enc", "x264enc"})
 BOOL_ALLOWED = frozenset({"true", "false"})
@@ -212,8 +214,25 @@ def sanitize_value(key: str, value: str) -> str:
         if value == "":
             return value
         if value not in AUDIO_CHANNELS_ALLOWED:
-            raise ValueError("AUDIO_CHANNELS must be 2, 8, or 16")
+            raise ValueError("AUDIO_CHANNELS must be 2, 4, 6, or 8")
         return value
+    if key == "AUDIO_LAYOUT":
+        if value == "":
+            return value
+        low = value.lower().replace("-", "_")
+        aliases = {
+            "5.1": "51",
+            "5_1": "51",
+            "surround": "51",
+            "sap": "stereo_sap",
+            "5.1_sap": "51_sap",
+            "5_1_sap": "51_sap",
+            "surround_sap": "51_sap",
+        }
+        low = aliases.get(low, low)
+        if low not in AUDIO_LAYOUT_ALLOWED:
+            raise ValueError("AUDIO_LAYOUT must be stereo, 51, stereo_sap, or 51_sap")
+        return low
     if key == "DECKLINK_BUFFER_FRAMES":
         return _require_int(key, value, lo=1, hi=16)
     if key == "DECKLINK_DROP_NO_SIGNAL_FRAMES":
