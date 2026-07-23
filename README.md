@@ -925,7 +925,9 @@ Services/Settings).
   `channels-example.env`). Player and Multiview show the alias when set;
   WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Settings page.
   `AUDIO_LAYOUT` (`stereo`|`51`|`stereo_sap`|`51_sap`) sets embeds: SAP is
-  always SDI 7+8; 5.1 is embeds 1–6. Legacy `AUDIO_CHANNELS` 2/4/6/8 still maps.
+  always SDI 7+8; 5.1 is embeds 1–6 (deinterleave of first six from an
+  8ch DeckLink open — not a bare audioconvert 8→6, which not-negotiates).
+  Legacy `AUDIO_CHANNELS` 2/4/6/8 still maps.
   Chromium is the best path for multi-channel WebRTC Opus; stereo is universal.
 - **Ops pages (Services / Settings)** call `nexvue-ops.php`, which uses
   allowlisted sudo wrappers under `/usr/local/bin/nexvue-ops-*` (sudoers drop-in

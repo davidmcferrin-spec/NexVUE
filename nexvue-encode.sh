@@ -303,24 +303,40 @@ if [ "${ENABLE_AUDIO}" = "true" ]; then
   # arrives. This is the standard GStreamer fix for that symptom.
   PIPELINE+=" ! audiorate"
   PIPELINE+=" ! audioconvert ! audioresample quality=${AUDIO_RESAMPLE_QUALITY}"
-  PIPELINE+=" ! audio/x-raw,rate=48000,channels=${DECKLINK_AUDIO_CHANNELS}"
   # Discrete Opus only (no Dolby). Remix embeds to the transport layout:
   # stereo_sap pulls SDI 1–2 + 7–8; 51 keeps 1–6; 51_sap keeps 1–8.
+  # first6 MUST deinterleave (not audioconvert 8→6): bare channel-count
+  # reduction has no mix matrix and fails not-negotiated on opusenc, which
+  # surfaces on decklinkaudiosrc and kills the pipeline during Signal lost
+  # before lock returns — stereo (2ch, no remix) survives the same window.
   case "${AUDIO_REMIX}" in
     stereo_sap)
+      PIPELINE+=" ! audio/x-raw,rate=48000,channels=${DECKLINK_AUDIO_CHANNELS}"
       PIPELINE+=" ! deinterleave name=adl"
       PIPELINE+=" interleave name=ali"
       PIPELINE+=" adl.src_0 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_0"
       PIPELINE+=" adl.src_1 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_1"
       PIPELINE+=" adl.src_6 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_2"
       PIPELINE+=" adl.src_7 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_3"
-      PIPELINE+=" ali. ! audio/x-raw,rate=48000,channels=${OPUS_CHANNELS}"
+      PIPELINE+=" ali. ! audioconvert"
+      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS}"
       ;;
     first6)
-      PIPELINE+=" ! audioconvert ! audio/x-raw,rate=48000,channels=${OPUS_CHANNELS}"
+      PIPELINE+=" ! audio/x-raw,rate=48000,channels=${DECKLINK_AUDIO_CHANNELS}"
+      PIPELINE+=" ! deinterleave name=adl"
+      PIPELINE+=" interleave name=ali"
+      PIPELINE+=" adl.src_0 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_0"
+      PIPELINE+=" adl.src_1 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_1"
+      PIPELINE+=" adl.src_2 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_2"
+      PIPELINE+=" adl.src_3 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_3"
+      PIPELINE+=" adl.src_4 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_4"
+      PIPELINE+=" adl.src_5 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_5"
+      PIPELINE+=" ali. ! audioconvert"
+      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS}"
       ;;
     none8|none)
-      PIPELINE+=" ! audioconvert ! audio/x-raw,rate=48000,channels=${OPUS_CHANNELS}"
+      PIPELINE+=" ! audioconvert"
+      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS}"
       ;;
   esac
   PIPELINE+=" ! opusenc bitrate=${AUDIO_BITRATE_BPS} frame-size=${AUDIO_FRAME_MS}"

@@ -200,7 +200,9 @@ specifically because this box can't get additional ports opened.
   (Web Audio on the WHEP MediaStream). Top-bar **VU** toggle (like CC)
   shows/hides the meter overlay (`localStorage.nexvue-vu-on`, default on).
   `AUDIO_LAYOUT` transports discrete
-  Opus only (stereo / 51 / stereo_sap / 51_sap; SAP = embeds 7+8). Per-browser
+  Opus only (stereo / 51 / stereo_sap / 51_sap; SAP = embeds 7+8; `51`
+  deinterleaves embeds 1–6 from an 8ch DeckLink open — bare audioconvert
+  8→6 not-negotiates and kills encode). Per-browser
   Main↔SAP and 5.1 stereo-fold vs discrete surround (`localStorage`) — never
   changes encode or other viewers.
 - Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +

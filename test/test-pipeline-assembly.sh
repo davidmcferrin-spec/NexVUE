@@ -137,17 +137,20 @@ DEVICE_NUMBER=0 CHANNEL_PATH=ch0 CAPTIONS_ENABLE=bogus expect_usage_64 "T19 acce
 # T20: AUDIO_LAYOUT discrete Opus (no stereo downmix / no Dolby)
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 run_encode)
 grep -q "decklinkaudiosrc device-number=0 channels=2" <<<"$out" || fail "T20 default stereo opens 2ch DeckLink"
-grep -q "audio/x-raw,rate=48000,channels=2" <<<"$out" || fail "T20 default Opus stereo"
+grep -q "audio/x-raw,format=S16LE,rate=48000,channels=2" <<<"$out" || fail "T20 default Opus stereo S16LE"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=51 run_encode)
 grep -q "decklinkaudiosrc device-number=0 channels=8" <<<"$out" || fail "T20 51 opens 8ch DeckLink"
-grep -q "audio/x-raw,rate=48000,channels=6" <<<"$out" || fail "T20 51 Opus is 6ch"
+grep -q "deinterleave name=adl" <<<"$out" || fail "T20 51 remix deinterleave"
+grep -q "adl.src_5" <<<"$out" || fail "T20 51 keeps embed 6"
+grep -q "adl.src_6" <<<"$out" && fail "T20 51 must not pull embed 7"
+grep -q "audio/x-raw,format=S16LE,rate=48000,channels=6" <<<"$out" || fail "T20 51 Opus is 6ch S16LE"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=stereo_sap run_encode)
 grep -q "deinterleave name=adl" <<<"$out" || fail "T20 stereo_sap remix deinterleave"
 grep -q "adl.src_6" <<<"$out" || fail "T20 stereo_sap pulls embed 7"
 grep -q "adl.src_7" <<<"$out" || fail "T20 stereo_sap pulls embed 8"
-grep -q "audio/x-raw,rate=48000,channels=4" <<<"$out" || fail "T20 stereo_sap Opus is 4ch"
+grep -q "audio/x-raw,format=S16LE,rate=48000,channels=4" <<<"$out" || fail "T20 stereo_sap Opus is 4ch S16LE"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=51_sap run_encode)
-grep -q "audio/x-raw,rate=48000,channels=8" <<<"$out" || fail "T20 51_sap Opus is 8ch"
+grep -q "audio/x-raw,format=S16LE,rate=48000,channels=8" <<<"$out" || fail "T20 51_sap Opus is 8ch S16LE"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_CHANNELS=6 run_encode)
 grep -q "channels=6" <<<"$out" || fail "T20 legacy AUDIO_CHANNELS=6 → 51"
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=bogus expect_usage_64 "T20 accepted bogus AUDIO_LAYOUT"
