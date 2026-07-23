@@ -317,7 +317,7 @@
         return;
       }
 
-# Prefer configured AUDIO_CHANNELS for bar count when the track has not
+// Prefer configured AUDIO_CHANNELS for bar count when the track has not
       // reported yet; once getSettings().channelCount is known, prefer that
       // so solo matches what the browser actually decoded.
       let detected = 0;
