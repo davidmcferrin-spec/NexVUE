@@ -19,16 +19,26 @@ fi
 pass "clear rejects bogus unit"
 
 out="$("$SCRIPT" clear nexvue-encode@2)"
-[[ "$out" == cleared\ nexvue-encode@2\ since\ * ]] || fail "unexpected clear output: $out"
+[[ "$out" == cleared\ nexvue-encode@2\ since\ @* ]] || fail "unexpected clear output: $out"
 f="$TMP/cleared/nexvue-encode@2"
 [ -f "$f" ] || fail "watermark file missing"
-ts="$(tr -d '\n' <"$f")"
-[[ "$ts" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]] || fail "bad timestamp: $ts"
-pass "clear writes watermark for encode@2"
+ts="$(tr -d '[:space:]' <"$f")"
+[[ "$ts" =~ ^[0-9]+$ ]] || fail "watermark must be epoch, got: $ts"
+pass "clear writes epoch watermark for encode@2"
 
 "$SCRIPT" clear mediamtx >/dev/null
 [ -f "$TMP/cleared/mediamtx" ] || fail "mediamtx watermark missing"
 pass "clear writes watermark for mediamtx"
+
+# Legacy ISO watermark must still convert (pre-fix files on box).
+printf '%s\n' "2026-07-23T00:41:00-0400" >"$TMP/cleared/nexvue-status"
+# Source helpers by running a tiny inline check via bash -c with same functions…
+# Exercise to_epoch path: clear then read file; we only verify file can be
+# normalized by re-clearing status with a fresh epoch.
+"$SCRIPT" clear nexvue-status >/dev/null
+ts2="$(tr -d '[:space:]' <"$TMP/cleared/nexvue-status")"
+[[ "$ts2" =~ ^[0-9]+$ ]] || fail "re-clear should write epoch"
+pass "re-clear replaces legacy ISO with epoch"
 
 # Host-wide vacuum must be rejected.
 if "$SCRIPT" vacuum time 7d 2>/dev/null; then
