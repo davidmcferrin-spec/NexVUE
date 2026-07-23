@@ -7,7 +7,8 @@
 <!--
   Dual / quad WHEP multiviewer for wall monitors and confidence checks.
   Defaults to LO (kinder when 2–4 sessions are open) with a global HI/LO
-  toggle. Only one pane is unmuted at a time — click a pane to hear it.
+  toggle. Only one pane is audible at a time — click a pane to hear it.
+  Per-channel VU meters + solo are browser-local (nexvue-vu.js).
   Reuses the same WHEP + latency-hint pattern as index.html.
 -->
 <script src="nexvue-ui.js"></script>
@@ -161,7 +162,7 @@
   }
   .pane-cc[hidden] { display: none; }
   .audio-badge {
-    position: absolute; top: 8px; right: 8px; font-size: 11px;
+    position: absolute; top: 8px; left: 8px; font-size: 11px;
     padding: 3px 8px; border-radius: 3px; background: var(--badge-bg);
     color: var(--acc); border: 1px solid var(--acc); display: none; z-index: 1;
   }
@@ -270,7 +271,7 @@
   </button>
   <div class="stats-panel" id="stats-panel">
     <div id="stats">
-      <div class="stat" tabindex="0" data-tip="Which pane the metrics below describe. Click a pane to unmute it and focus metrics on that session."><div class="k">Focus</div><div class="v" id="s-focus">—</div></div>
+      <div class="stat" tabindex="0" data-tip="Which pane the metrics below describe. Click a pane to hear it (AUDIO badge) and focus metrics on that session. VU solo is local to this browser."><div class="k">Focus</div><div class="v" id="s-focus">—</div></div>
       <div class="stat" tabindex="0" data-tip="Global HI/LO quality for all panes (Multiview has no per-pane auto-switch)."><div class="k">Rendition</div><div class="v" id="s-rend">—</div></div>
       <div class="stat" tabindex="0" data-tip="Frame size and frame rate of the focused pane as decoded by this browser."><div class="k">Resolution / FPS</div><div class="v" id="s-res">—</div></div>
       <div class="stat" tabindex="0" data-tip="Video data rate this browser is receiving for the focused pane only."><div class="k">My video bitrate</div><div class="v" id="s-vbr">—</div></div>
@@ -303,6 +304,7 @@
 
 <script src="nexvue-qr.js"></script>
 <script src="nexvue-captions.js"></script>
+<script src="nexvue-vu.js"></script>
 <script>
 "use strict";
 (() => {
@@ -321,7 +323,8 @@
 
   let layout = "quad";   // "dual" | "quad"
   let rendition = "lo";  // "hi" | "lo" — LO default for multi-session load
-  let audioPane = -1;    // index of unmuted pane, or -1
+  let audioPane = -1;    // index of listening pane, or -1
+  let audioChannelsByPath = {};
   let captionsOn = NexVueCaptions.getPref();
   const ccBtn = $("cc");
   ccBtn.classList.toggle("active", captionsOn);
@@ -437,6 +440,7 @@
     const select = el.querySelector("select");
     const statusEl = el.querySelector(".pane-status");
     const video = el.querySelector("video");
+    const videoBox = el.querySelector(".pane-video");
     const empty = el.querySelector(".pane-empty");
     const ccEl = el.querySelector(".pane-cc");
     const kickedEl = el.querySelector(".pane-kicked");
@@ -453,6 +457,7 @@
     const pane = {
       index, el, select, statusEl, video, empty, ccEl, kickedEl, kickedReasonEl,
       captionClient: null,
+      vu: null,
       lastCue: { text: "", clear: true, seq: 0, service: "CC1" },
       base: null, path: null, pc: null, sessionId: null,
       intentionalClose: false,
@@ -461,6 +466,12 @@
     pane.captionClient = NexVueCaptions.connect((cue) => {
       pane.lastCue = cue;
       NexVueCaptions.renderOverlay(pane.ccEl, pane.lastCue, captionsOn);
+    });
+    pane.vu = NexVueVu.attach({
+      container: videoBox,
+      video,
+      listen: false,
+      channels: 2,
     });
 
     select.addEventListener("change", () => {
@@ -478,6 +489,7 @@
       }
       pane.base = val;
       pane.captionClient.setChannel(val);
+      if (pane.vu) pane.vu.setChannels(audioChannelsByPath[val] || 2);
       empty.classList.add("hidden");
       acquireWakeLock();
       openPane(pane);
@@ -511,6 +523,10 @@
       pane.pc = null;
     }
     pane.video.srcObject = null;
+    if (pane.vu) {
+      pane.vu.setListen(false);
+      pane.vu.setStream(null);
+    }
     pane.path = null;
     pane.sessionId = null;
     pane.video.muted = true;
@@ -639,7 +655,13 @@
       try { ev.receiver.playoutDelayHint = 0; } catch (e) { /* unsupported */ }
       try { ev.receiver.jitterBufferTarget = 0; } catch (e) { /* unsupported */ }
       if (!pane.video.srcObject) pane.video.srcObject = ev.streams[0];
-      pane.video.muted = audioPane !== pane.index;
+      // Always mute the element — audible pane uses Web Audio (VU solo/mix).
+      pane.video.muted = true;
+      if (pane.vu && ev.streams[0]) {
+        const hint = audioChannelsByPath[pane.base] || 2;
+        pane.vu.setStream(ev.streams[0], hint);
+        pane.vu.setListen(audioPane === pane.index);
+      }
     };
     pc.onconnectionstatechange = () => {
       if (!pane.pc || pane.pc !== pc) return;
@@ -700,8 +722,10 @@
     audioPane = index;
     panes.forEach((p, i) => {
       p.el.classList.toggle("audio-active", i === index && !!p.base);
-      p.video.muted = i !== index;
+      p.video.muted = true;
+      if (p.vu) p.vu.setListen(i === index && !!p.base);
     });
+    if (index >= 0) NexVueVu.resume();
     resetRtcBaseline();
     updateFocusLabel();
   }
@@ -1065,18 +1089,22 @@
     sync();
   })();
 
-  // Friendly labels from CHANNEL_ALIAS when ops API is available.
+  // Friendly labels + AUDIO_CHANNELS hints from ops API when available.
   (async () => {
     try {
       const res = await fetch("nexvue-ops.php?action=aliases");
       const data = await res.json();
       if (!data || !data.ok || !data.aliases) return;
+      if (data.audio_channels) audioChannelsByPath = data.audio_channels;
       panes.forEach(p => {
         [...p.select.options].forEach(opt => {
           if (!opt.value) return;
           const label = data.aliases[opt.value] || data.aliases[opt.value.replace(/\D/g, "")];
           if (label) opt.textContent = label === opt.value ? opt.value : `${label} (${opt.value})`;
         });
+        if (p.base && p.vu) {
+          p.vu.setChannels(audioChannelsByPath[p.base] || 2);
+        }
       });
     } catch { /* optional */ }
   })();

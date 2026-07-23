@@ -133,4 +133,16 @@ grep -q "output-cc=true" <<<"$out" && fail "T19 output-cc should be absent"
 grep -q "ccextractor" <<<"$out" && fail "T19 ccextractor should be absent"
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 CAPTIONS_ENABLE=bogus expect_usage_64 "T19 accepted bogus CAPTIONS_ENABLE"
 
+# T20: AUDIO_CHANNELS stays discrete through Opus (no stereo downmix)
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 run_encode)
+grep -q "channels=2" <<<"$out" || fail "T20 default Opus channels=2"
+grep -q "decklinkaudiosrc device-number=0 channels=2" <<<"$out" || fail "T20 default DeckLink audio channels=2"
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_CHANNELS=6 run_encode)
+grep -q "decklinkaudiosrc device-number=0 channels=8" <<<"$out" || fail "T20 6-ch opens DeckLink 8-ch group"
+grep -q "audio/x-raw,rate=48000,channels=6" <<<"$out" || fail "T20 Opus keeps 6 discrete channels"
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_CHANNELS=8 run_encode)
+grep -q "audio/x-raw,rate=48000,channels=6" <<<"$out" || fail "T20 legacy AUDIO_CHANNELS=8 clamps Opus to 6"
+DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_CHANNELS=7 expect_usage_64 "T20 accepted AUDIO_CHANNELS=7"
+DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_CHANNELS=1 expect_usage_64 "T20 accepted AUDIO_CHANNELS=1"
+
 echo "All pipeline assembly tests passed."

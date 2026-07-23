@@ -52,7 +52,7 @@ REQUIRED_FILES=(
   nexvue-status-server.py nexvue-status.service
   nexvue-metrics-server.py nexvue-metrics.service
   nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js
-  nexvue-qr.js nexvue-ui.js nexvue-logo.php chart.umd.min.js
+  nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js
   metrics.html index.html multiview.html
   nexvue-ops.php services.html channels.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
@@ -250,6 +250,7 @@ if [ -d "${WEBROOT}" ]; then
                  "${REPO_DIR}/nexvue-captions.js" \
                  "${REPO_DIR}/nexvue-qr.js" \
                  "${REPO_DIR}/nexvue-ui.js" \
+                 "${REPO_DIR}/nexvue-vu.js" \
                  "${REPO_DIR}/nexvue-logo.php" \
                  "${REPO_DIR}/chart.umd.min.js" \
                  "${REPO_DIR}/services.html" \
@@ -258,7 +259,7 @@ if [ -d "${WEBROOT}" ]; then
                  "${WEBROOT}/"
   ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / captions / branding)"
 else
-  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
+  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
 fi
 
 step "5/5 decklink-status helper"
@@ -336,7 +337,7 @@ else
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 if [ -d "${WEBROOT}" ]; then
-  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php; do
+  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
   if [ -d /var/lib/nexvue/branding ]; then

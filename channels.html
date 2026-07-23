@@ -548,8 +548,8 @@
     AUDIO_CHANNELS: {
       label: "AUDIO_CHANNELS",
       type: "select",
-      options: ["2", "8", "16"],
-      tip: "SDI embedded audio channels to capture. Default 2 (one stereo pair). Blank = 2.",
+      options: ["2", "3", "4", "5", "6"],
+      tip: "Discrete Opus channels for Player/Multiview VU meters and per-channel solo (2–6). DeckLink opens 2 or the 8-ch group then converts to this count. Blank = 2. Solo is browser-local only.",
     },
     DECKLINK_BUFFER_FRAMES: {
       label: "DECKLINK_BUFFER_FRAMES",

@@ -753,6 +753,7 @@ if ($action === 'journal') {
 if ($action === 'aliases') {
     $aliases = [];
     $devices = [];
+    $audioChannels = [];
     foreach (list_channel_ids() as $id) {
         $r = sudo_run(['/usr/local/bin/nexvue-ops-env-read.sh', (string)$id]);
         if ($r['code'] !== 0) {
@@ -770,8 +771,24 @@ if ($action === 'aliases') {
         $aliases[(string)$id] = $label;
         $dev = $keys['DEVICE_NUMBER'] ?? (string)$id;
         $devices[$path] = is_numeric($dev) ? (int)$dev : $id;
+        // AUDIO_CHANNELS 2–6 for Player/Multiview VU meters (blank → 2).
+        $ac = isset($keys['AUDIO_CHANNELS']) ? trim((string)$keys['AUDIO_CHANNELS']) : '';
+        $acN = ($ac !== '' && ctype_digit($ac)) ? (int)$ac : 2;
+        if ($acN < 2) {
+            $acN = 2;
+        }
+        if ($acN > 6) {
+            $acN = 6;
+        }
+        $audioChannels[$path] = $acN;
+        $audioChannels[(string)$id] = $acN;
     }
-    echo json_encode(['ok' => true, 'aliases' => $aliases, 'devices' => $devices]);
+    echo json_encode([
+        'ok' => true,
+        'aliases' => $aliases,
+        'devices' => $devices,
+        'audio_channels' => $audioChannels,
+    ]);
     exit;
 }
 

@@ -293,11 +293,13 @@
 
 <script src="nexvue-qr.js"></script>
 <script src="nexvue-captions.js"></script>
+<script src="nexvue-vu.js"></script>
 <script>
 "use strict";
 (() => {
   const $ = id => document.getElementById(id);
   const video = $("video"), stateEl = $("state");
+  const videoWrap = document.querySelector(".videowrap");
 
   // ---- Session / quality state -------------------------------------------------
   let pc = null, statsTimer = null, apiTimer = null;
@@ -311,6 +313,8 @@
   let prevLost = 0, prevRecv = 0, haveLossBaseline = false;
   let badSeconds = 0, goodSeconds = 0, lastSwitchMs = 0;
   let prevApi = null;
+  // AUDIO_CHANNELS per chN from ops aliases (VU meter count hint).
+  let audioChannelsByPath = {};
 
   // Closed captions — side channel (nexvue-captions.php), not burned into video.
   const ccOverlay = $("cc-overlay");
@@ -326,6 +330,14 @@
   });
   ccBtn.classList.toggle("active", captionsOn);
   paintCaptions();
+
+  // VU meters + per-channel solo (browser-local; video element stays muted).
+  const vu = NexVueVu.attach({
+    container: videoWrap,
+    video,
+    listen: false,
+    channels: 2,
+  });
 
   // Auto-switch policy constants (mirror these in the Phase 2 portal player)
   const DOWN_LOSS = 0.03, DOWN_AFTER_S = 3;
@@ -516,6 +528,10 @@
     // openSession / teardown clear it when starting a new attempt or stopping.
     if (pc) { pc.close(); pc = null; }
     video.srcObject = null;
+    if (vu) {
+      vu.setListen(false);
+      vu.setStream(null);
+    }
     currentPath = null;
     currentSessionId = null;
     prevBytes = 0; prevTs = 0;
@@ -559,6 +575,13 @@
       try { ev.receiver.playoutDelayHint = 0; } catch (e) { /* unsupported */ }
       try { ev.receiver.jitterBufferTarget = 0; } catch (e) { /* unsupported */ }
       if (!video.srcObject) video.srcObject = ev.streams[0];
+      // VU takes the MediaStream for meters + optional solo; element stays muted.
+      if (vu && ev.streams[0]) {
+        const hint = audioChannelsByPath[currentBase] || 2;
+        vu.setStream(ev.streams[0], hint);
+        vu.setListen(true);
+        NexVueVu.resume();
+      }
     };
     pc.onconnectionstatechange = () => {
       if (!pc) return;
@@ -628,6 +651,8 @@
     if (qualityMode === "auto") rendition = "hi";
     if (rendition === "lo" && !loAvailable) rendition = "hi";
     captionClient.setChannel(base);
+    if (vu) vu.setChannels(audioChannelsByPath[base] || 2);
+    NexVueVu.resume();
     openSession(pathFor(rendition));
   }
 
@@ -921,6 +946,10 @@
       const data = await res.json();
       if (data && data.ok && data.aliases) aliases = data.aliases;
       if (data && data.ok && data.devices) devices = data.devices;
+      if (data && data.ok && data.audio_channels) {
+        audioChannelsByPath = data.audio_channels;
+        if (currentBase && vu) vu.setChannels(audioChannelsByPath[currentBase] || 2);
+      }
     } catch { /* ops API optional for bring-up */ }
     renderChannelButtons(aliases, devices);
   }

@@ -196,7 +196,10 @@ specifically because this box can't get additional ports opened.
   (Multiview shows the audio-focused pane).
   Top nav: Player / Multiview / Metrics / Services / Settings.
   Player/Multiview **CC** uses `nexvue-captions.js` + SSE (not WHEP text
-  tracks).
+  tracks). Player/Multiview **VU meters** + per-channel solo use
+  `nexvue-vu.js` (Web Audio on the WHEP MediaStream; prefs in
+  `localStorage.nexvue-vu-solo` — this browser only). Encode keeps
+  `AUDIO_CHANNELS` (2–6) discrete through Opus (no stereo downmix).
 - Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +
  allowlisted sudo wrappers. Logo upload/delete is www-data direct write
  (no sudo). Settings channel editor (and bulk edit) field labels show a

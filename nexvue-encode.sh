@@ -141,6 +141,21 @@ esac
 case "${AUDIO_FRAME_MS}" in 2|5|10|20|40|60) ;; *)
     log "ERROR: AUDIO_FRAME_MS must be one of 2,5,10,20,40,60"; exit 64 ;;
 esac
+case "${AUDIO_CHANNELS}" in
+  2|3|4|5|6) ;;
+  8|16)
+    # Legacy DeckLink group sizes — keep first 6 discrete for browser VU/solo.
+    log "WARN: AUDIO_CHANNELS=${AUDIO_CHANNELS} clamped to 6 for Opus/VU (was 8/16 DeckLink group)"
+    AUDIO_CHANNELS=6
+    ;;
+  *)
+    log "ERROR: AUDIO_CHANNELS must be 2-6 (or legacy 8/16 → 6), got '${AUDIO_CHANNELS}'"; exit 64 ;;
+esac
+if [ "${AUDIO_CHANNELS}" -eq 2 ]; then
+  DECKLINK_AUDIO_CHANNELS=2
+else
+  DECKLINK_AUDIO_CHANNELS=8
+fi
 if ! [[ "${AUDIO_RESAMPLE_QUALITY}" =~ ^([0-9]|10)$ ]]; then
     log "ERROR: AUDIO_RESAMPLE_QUALITY must be an integer 0-10, got '${AUDIO_RESAMPLE_QUALITY}'"; exit 64
 fi
@@ -264,7 +279,7 @@ else
 fi
 
 if [ "${ENABLE_AUDIO}" = "true" ]; then
-  PIPELINE+=" decklinkaudiosrc device-number=${DEVICE_NUMBER} channels=${AUDIO_CHANNELS}"
+  PIPELINE+=" decklinkaudiosrc device-number=${DEVICE_NUMBER} channels=${DECKLINK_AUDIO_CHANNELS}"
   PIPELINE+=" ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream"
   # audiorate enforces a gapless, constant-rate timeline: it inserts silence
   # for any gap (e.g. from the queue above leaking under momentary pressure)
@@ -274,7 +289,11 @@ if [ "${ENABLE_AUDIO}" = "true" ]; then
   # supposed to take real time, so it just drains the backlog as fast as it
   # arrives. This is the standard GStreamer fix for that symptom.
   PIPELINE+=" ! audiorate"
-  PIPELINE+=" ! audioconvert ! audioresample quality=${AUDIO_RESAMPLE_QUALITY} ! audio/x-raw,rate=48000,channels=2"
+  # Keep AUDIO_CHANNELS discrete through Opus (no stereo downmix) so the
+  # browser can meter and solo individual embeds. WebRTC multi-channel Opus
+  # is best on Chromium; stereo (2) is the universal baseline.
+  PIPELINE+=" ! audioconvert ! audioresample quality=${AUDIO_RESAMPLE_QUALITY}"
+  PIPELINE+=" ! audio/x-raw,rate=48000,channels=${AUDIO_CHANNELS}"
   PIPELINE+=" ! opusenc bitrate=${AUDIO_BITRATE_BPS} frame-size=${AUDIO_FRAME_MS}"
   if [ "${LO_ENABLE}" = "true" ]; then
     PIPELINE+=" ! tee name=at"

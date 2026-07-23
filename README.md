@@ -162,7 +162,7 @@ Drop the UI files into Apache's docroot (same place IT already serves on
 ```bash
 sudo cp index.html multiview.html metrics.html nexvue-metrics.php \
         nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js \
-        nexvue-ui.js nexvue-logo.php chart.umd.min.js \
+        nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js \
         services.html channels.html nexvue-ops.php /var/www/html/
 sudo install -d -m 750 -o www-data -g www-data /var/lib/nexvue/branding
 # if PHP isn't wired into Apache yet:
@@ -913,10 +913,16 @@ Services/Settings).
   Player / Multiview / Metrics / Services / Settings. Player and Multiview
   session metrics sit in a collapsed bottom drawer (`Session metrics`);
   Multiview focuses the audio-active pane. Hover a tile ~2s for
-  an explainer.
+  an explainer. **VU meters** (right edge of each video) show 2–6
+  discrete embeds from `AUDIO_CHANNELS`; click a bar to solo that channel
+  in **this browser only** (`localStorage.nexvue-vu-solo` via
+  `nexvue-vu.js`) — other viewers are unaffected. **ALL** restores the mix.
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Player and Multiview show the alias when set;
   WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Settings page.
+  `AUDIO_CHANNELS` (2–6) is passed through Opus without a stereo downmix so
+  VU/solo can isolate embeds; legacy 8/16 env values clamp to 6. Chromium is
+  the best path for multi-channel WebRTC Opus; stereo (2) is universal.
 - **Ops pages (Services / Settings)** call `nexvue-ops.php`, which uses
   allowlisted sudo wrappers under `/usr/local/bin/nexvue-ops-*` (sudoers drop-in
   `/etc/sudoers.d/nexvue-ops`). Channel saves write env files only; restart is an
