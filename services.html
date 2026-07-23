@@ -150,6 +150,7 @@
     <div class="log-bar">
       <button type="button" id="follow" class="active" title="Poll for new lines">Follow</button>
       <button type="button" id="clear-log">Clear view</button>
+      <button type="button" id="vacuum-journal" title="Rotate + vacuum systemd journal (host-wide; allowlisted presets)">Vacuum journal…</button>
       <button type="button" id="restart-unit" disabled>Restart unit…</button>
       <button type="button" id="restart-all-encoders" title="Restart every systemd-enabled nexvue-encode@N">Restart all encoders…</button>
       <button type="button" id="power-unit" disabled>Start/Stop…</button>
@@ -340,6 +341,55 @@
   document.getElementById("clear-log").addEventListener("click", () => {
     logEl.textContent = "";
     lastLine = "";
+  });
+  document.getElementById("vacuum-journal").addEventListener("click", async () => {
+    const choice = prompt(
+      "Vacuum systemd journal (host-wide — not per-unit).\n\n" +
+      "Keep last: 1d | 3d | 7d | 14d | 30d\n" +
+      "Or max size: 50M | 100M | 200M | 500M | 1G\n\n" +
+      "Enter a value (default 7d):",
+      "7d"
+    );
+    if (choice === null) return;
+    const raw = String(choice).trim();
+    if (!raw) return;
+    const timeOk = ["1d", "3d", "7d", "14d", "30d"];
+    const sizeOk = ["50M", "100M", "200M", "500M", "1G"];
+    let mode = "time";
+    let value = raw;
+    if (timeOk.includes(raw)) {
+      mode = "time";
+    } else if (sizeOk.includes(raw)) {
+      mode = "size";
+    } else {
+      alert("Invalid value. Use 1d/3d/7d/14d/30d or 50M/100M/200M/500M/1G.");
+      return;
+    }
+    const desc = mode === "time"
+      ? `keep journals from the last ${value}`
+      : `keep at most ${value} of journal data`;
+    if (!confirm(
+      `Rotate and vacuum the host systemd journal (${desc})?\n\n` +
+      "This affects all services on this box, not only NexVUE."
+    )) {
+      return;
+    }
+    try {
+      statusEl.textContent = "vacuuming journal…";
+      const data = await api("journal_vacuum", { mode, value });
+      const out = (data.output || "").trim();
+      statusEl.textContent = out
+        ? `vacuum ${mode}=${value}: ${out.split("\n").slice(-1)[0]}`
+        : `vacuum ${mode}=${value} done`;
+      if (out) {
+        logEl.textContent = (logEl.textContent ? logEl.textContent + "\n" : "") +
+          `--- journal vacuum ${mode}=${value} ---\n${out}\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    } catch (err) {
+      statusEl.textContent = "vacuum failed";
+      alert(err.message);
+    }
   });
   restartBtn.addEventListener("click", async () => {
     if (!selected) return;

@@ -7,9 +7,12 @@
  * (see nexvue-ops.sudoers / /usr/local/bin/nexvue-ops-*.sh).
  *
  * Actions (GET or POST JSON body):
- *   services | journal | channels_list | channel_get | channel_put
+ *   services | journal | journal_vacuum | channels_list | channel_get | channel_put
  *   | channels_bulk | restart | restart_encoders | set_enabled | set_running | aliases
  *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete
+ *
+ * journal_vacuum runs journalctl --rotate + --vacuum-time/--vacuum-size via
+ * nexvue-ops-journal.sh (host-wide systemd journal; allowlisted presets only).
  *
  * restart_encoders restarts every systemd-enabled nexvue-encode@N (parked /
  * disabled slots are left alone). set_enabled toggles systemd enable/disable
@@ -745,6 +748,47 @@ if ($action === 'journal') {
         fail(500, trim($r['stderr']) !== '' ? trim($r['stderr']) : 'journalctl failed');
     }
     echo json_encode(['ok' => true, 'unit' => $unit, 'log' => $r['stdout']]);
+    exit;
+}
+
+// ---- journal_vacuum (host-wide systemd journal; allowlisted presets) ----------
+
+if ($action === 'journal_vacuum') {
+    $mode = $body['mode'] ?? ($_GET['mode'] ?? 'time');
+    $value = $body['value'] ?? ($_GET['value'] ?? '7d');
+    if (!is_string($mode) || !is_string($value)) {
+        fail(400, 'mode and value required');
+    }
+    $mode = strtolower(trim($mode));
+    $value = trim($value);
+    $timeOk = ['1d', '3d', '7d', '14d', '30d'];
+    $sizeOk = ['50M', '100M', '200M', '500M', '1G'];
+    if ($mode === 'time') {
+        if (!in_array($value, $timeOk, true)) {
+            fail(400, 'value must be one of: ' . implode(' ', $timeOk));
+        }
+    } elseif ($mode === 'size') {
+        if (!in_array($value, $sizeOk, true)) {
+            fail(400, 'value must be one of: ' . implode(' ', $sizeOk));
+        }
+    } else {
+        fail(400, 'mode must be time or size');
+    }
+    $r = sudo_run([
+        '/usr/local/bin/nexvue-ops-journal.sh',
+        'vacuum',
+        $mode,
+        $value,
+    ]);
+    if ($r['code'] !== 0) {
+        fail(500, trim($r['stderr']) !== '' ? trim($r['stderr']) : 'journal vacuum failed');
+    }
+    echo json_encode([
+        'ok' => true,
+        'mode' => $mode,
+        'value' => $value,
+        'output' => trim($r['stdout'] . "\n" . $r['stderr']),
+    ]);
     exit;
 }
 
