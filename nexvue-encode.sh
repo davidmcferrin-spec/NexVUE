@@ -61,7 +61,10 @@ BITRATE_KBPS="$(strip_inline "${BITRATE_KBPS:-5000}")"
 GOP_FRAMES="$(strip_inline "${GOP_FRAMES:-60}")"
 ENABLE_AUDIO="$(strip_inline "${ENABLE_AUDIO:-true}")"
 AUDIO_BITRATE_BPS="$(strip_inline "${AUDIO_BITRATE_BPS:-128000}")"
-AUDIO_CHANNELS="$(strip_inline "${AUDIO_CHANNELS:-2}")"
+AUDIO_CHANNELS="$(strip_inline "${AUDIO_CHANNELS:-}")"
+# Layout: stereo | 51 | stereo_sap | 51_sap (SAP = SDI embeds 7+8).
+# Blank AUDIO_LAYOUT falls back to AUDIO_CHANNELS legacy (2→stereo, 6→51, 4→stereo_sap, 8/16→51_sap).
+AUDIO_LAYOUT="$(strip_inline "${AUDIO_LAYOUT:-}")"
 AUDIO_FRAME_MS="$(strip_inline "${AUDIO_FRAME_MS:-10}")"
 # Audio queue depth in buffers. 16 (the old default) is only ~160-320ms of
 # headroom at typical Opus frame sizes — thin against any transient stall
@@ -141,21 +144,31 @@ esac
 case "${AUDIO_FRAME_MS}" in 2|5|10|20|40|60) ;; *)
     log "ERROR: AUDIO_FRAME_MS must be one of 2,5,10,20,40,60"; exit 64 ;;
 esac
-case "${AUDIO_CHANNELS}" in
-  2|3|4|5|6) ;;
-  8|16)
-    # Legacy DeckLink group sizes — keep first 6 discrete for browser VU/solo.
-    log "WARN: AUDIO_CHANNELS=${AUDIO_CHANNELS} clamped to 6 for Opus/VU (was 8/16 DeckLink group)"
-    AUDIO_CHANNELS=6
-    ;;
-  *)
-    log "ERROR: AUDIO_CHANNELS must be 2-6 (or legacy 8/16 → 6), got '${AUDIO_CHANNELS}'"; exit 64 ;;
-esac
-if [ "${AUDIO_CHANNELS}" -eq 2 ]; then
-  DECKLINK_AUDIO_CHANNELS=2
-else
-  DECKLINK_AUDIO_CHANNELS=8
+# Resolve AUDIO_LAYOUT (preferred) or legacy AUDIO_CHANNELS → layout + Opus channel count.
+# Transport is discrete Opus only (no Dolby). Channel order after remix:
+#   stereo:      L R                         (2)
+#   51:          L R C LFE Ls Rs              (6)  — SDI embeds 1–6
+#   stereo_sap:  L R SAP_L SAP_R              (4)  — embeds 1–2 + 7–8
+#   51_sap:      L R C LFE Ls Rs SAP_L SAP_R  (8)  — embeds 1–8
+if [ -z "${AUDIO_LAYOUT}" ]; then
+  case "${AUDIO_CHANNELS}" in
+    ""|2) AUDIO_LAYOUT=stereo ;;
+    4) AUDIO_LAYOUT=stereo_sap ;;
+    3|5|6) AUDIO_LAYOUT=51 ;;
+    8|16) AUDIO_LAYOUT=51_sap ;;
+    *)
+      log "ERROR: AUDIO_CHANNELS '${AUDIO_CHANNELS}' needs AUDIO_LAYOUT=stereo|51|stereo_sap|51_sap"; exit 64 ;;
+  esac
 fi
+case "${AUDIO_LAYOUT}" in
+  stereo|2.0) AUDIO_LAYOUT=stereo; OPUS_CHANNELS=2; DECKLINK_AUDIO_CHANNELS=2; AUDIO_REMIX=none ;;
+  51|5.1|surround) AUDIO_LAYOUT=51; OPUS_CHANNELS=6; DECKLINK_AUDIO_CHANNELS=8; AUDIO_REMIX=first6 ;;
+  stereo_sap|sap) AUDIO_LAYOUT=stereo_sap; OPUS_CHANNELS=4; DECKLINK_AUDIO_CHANNELS=8; AUDIO_REMIX=stereo_sap ;;
+  51_sap|5.1_sap|surround_sap) AUDIO_LAYOUT=51_sap; OPUS_CHANNELS=8; DECKLINK_AUDIO_CHANNELS=8; AUDIO_REMIX=none8 ;;
+  *)
+    log "ERROR: AUDIO_LAYOUT must be stereo|51|stereo_sap|51_sap, got '${AUDIO_LAYOUT}'"; exit 64 ;;
+esac
+AUDIO_CHANNELS="${OPUS_CHANNELS}"
 if ! [[ "${AUDIO_RESAMPLE_QUALITY}" =~ ^([0-9]|10)$ ]]; then
     log "ERROR: AUDIO_RESAMPLE_QUALITY must be an integer 0-10, got '${AUDIO_RESAMPLE_QUALITY}'"; exit 64
 fi
@@ -289,11 +302,27 @@ if [ "${ENABLE_AUDIO}" = "true" ]; then
   # supposed to take real time, so it just drains the backlog as fast as it
   # arrives. This is the standard GStreamer fix for that symptom.
   PIPELINE+=" ! audiorate"
-  # Keep AUDIO_CHANNELS discrete through Opus (no stereo downmix) so the
-  # browser can meter and solo individual embeds. WebRTC multi-channel Opus
-  # is best on Chromium; stereo (2) is the universal baseline.
   PIPELINE+=" ! audioconvert ! audioresample quality=${AUDIO_RESAMPLE_QUALITY}"
-  PIPELINE+=" ! audio/x-raw,rate=48000,channels=${AUDIO_CHANNELS}"
+  PIPELINE+=" ! audio/x-raw,rate=48000,channels=${DECKLINK_AUDIO_CHANNELS}"
+  # Discrete Opus only (no Dolby). Remix embeds to the transport layout:
+  # stereo_sap pulls SDI 1–2 + 7–8; 51 keeps 1–6; 51_sap keeps 1–8.
+  case "${AUDIO_REMIX}" in
+    stereo_sap)
+      PIPELINE+=" ! deinterleave name=adl"
+      PIPELINE+=" interleave name=ali"
+      PIPELINE+=" adl.src_0 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_0"
+      PIPELINE+=" adl.src_1 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_1"
+      PIPELINE+=" adl.src_6 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_2"
+      PIPELINE+=" adl.src_7 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_3"
+      PIPELINE+=" ali. ! audio/x-raw,rate=48000,channels=${OPUS_CHANNELS}"
+      ;;
+    first6)
+      PIPELINE+=" ! audioconvert ! audio/x-raw,rate=48000,channels=${OPUS_CHANNELS}"
+      ;;
+    none8|none)
+      PIPELINE+=" ! audioconvert ! audio/x-raw,rate=48000,channels=${OPUS_CHANNELS}"
+      ;;
+  esac
   PIPELINE+=" ! opusenc bitrate=${AUDIO_BITRATE_BPS} frame-size=${AUDIO_FRAME_MS}"
   if [ "${LO_ENABLE}" = "true" ]; then
     PIPELINE+=" ! tee name=at"
@@ -317,7 +346,7 @@ if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
   PIPELINE+=" ! filesink location=${CAPTIONS_FIFO} buffer-mode=unbuffered sync=false append=false"
 fi
 
-log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) audio=${ENABLE_AUDIO} captions=${CAPTIONS_ACTIVE} enc=${VIDEO_ENCODER}"
+log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) audio=${ENABLE_AUDIO} layout=${AUDIO_LAYOUT}(${OPUS_CHANNELS}ch) captions=${CAPTIONS_ACTIVE} enc=${VIDEO_ENCODER}"
 log "publishing HI to ${RTSP_URL}$([ "${LO_ENABLE}" = "true" ] && echo ", LO to ${LO_RTSP_URL}")"
 
 # Intentional word-splitting: PIPELINE is a gst-launch description whose

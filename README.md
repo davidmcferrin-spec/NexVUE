@@ -913,16 +913,17 @@ Services/Settings).
   Player / Multiview / Metrics / Services / Settings. Player and Multiview
   session metrics sit in a collapsed bottom drawer (`Session metrics`);
   Multiview focuses the audio-active pane. Hover a tile ~2s for
-  an explainer. **VU meters** (right edge of each video) show 2–6
-  discrete embeds from `AUDIO_CHANNELS`; click a bar to solo that channel
-  in **this browser only** (`localStorage.nexvue-vu-solo` via
-  `nexvue-vu.js`) — other viewers are unaffected. **ALL** restores the mix.
+  an explainer. **VU meters** (right edge) follow channel `AUDIO_LAYOUT`
+  (stereo / 5.1 / stereo+SAP / 5.1+SAP). Toolbar: **Main**/**SAP**,
+  **St** (5.1→stereo fold) / **5.1** (discrete surround to the PC), plus
+  engineering solo — all **this browser only** (`nexvue-vu.js` localStorage).
+  Transport is discrete Opus only (no Dolby).
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Player and Multiview show the alias when set;
   WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Settings page.
-  `AUDIO_CHANNELS` (2–6) is passed through Opus without a stereo downmix so
-  VU/solo can isolate embeds; legacy 8/16 env values clamp to 6. Chromium is
-  the best path for multi-channel WebRTC Opus; stereo (2) is universal.
+  `AUDIO_LAYOUT` (`stereo`|`51`|`stereo_sap`|`51_sap`) sets embeds: SAP is
+  always SDI 7+8; 5.1 is embeds 1–6. Legacy `AUDIO_CHANNELS` 2/4/6/8 still maps.
+  Chromium is the best path for multi-channel WebRTC Opus; stereo is universal.
 - **Ops pages (Services / Settings)** call `nexvue-ops.php`, which uses
   allowlisted sudo wrappers under `/usr/local/bin/nexvue-ops-*` (sudoers drop-in
   `/etc/sudoers.d/nexvue-ops`). Channel saves write env files only; restart is an

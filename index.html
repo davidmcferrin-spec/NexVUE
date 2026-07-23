@@ -238,6 +238,7 @@
   <button id="mirror" class="tgl" title="Reflect left-right (confidence monitor)">Mirror ↔</button>
   <button id="flip" class="tgl" title="Reflect top-bottom (inverted mounts)">Flip ↕</button>
   <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
+  <button id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
   <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip)">⛶ Fullscreen</button>
 </div>
 
@@ -313,8 +314,8 @@
   let prevLost = 0, prevRecv = 0, haveLossBaseline = false;
   let badSeconds = 0, goodSeconds = 0, lastSwitchMs = 0;
   let prevApi = null;
-  // AUDIO_CHANNELS per chN from ops aliases (VU meter count hint).
-  let audioChannelsByPath = {};
+  // AUDIO_LAYOUT per chN from ops aliases (VU / Main-SAP / St-5.1).
+  let audioLayoutByPath = {};
 
   // Closed captions — side channel (nexvue-captions.php), not burned into video.
   const ccOverlay = $("cc-overlay");
@@ -336,8 +337,12 @@
     container: videoWrap,
     video,
     listen: false,
-    channels: 2,
+    layout: "stereo",
   });
+  const vuBtn = $("vu");
+  let vuOn = NexVueVu.getVisiblePref();
+  vuBtn.classList.toggle("active", vuOn);
+  if (vu) vu.setVisible(vuOn);
 
   // Auto-switch policy constants (mirror these in the Phase 2 portal player)
   const DOWN_LOSS = 0.03, DOWN_AFTER_S = 3;
@@ -577,8 +582,8 @@
       if (!video.srcObject) video.srcObject = ev.streams[0];
       // VU takes the MediaStream for meters + optional solo; element stays muted.
       if (vu && ev.streams[0]) {
-        const hint = audioChannelsByPath[currentBase] || 2;
-        vu.setStream(ev.streams[0], hint);
+        const layout = audioLayoutByPath[currentBase] || "stereo";
+        vu.setStream(ev.streams[0], layout);
         vu.setListen(true);
         NexVueVu.resume();
       }
@@ -651,7 +656,7 @@
     if (qualityMode === "auto") rendition = "hi";
     if (rendition === "lo" && !loAvailable) rendition = "hi";
     captionClient.setChannel(base);
-    if (vu) vu.setChannels(audioChannelsByPath[base] || 2);
+    if (vu) vu.setLayout(audioLayoutByPath[base] || "stereo");
     NexVueVu.resume();
     openSession(pathFor(rendition));
   }
@@ -890,6 +895,13 @@
     paintCaptions();
   });
 
+  vuBtn.addEventListener("click", () => {
+    vuOn = !vuOn;
+    NexVueVu.setVisiblePref(vuOn);
+    vuBtn.classList.toggle("active", vuOn);
+    if (vu) vu.setVisible(vuOn);
+  });
+
   // Fullscreen the WRAPPER (not the video element), so the video's inline
   // transform is never overridden by the browser's fullscreen video styling.
   const wrap = document.querySelector(".videowrap");
@@ -946,9 +958,17 @@
       const data = await res.json();
       if (data && data.ok && data.aliases) aliases = data.aliases;
       if (data && data.ok && data.devices) devices = data.devices;
-      if (data && data.ok && data.audio_channels) {
-        audioChannelsByPath = data.audio_channels;
-        if (currentBase && vu) vu.setChannels(audioChannelsByPath[currentBase] || 2);
+      if (data && data.ok && data.audio_layouts) {
+        audioLayoutByPath = data.audio_layouts;
+        if (currentBase && vu) vu.setLayout(audioLayoutByPath[currentBase] || "stereo");
+      } else if (data && data.ok && data.audio_channels) {
+        // Older ops without audio_layouts.
+        const ac = data.audio_channels;
+        audioLayoutByPath = {};
+        Object.keys(ac).forEach((k) => {
+          audioLayoutByPath[k] = NexVueVu.normalizeLayout(ac[k]);
+        });
+        if (currentBase && vu) vu.setLayout(audioLayoutByPath[currentBase] || "stereo");
       }
     } catch { /* ops API optional for bring-up */ }
     renderChannelButtons(aliases, devices);

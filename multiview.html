@@ -254,6 +254,7 @@
   <button id="q-hi" class="q">HI</button>
   <button id="q-lo" class="q active">LO</button>
   <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
+  <button id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
   <button id="fs" title="Fullscreen multiview">⛶ Fullscreen</button>
   <span id="state">idle</span>
 </div>
@@ -324,14 +325,22 @@
   let layout = "quad";   // "dual" | "quad"
   let rendition = "lo";  // "hi" | "lo" — LO default for multi-session load
   let audioPane = -1;    // index of listening pane, or -1
-  let audioChannelsByPath = {};
+  let audioLayoutByPath = {};
   let captionsOn = NexVueCaptions.getPref();
   const ccBtn = $("cc");
+  const vuBtn = $("vu");
+  let vuOn = NexVueVu.getVisiblePref();
   ccBtn.classList.toggle("active", captionsOn);
+  vuBtn.classList.toggle("active", vuOn);
   function paintAllCaptions() {
     for (const p of panes) {
       if (!p || !p.ccEl) continue;
       NexVueCaptions.renderOverlay(p.ccEl, p.lastCue || { clear: true }, captionsOn);
+    }
+  }
+  function applyVuVisible() {
+    for (const p of panes) {
+      if (p && p.vu) p.vu.setVisible(vuOn);
     }
   }
   ccBtn.addEventListener("click", () => {
@@ -339,6 +348,12 @@
     NexVueCaptions.setPref(captionsOn);
     ccBtn.classList.toggle("active", captionsOn);
     paintAllCaptions();
+  });
+  vuBtn.addEventListener("click", () => {
+    vuOn = !vuOn;
+    NexVueVu.setVisiblePref(vuOn);
+    vuBtn.classList.toggle("active", vuOn);
+    applyVuVisible();
   });
 
   // Session metrics for the focused pane (audio-active, else first connected).
@@ -471,7 +486,8 @@
       container: videoBox,
       video,
       listen: false,
-      channels: 2,
+      layout: "stereo",
+      visible: vuOn,
     });
 
     select.addEventListener("change", () => {
@@ -489,7 +505,7 @@
       }
       pane.base = val;
       pane.captionClient.setChannel(val);
-      if (pane.vu) pane.vu.setChannels(audioChannelsByPath[val] || 2);
+      if (pane.vu) pane.vu.setLayout(audioLayoutByPath[val] || "stereo");
       empty.classList.add("hidden");
       acquireWakeLock();
       openPane(pane);
@@ -658,8 +674,8 @@
       // Always mute the element — audible pane uses Web Audio (VU solo/mix).
       pane.video.muted = true;
       if (pane.vu && ev.streams[0]) {
-        const hint = audioChannelsByPath[pane.base] || 2;
-        pane.vu.setStream(ev.streams[0], hint);
+        const layout = audioLayoutByPath[pane.base] || "stereo";
+        pane.vu.setStream(ev.streams[0], layout);
         pane.vu.setListen(audioPane === pane.index);
       }
     };
@@ -1095,7 +1111,14 @@
       const res = await fetch("nexvue-ops.php?action=aliases");
       const data = await res.json();
       if (!data || !data.ok || !data.aliases) return;
-      if (data.audio_channels) audioChannelsByPath = data.audio_channels;
+      if (data.audio_layouts) {
+        audioLayoutByPath = data.audio_layouts;
+      } else if (data.audio_channels) {
+        audioLayoutByPath = {};
+        Object.keys(data.audio_channels).forEach((k) => {
+          audioLayoutByPath[k] = NexVueVu.normalizeLayout(data.audio_channels[k]);
+        });
+      }
       panes.forEach(p => {
         [...p.select.options].forEach(opt => {
           if (!opt.value) return;
@@ -1103,7 +1126,7 @@
           if (label) opt.textContent = label === opt.value ? opt.value : `${label} (${opt.value})`;
         });
         if (p.base && p.vu) {
-          p.vu.setChannels(audioChannelsByPath[p.base] || 2);
+          p.vu.setLayout(audioLayoutByPath[p.base] || "stereo");
         }
       });
     } catch { /* optional */ }

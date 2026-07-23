@@ -134,15 +134,22 @@ grep -q "ccextractor" <<<"$out" && fail "T19 ccextractor should be absent"
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 CAPTIONS_ENABLE=bogus expect_usage_64 "T19 accepted bogus CAPTIONS_ENABLE"
 
 # T20: AUDIO_CHANNELS stays discrete through Opus (no stereo downmix)
+# T20: AUDIO_LAYOUT discrete Opus (no stereo downmix / no Dolby)
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 run_encode)
-grep -q "channels=2" <<<"$out" || fail "T20 default Opus channels=2"
-grep -q "decklinkaudiosrc device-number=0 channels=2" <<<"$out" || fail "T20 default DeckLink audio channels=2"
+grep -q "decklinkaudiosrc device-number=0 channels=2" <<<"$out" || fail "T20 default stereo opens 2ch DeckLink"
+grep -q "audio/x-raw,rate=48000,channels=2" <<<"$out" || fail "T20 default Opus stereo"
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=51 run_encode)
+grep -q "decklinkaudiosrc device-number=0 channels=8" <<<"$out" || fail "T20 51 opens 8ch DeckLink"
+grep -q "audio/x-raw,rate=48000,channels=6" <<<"$out" || fail "T20 51 Opus is 6ch"
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=stereo_sap run_encode)
+grep -q "deinterleave name=adl" <<<"$out" || fail "T20 stereo_sap remix deinterleave"
+grep -q "adl.src_6" <<<"$out" || fail "T20 stereo_sap pulls embed 7"
+grep -q "adl.src_7" <<<"$out" || fail "T20 stereo_sap pulls embed 8"
+grep -q "audio/x-raw,rate=48000,channels=4" <<<"$out" || fail "T20 stereo_sap Opus is 4ch"
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=51_sap run_encode)
+grep -q "audio/x-raw,rate=48000,channels=8" <<<"$out" || fail "T20 51_sap Opus is 8ch"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_CHANNELS=6 run_encode)
-grep -q "decklinkaudiosrc device-number=0 channels=8" <<<"$out" || fail "T20 6-ch opens DeckLink 8-ch group"
-grep -q "audio/x-raw,rate=48000,channels=6" <<<"$out" || fail "T20 Opus keeps 6 discrete channels"
-out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_CHANNELS=8 run_encode)
-grep -q "audio/x-raw,rate=48000,channels=6" <<<"$out" || fail "T20 legacy AUDIO_CHANNELS=8 clamps Opus to 6"
-DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_CHANNELS=7 expect_usage_64 "T20 accepted AUDIO_CHANNELS=7"
-DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_CHANNELS=1 expect_usage_64 "T20 accepted AUDIO_CHANNELS=1"
+grep -q "channels=6" <<<"$out" || fail "T20 legacy AUDIO_CHANNELS=6 → 51"
+DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=bogus expect_usage_64 "T20 accepted bogus AUDIO_LAYOUT"
 
 echo "All pipeline assembly tests passed."

@@ -1,31 +1,142 @@
 /**
- * nexvue-vu.js — shared Web-Audio VU meters + per-channel solo for Player / Multiview.
+ * nexvue-vu.js — shared Web-Audio VU + program/playout for Player / Multiview.
  *
- * Meters and solo are entirely client-side (this browser only). Solo never
- * changes the encode or other viewers. Prefs live in localStorage.
+ * Transport is discrete Opus only (no Dolby). Layouts from the edge:
+ *   stereo      L R                         (2)
+ *   51          L R C LFE Ls Rs              (6)
+ *   stereo_sap  L R SAP_L SAP_R              (4)  — SAP = SDI embeds 7+8
+ *   51_sap      L R C LFE Ls Rs SAP_L SAP_R  (8)
  *
- * Audio is taken from the WebRTC MediaStream (not the <video> element) so
- * muted panes still meter. When listening, the <video> stays muted and
- * playback goes through ChannelSplitter → per-channel Gain → Merger → dest.
+ * Per-browser prefs (localStorage) never change encode or other viewers:
+ *   nexvue-vu-on          1 | 0               (show/hide meter overlay)
+ *   nexvue-vu-scale       1 | 0               (show dBFS scale beside meters)
+ *   nexvue-audio-program  main | sap
+ *   nexvue-audio-playout  stereo | surround   (5.1 → stereo mixdown vs discrete)
+ *   nexvue-vu-solo        -1 | channel index  (engineering solo)
  */
 (function (global) {
   "use strict";
 
-  const PREF_SOLO = "nexvue-vu-solo"; // "-1" = mix all, "0".."5" = solo that index
-  const MIN_CH = 2;
-  const MAX_CH = 6;
+  const PREF_VISIBLE = "nexvue-vu-on";
+  const PREF_SCALE = "nexvue-vu-scale";
+  const PREF_SOLO = "nexvue-vu-solo";
+  const PREF_PROGRAM = "nexvue-audio-program";
+  const PREF_PLAYOUT = "nexvue-audio-playout";
+  const MAX_CH = 8;
+  // dBFS marks for the optional scale (matches heightFromDb −60…0 → 0…100%).
+  const SCALE_MARKS_DB = [0, -6, -12, -20, -30, -40, -60];
+
   const FFT = 2048;
   const SMOOTH = 0.3;
-  // Peak ballistics (approx broadcast VU / PPM feel).
   const ATTACK = 0.35;
   const RELEASE = 0.06;
+  // ITU-ish fold for 5.1 → stereo (C/Ls/Rs −3 dB, LFE −6 dB).
+  const MIX_C = 0.707;
+  const MIX_S = 0.707;
+  const MIX_LFE = 0.5;
+
+  const LAYOUTS = {
+    stereo: {
+      id: "stereo", channels: 2, has51: false, hasSap: false,
+      labels: ["L", "R"],
+      main: [0, 1], sap: null,
+    },
+    "51": {
+      id: "51", channels: 6, has51: true, hasSap: false,
+      labels: ["L", "R", "C", "LFE", "Ls", "Rs"],
+      main: [0, 1, 2, 3, 4, 5], sap: null,
+    },
+    stereo_sap: {
+      id: "stereo_sap", channels: 4, has51: false, hasSap: true,
+      labels: ["L", "R", "SAPL", "SAPR"],
+      main: [0, 1], sap: [2, 3],
+    },
+    "51_sap": {
+      id: "51_sap", channels: 8, has51: true, hasSap: true,
+      labels: ["L", "R", "C", "LFE", "Ls", "Rs", "SAPL", "SAPR"],
+      main: [0, 1, 2, 3, 4, 5], sap: [6, 7],
+    },
+  };
 
   let sharedCtx = null;
 
-  function clampChannels(n) {
-    const v = n | 0;
-    if (v < 1) return MIN_CH;
-    return Math.min(MAX_CH, Math.max(1, v));
+  function normalizeLayout(raw) {
+    const s = String(raw || "stereo").toLowerCase().replace(/-/g, "_");
+    if (s === "5.1" || s === "surround") return "51";
+    if (s === "5.1_sap" || s === "surround_sap") return "51_sap";
+    if (s === "sap") return "stereo_sap";
+    if (LAYOUTS[s]) return s;
+    // Legacy numeric AUDIO_CHANNELS
+    const n = parseInt(s, 10);
+    if (n === 2) return "stereo";
+    if (n === 4) return "stereo_sap";
+    if (n === 6 || n === 3 || n === 5) return "51";
+    if (n === 8 || n === 16) return "51_sap";
+    return "stereo";
+  }
+
+  function layoutInfo(raw) {
+    return LAYOUTS[normalizeLayout(raw)] || LAYOUTS.stereo;
+  }
+
+  /** Default on — hide only when user explicitly turns VU off. */
+  function getVisiblePref() {
+    try {
+      return localStorage.getItem(PREF_VISIBLE) !== "0";
+    } catch {
+      return true;
+    }
+  }
+
+  function setVisiblePref(on) {
+    try {
+      localStorage.setItem(PREF_VISIBLE, on ? "1" : "0");
+    } catch { /* private mode */ }
+    return !!on;
+  }
+
+  /** Default off — scale is optional clutter for confidence monitors. */
+  function getScalePref() {
+    try {
+      return localStorage.getItem(PREF_SCALE) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function setScalePref(on) {
+    try {
+      localStorage.setItem(PREF_SCALE, on ? "1" : "0");
+    } catch { /* private mode */ }
+    return !!on;
+  }
+
+  function getProgramPref() {
+    try {
+      return localStorage.getItem(PREF_PROGRAM) === "sap" ? "sap" : "main";
+    } catch {
+      return "main";
+    }
+  }
+
+  function setProgramPref(prog) {
+    const v = prog === "sap" ? "sap" : "main";
+    try { localStorage.setItem(PREF_PROGRAM, v); } catch { /* private mode */ }
+    return v;
+  }
+
+  function getPlayoutPref() {
+    try {
+      return localStorage.getItem(PREF_PLAYOUT) === "surround" ? "surround" : "stereo";
+    } catch {
+      return "stereo";
+    }
+  }
+
+  function setPlayoutPref(mode) {
+    const v = mode === "surround" ? "surround" : "stereo";
+    try { localStorage.setItem(PREF_PLAYOUT, v); } catch { /* private mode */ }
+    return v;
   }
 
   function getSoloPref() {
@@ -42,9 +153,7 @@
 
   function setSoloPref(ch) {
     const v = ch === null || ch === undefined || ch < 0 ? -1 : Math.min(MAX_CH - 1, ch | 0);
-    try {
-      localStorage.setItem(PREF_SOLO, String(v));
-    } catch { /* private mode */ }
+    try { localStorage.setItem(PREF_SOLO, String(v)); } catch { /* private mode */ }
     return v;
   }
 
@@ -72,7 +181,7 @@
 .nexvue-vu {
   position: absolute; top: 8px; bottom: 8px; right: 8px; z-index: 3;
   display: flex; flex-direction: column; align-items: stretch; gap: 4px;
-  width: auto; max-width: 42%; pointer-events: auto;
+  width: auto; max-width: 48%; pointer-events: auto;
   font: 10px/1.2 ui-monospace, "Cascadia Mono", Consolas, monospace;
   color: var(--text, #d6dde6);
 }
@@ -90,9 +199,39 @@
   color: var(--on-acc, #08131a); background: var(--acc, #56c4f5);
   border-color: var(--acc, #56c4f5); font-weight: 600;
 }
+.nexvue-vu-toolbar button:disabled { opacity: .35; cursor: not-allowed; }
+.nexvue-vu-meter-row {
+  flex: 1; min-height: 0; display: flex; flex-direction: row;
+  align-items: stretch; gap: 4px; justify-content: flex-end;
+}
+.nexvue-vu-scale {
+  position: relative; width: 26px; flex: 0 0 26px;
+  /* Match .nexvue-vu-ch: track flexes, label sits below (~11px). */
+  margin-bottom: 13px; pointer-events: none;
+  color: var(--dim, #98a6b5); font-size: 8px; line-height: 1;
+}
+.nexvue-vu-scale[hidden] { display: none !important; }
+.nexvue-vu-scale-mark {
+  position: absolute; left: 0; right: 0; text-align: right;
+  transform: translateY(50%);
+  white-space: nowrap;
+}
+.nexvue-vu-scale-unit {
+  position: absolute; left: 0; right: 0; top: -11px;
+  text-align: right; font-size: 7px; letter-spacing: .04em;
+  color: var(--muted, #b0bbc8);
+}
 .nexvue-vu-bars {
   flex: 1; min-height: 0; display: flex; flex-direction: row;
   align-items: stretch; gap: 3px; justify-content: flex-end;
+}
+.nexvue-vu.show-scale .nexvue-vu-track {
+  background-image: linear-gradient(to top,
+    transparent 0%, transparent calc(33.333% - 0.5px),
+    rgba(255,255,255,.12) calc(33.333% - 0.5px), rgba(255,255,255,.12) calc(33.333% + 0.5px),
+    transparent calc(33.333% + 0.5px), transparent calc(66.666% - 0.5px),
+    rgba(255,255,255,.12) calc(66.666% - 0.5px), rgba(255,255,255,.12) calc(66.666% + 0.5px),
+    transparent calc(66.666% + 0.5px), transparent 100%);
 }
 .nexvue-vu-ch {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
@@ -134,20 +273,17 @@
   }
 
   function heightFromDb(db) {
-    // Map -60..0 dBFS → 0..100%
     const n = (db + 60) / 60;
     return Math.max(0, Math.min(100, n * 100));
   }
 
   /**
-   * Attach meters + optional listen graph to a video pane.
    * @param {object} opts
-   * @param {HTMLElement} opts.container  .pane-video or .videowrap
+   * @param {HTMLElement} opts.container
    * @param {HTMLVideoElement} opts.video
-   * @param {MediaStream|null} opts.stream
-   * @param {boolean} [opts.listen=false]  route audio to speakers
-   * @param {number} [opts.channels]       expected channel count (2–6); refined from track
-   * @returns {object|null} controller
+   * @param {MediaStream|null} [opts.stream]
+   * @param {boolean} [opts.listen=false]
+   * @param {string} [opts.layout="stereo"]
    */
   function attach(opts) {
     ensureStyles();
@@ -160,35 +296,126 @@
     root.hidden = true;
     root.innerHTML =
       '<div class="nexvue-vu-toolbar">' +
-      '<button type="button" data-vu="all" title="Listen to all channels (mix)">ALL</button>' +
+      '<button type="button" data-vu="main" title="Main program (this browser only)">Main</button>' +
+      '<button type="button" data-vu="sap" title="SAP / embeds 7+8 (this browser only)">SAP</button>' +
+      '<button type="button" data-vu="stereo" title="Play as stereo (5.1 folded down)">St</button>' +
+      '<button type="button" data-vu="surround" title="Play discrete 5.1 to computer speakers">5.1</button>' +
+      '<button type="button" data-vu="scale" title="Show dBFS scale (this browser only)">dB</button>' +
+      '<button type="button" data-vu="all" title="Clear engineering solo">ALL</button>' +
       "</div>" +
-      '<div class="nexvue-vu-bars" role="group" aria-label="Audio level meters"></div>';
+      '<div class="nexvue-vu-meter-row">' +
+      '<div class="nexvue-vu-scale" hidden aria-hidden="true"></div>' +
+      '<div class="nexvue-vu-bars" role="group" aria-label="Audio level meters"></div>' +
+      "</div>";
     container.appendChild(root);
 
     const barsEl = root.querySelector(".nexvue-vu-bars");
+    const scaleEl = root.querySelector(".nexvue-vu-scale");
+    const btnMain = root.querySelector('[data-vu="main"]');
+    const btnSap = root.querySelector('[data-vu="sap"]');
+    const btnStereo = root.querySelector('[data-vu="stereo"]');
+    const btnSurround = root.querySelector('[data-vu="surround"]');
+    const btnScale = root.querySelector('[data-vu="scale"]');
     const allBtn = root.querySelector('[data-vu="all"]');
+
+    let layout = layoutInfo(opts.layout || "stereo");
+    let channelCount = layout.channels;
+    let listen = !!opts.listen;
+    let visible = opts.visible !== undefined ? !!opts.visible : getVisiblePref();
+    let scaleOn = opts.scale !== undefined ? !!opts.scale : getScalePref();
+    let program = getProgramPref();
+    let playout = getPlayoutPref();
+    let solo = getSoloPref();
+    let hasAudio = false;
 
     let ctx = null;
     let source = null;
     let splitter = null;
-    let merger = null;
     let masterGain = null;
     let analysers = [];
-    let gains = [];
+    let chGains = []; // per transport channel → feed mix or surround
+    let outNodes = []; // nodes to disconnect on teardown (mergers, gains)
     let fills = [];
     let peaks = [];
-    let labels = [];
     let chBtns = [];
-    let channelCount = clampChannels(opts.channels || MIN_CH);
-    let listen = !!opts.listen;
-    let solo = getSoloPref();
     let raf = 0;
     let levels = [];
     let peakHold = [];
     let connectedStreamId = null;
     let timeData = null;
 
-    function paintSoloUi() {
+    function effectiveProgram() {
+      if (program === "sap" && layout.hasSap) return "sap";
+      return "main";
+    }
+
+    function effectivePlayout() {
+      if (playout === "surround" && layout.has51 && effectiveProgram() === "main") {
+        return "surround";
+      }
+      return "stereo";
+    }
+
+    function updateRootVisibility() {
+      root.hidden = !(visible && hasAudio);
+      if (visible && hasAudio && analysers.length && !raf) {
+        raf = requestAnimationFrame(tick);
+      } else if (!visible && raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+    }
+
+    function setVisible(on) {
+      visible = setVisiblePref(!!on);
+      updateRootVisibility();
+      return visible;
+    }
+
+    function paintScale() {
+      root.classList.toggle("show-scale", scaleOn);
+      btnScale.classList.toggle("active", scaleOn);
+      btnScale.setAttribute("aria-pressed", scaleOn ? "true" : "false");
+      if (!scaleOn) {
+        scaleEl.hidden = true;
+        scaleEl.setAttribute("aria-hidden", "true");
+        scaleEl.innerHTML = "";
+        return;
+      }
+      scaleEl.hidden = false;
+      scaleEl.setAttribute("aria-hidden", "false");
+      let html = '<span class="nexvue-vu-scale-unit">dBFS</span>';
+      for (const db of SCALE_MARKS_DB) {
+        const bottom = heightFromDb(db);
+        const label = db === 0 ? "0" : String(db);
+        html += '<span class="nexvue-vu-scale-mark" style="bottom:' +
+          bottom.toFixed(1) + '%">' + label + "</span>";
+      }
+      scaleEl.innerHTML = html;
+    }
+
+    function setScale(on) {
+      scaleOn = setScalePref(!!on);
+      paintScale();
+      return scaleOn;
+    }
+
+    function paintToolbar() {
+      const prog = effectiveProgram();
+      const play = effectivePlayout();
+      btnMain.classList.toggle("active", prog === "main");
+      btnSap.classList.toggle("active", prog === "sap");
+      btnSap.disabled = !layout.hasSap;
+      btnStereo.classList.toggle("active", play === "stereo");
+      btnSurround.classList.toggle("active", play === "surround");
+      btnSurround.disabled = !layout.has51;
+      btnStereo.disabled = !layout.has51;
+      // Stereo-only layouts: hide St/5.1 as N/A but keep visible disabled.
+      if (!layout.has51) {
+        btnStereo.classList.remove("active");
+        btnSurround.classList.remove("active");
+      }
+      btnScale.classList.toggle("active", scaleOn);
       allBtn.classList.toggle("active", solo < 0);
       chBtns.forEach((btn, i) => {
         const isSolo = solo === i;
@@ -198,46 +425,55 @@
       });
     }
 
-    function applyGains() {
-      gains.forEach((g, i) => {
+    function applyRouting() {
+      // Solo: mute non-solo transport channels at chGains (meters still live).
+      chGains.forEach((g, i) => {
         if (!g) return;
-        const on = solo < 0 || solo === i;
-        g.gain.value = on ? 1 : 0;
+        g.gain.value = (solo < 0 || solo === i) ? 1 : 0;
       });
       if (masterGain) masterGain.gain.value = listen ? 1 : 0;
-      paintSoloUi();
+      paintToolbar();
     }
 
     function setSolo(ch) {
-      if (ch === solo && ch >= 0) {
-        solo = setSoloPref(-1);
-      } else if (ch === null || ch < 0) {
-        solo = setSoloPref(-1);
-      } else {
-        solo = setSoloPref(Math.min(channelCount - 1, ch | 0));
-      }
-      applyGains();
+      if (ch === solo && ch >= 0) solo = setSoloPref(-1);
+      else if (ch === null || ch < 0) solo = setSoloPref(-1);
+      else solo = setSoloPref(Math.min(channelCount - 1, ch | 0));
+      applyRouting();
+    }
+
+    function setProgram(prog) {
+      program = setProgramPref(prog);
+      if (connectedStreamId && video.srcObject) buildGraph(video.srcObject);
+      else paintToolbar();
+    }
+
+    function setPlayout(mode) {
+      playout = setPlayoutPref(mode);
+      if (connectedStreamId && video.srcObject) buildGraph(video.srcObject);
+      else paintToolbar();
     }
 
     function rebuildMeterDom() {
       barsEl.innerHTML = "";
       fills = [];
       peaks = [];
-      labels = [];
       chBtns = [];
+      const labels = layout.labels;
       for (let i = 0; i < channelCount; i++) {
+        const lab = labels[i] || String(i + 1);
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "nexvue-vu-ch";
-        btn.title = "Solo channel " + (i + 1) + " (this browser only)";
-        btn.setAttribute("aria-label", "Solo audio channel " + (i + 1));
+        btn.title = "Solo " + lab + " (this browser only)";
+        btn.setAttribute("aria-label", "Solo audio " + lab);
         btn.setAttribute("aria-pressed", "false");
         btn.innerHTML =
           '<span class="nexvue-vu-track">' +
           '<span class="nexvue-vu-fill"></span>' +
           '<span class="nexvue-vu-peak" style="bottom:0%"></span>' +
           "</span>" +
-          '<span class="nexvue-vu-label">' + (i + 1) + "</span>";
+          '<span class="nexvue-vu-label">' + lab + "</span>";
         btn.addEventListener("click", (ev) => {
           ev.stopPropagation();
           ev.preventDefault();
@@ -248,31 +484,23 @@
         chBtns.push(btn);
         fills.push(btn.querySelector(".nexvue-vu-fill"));
         peaks.push(btn.querySelector(".nexvue-vu-peak"));
-        labels.push(btn.querySelector(".nexvue-vu-label"));
       }
       levels = new Array(channelCount).fill(0);
       peakHold = new Array(channelCount).fill(0);
       if (solo >= channelCount) solo = setSoloPref(-1);
-      paintSoloUi();
+      paintToolbar();
     }
 
     function teardownGraph() {
-      if (raf) {
-        cancelAnimationFrame(raf);
-        raf = 0;
-      }
-      try { if (source) source.disconnect(); } catch { /* ignore */ }
-      try { if (splitter) splitter.disconnect(); } catch { /* ignore */ }
-      analysers.forEach((a) => { try { a.disconnect(); } catch { /* ignore */ } });
-      gains.forEach((g) => { try { g.disconnect(); } catch { /* ignore */ } });
-      try { if (merger) merger.disconnect(); } catch { /* ignore */ }
-      try { if (masterGain) masterGain.disconnect(); } catch { /* ignore */ }
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      const nodes = [source, splitter, masterGain].concat(analysers, chGains, outNodes);
+      nodes.forEach((n) => { try { if (n) n.disconnect(); } catch { /* ignore */ } });
       source = null;
       splitter = null;
-      merger = null;
       masterGain = null;
       analysers = [];
-      gains = [];
+      chGains = [];
+      outNodes = [];
       connectedStreamId = null;
     }
 
@@ -296,112 +524,236 @@
           : prev + (peak - prev) * RELEASE;
         levels[i] = next;
         peakHold[i] = Math.max(peakHold[i] * 0.985, next);
-        const h = heightFromDb(dbFromPeak(next));
-        const ph = heightFromDb(dbFromPeak(peakHold[i]));
-        if (fills[i]) fills[i].style.height = h.toFixed(1) + "%";
-        if (peaks[i]) peaks[i].style.bottom = ph.toFixed(1) + "%";
+        if (fills[i]) fills[i].style.height = heightFromDb(dbFromPeak(next)).toFixed(1) + "%";
+        if (peaks[i]) peaks[i].style.bottom = heightFromDb(dbFromPeak(peakHold[i])).toFixed(1) + "%";
       }
       raf = requestAnimationFrame(tick);
     }
 
+    function buildStereoPair(leftIdx, rightIdx) {
+      const merger = ctx.createChannelMerger(2);
+      outNodes.push(merger);
+      analysers = [];
+      chGains = [];
+      for (let i = 0; i < channelCount; i++) {
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = FFT;
+        analyser.smoothingTimeConstant = SMOOTH;
+        const gain = ctx.createGain();
+        gain.gain.value = 1;
+        splitter.connect(analyser, i);
+        splitter.connect(gain, i);
+        if (i === leftIdx) gain.connect(merger, 0, 0);
+        else if (i === rightIdx) gain.connect(merger, 0, 1);
+        analysers.push(analyser);
+        chGains.push(gain);
+      }
+      return merger;
+    }
+
+    function build51Mixdown() {
+      // L' = L + 0.707*C + 0.707*Ls + 0.5*LFE
+      // R' = R + 0.707*C + 0.707*Rs + 0.5*LFE
+      const merger = ctx.createChannelMerger(2);
+      outNodes.push(merger);
+      analysers = [];
+      chGains = [];
+      const coeffsL = [1, 0, MIX_C, MIX_LFE, MIX_S, 0];
+      const coeffsR = [0, 1, MIX_C, MIX_LFE, 0, MIX_S];
+      for (let i = 0; i < channelCount; i++) {
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = FFT;
+        analyser.smoothingTimeConstant = SMOOTH;
+        const gain = ctx.createGain();
+        gain.gain.value = 1;
+        splitter.connect(analyser, i);
+        splitter.connect(gain, i);
+        analysers.push(analyser);
+        chGains.push(gain);
+        if (i < 6) {
+          if (coeffsL[i]) {
+            const gL = ctx.createGain();
+            gL.gain.value = coeffsL[i];
+            gain.connect(gL);
+            gL.connect(merger, 0, 0);
+            outNodes.push(gL);
+          }
+          if (coeffsR[i]) {
+            const gR = ctx.createGain();
+            gR.gain.value = coeffsR[i];
+            gain.connect(gR);
+            gR.connect(merger, 0, 1);
+            outNodes.push(gR);
+          }
+        }
+        // SAP channels (6,7) meter only when in main+stereo mixdown mode.
+      }
+      return merger;
+    }
+
+    function build51Discrete() {
+      const outCh = Math.min(6, channelCount);
+      const merger = ctx.createChannelMerger(outCh);
+      outNodes.push(merger);
+      analysers = [];
+      chGains = [];
+      for (let i = 0; i < channelCount; i++) {
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = FFT;
+        analyser.smoothingTimeConstant = SMOOTH;
+        const gain = ctx.createGain();
+        gain.gain.value = 1;
+        splitter.connect(analyser, i);
+        splitter.connect(gain, i);
+        analysers.push(analyser);
+        chGains.push(gain);
+        if (i < outCh) gain.connect(merger, 0, i);
+      }
+      return merger;
+    }
+
+    function configureDestination(outChannels) {
+      try {
+        const dest = ctx.destination;
+        const max = dest.maxChannelCount || 2;
+        const n = Math.min(outChannels, max);
+        dest.channelCount = Math.max(2, n);
+        dest.channelCountMode = "explicit";
+        dest.channelInterpretation = outChannels > 2 ? "discrete" : "speakers";
+      } catch { /* some browsers reject */ }
+    }
+
     function buildGraph(stream) {
       teardownGraph();
+      hasAudio = false;
       ctx = ensureCtx();
       if (!ctx || !stream) {
-        root.hidden = true;
+        updateRootVisibility();
         return;
       }
       const audioTracks = stream.getAudioTracks();
       if (!audioTracks.length) {
-        root.hidden = true;
+        updateRootVisibility();
         return;
       }
 
-// Prefer configured AUDIO_CHANNELS for bar count when the track has not
-      // reported yet; once getSettings().channelCount is known, prefer that
-      // so solo matches what the browser actually decoded.
       let detected = 0;
       try {
         const st = audioTracks[0].getSettings && audioTracks[0].getSettings();
         if (st && st.channelCount) detected = st.channelCount | 0;
       } catch { /* ignore */ }
-      if (detected > 0) {
-        channelCount = clampChannels(detected);
+      // Prefer configured layout channel count; fall back to what decoded.
+      if (detected > 0 && detected !== layout.channels) {
+        // Browser may downmix; keep layout labels but clamp splitter to detected.
+        channelCount = Math.min(layout.channels, Math.max(detected, 2));
       } else {
-        channelCount = clampChannels(channelCount || opts.channels || MIN_CH);
+        channelCount = layout.channels;
       }
+      // If detection says fewer channels than layout, still show layout meters
+      // for silent missing embeds (honest about config).
+      channelCount = layout.channels;
       rebuildMeterDom();
 
       try {
-        // Dedicated stream with audio only avoids pulling video into the graph.
         const audioStream = new MediaStream(audioTracks);
         source = ctx.createMediaStreamSource(audioStream);
-        splitter = ctx.createChannelSplitter(channelCount);
-        merger = ctx.createChannelMerger(channelCount);
+        const splitN = Math.max(channelCount, detected || channelCount);
+        splitter = ctx.createChannelSplitter(Math.min(MAX_CH, Math.max(splitN, channelCount)));
         masterGain = ctx.createGain();
         masterGain.gain.value = listen ? 1 : 0;
 
         source.connect(splitter);
-        analysers = [];
-        gains = [];
-        for (let i = 0; i < channelCount; i++) {
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = FFT;
-          analyser.smoothingTimeConstant = SMOOTH;
-          const gain = ctx.createGain();
-          gain.gain.value = solo < 0 || solo === i ? 1 : 0;
-          splitter.connect(analyser, i);
-          // Tap meter before solo mute so dimmed channels still show level.
-          splitter.connect(gain, i);
-          gain.connect(merger, 0, i);
-          analysers.push(analyser);
-          gains.push(gain);
+
+        const prog = effectiveProgram();
+        const play = effectivePlayout();
+        let bus;
+        if (prog === "sap" && layout.sap) {
+          bus = buildStereoPair(layout.sap[0], layout.sap[1]);
+          configureDestination(2);
+        } else if (layout.has51 && play === "surround") {
+          bus = build51Discrete();
+          configureDestination(6);
+        } else if (layout.has51 && play === "stereo") {
+          bus = build51Mixdown();
+          configureDestination(2);
+        } else {
+          // Main stereo (or stereo half of stereo_sap)
+          const pair = layout.main;
+          bus = buildStereoPair(pair[0], pair[1]);
+          configureDestination(2);
         }
-        merger.connect(masterGain);
+
+        bus.connect(masterGain);
         masterGain.connect(ctx.destination);
         connectedStreamId = stream.id;
-        root.hidden = false;
-        applyGains();
-        // Element must stay muted — audio is via Web Audio only.
+        hasAudio = true;
+        applyRouting();
         video.muted = true;
-        if (!raf) raf = requestAnimationFrame(tick);
+        updateRootVisibility();
       } catch (err) {
         console.warn("nexvue-vu: graph failed", err);
         teardownGraph();
-        root.hidden = true;
+        hasAudio = false;
+        updateRootVisibility();
       }
     }
 
+    btnMain.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      resume();
+      setProgram("main");
+    });
+    btnSap.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      resume();
+      if (layout.hasSap) setProgram("sap");
+    });
+    btnStereo.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      resume();
+      setPlayout("stereo");
+    });
+    btnSurround.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      resume();
+      if (layout.has51) setPlayout("surround");
+    });
+    btnScale.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      setScale(!scaleOn);
+    });
     allBtn.addEventListener("click", (ev) => {
       ev.stopPropagation();
       resume();
       setSolo(-1);
     });
 
-    // Video element audio must stay muted — Web Audio owns playback. Re-assert
-    // if the user toggles the native controls unmute control.
     function keepElementMuted() {
       if (!video.muted) video.muted = true;
     }
     video.addEventListener("volumechange", keepElementMuted);
 
     rebuildMeterDom();
-
+    paintScale();
     if (opts.stream) buildGraph(opts.stream);
 
     return {
       root,
-      setStream(stream, channelsHint) {
-        if (channelsHint) channelCount = clampChannels(channelsHint);
+      setStream(stream, layoutOrChannels) {
+        if (layoutOrChannels !== undefined && layoutOrChannels !== null) {
+          layout = layoutInfo(layoutOrChannels);
+          channelCount = layout.channels;
+        }
         if (!stream) {
           teardownGraph();
-          root.hidden = true;
+          hasAudio = false;
+          updateRootVisibility();
           return;
         }
         if (stream.id === connectedStreamId && analysers.length) {
-          // Same stream; maybe update listen/solo only.
-          applyGains();
-          root.hidden = false;
+          hasAudio = true;
+          applyRouting();
+          updateRootVisibility();
           return;
         }
         buildGraph(stream);
@@ -414,18 +766,32 @@
           resume();
         }
       },
-      setChannels(n) {
-        const next = clampChannels(n);
-        if (next === channelCount) return;
-        channelCount = next;
-        if (connectedStreamId && video.srcObject) {
-          buildGraph(video.srcObject);
-        } else {
-          rebuildMeterDom();
-        }
+      setLayout(raw) {
+        const next = layoutInfo(raw);
+        if (next.id === layout.id) return;
+        layout = next;
+        channelCount = layout.channels;
+        if (connectedStreamId && video.srcObject) buildGraph(video.srcObject);
+        else rebuildMeterDom();
       },
+      setVisible,
+      getVisible: () => visible,
+      setScale,
+      getScale: () => scaleOn,
+      setProgram,
+      setPlayout,
       setSolo,
       getSolo: () => solo,
+      getLayout: () => layout.id,
+      getProgram: () => effectiveProgram(),
+      getPlayout: () => effectivePlayout(),
+      // Back-compat for older callers.
+      setChannels(n) {
+        if (n === 2) this.setLayout("stereo");
+        else if (n === 4) this.setLayout("stereo_sap");
+        else if (n === 6) this.setLayout("51");
+        else if (n >= 8) this.setLayout("51_sap");
+      },
       getChannels: () => channelCount,
       resume,
       detach() {
@@ -437,12 +803,23 @@
   }
 
   global.NexVueVu = {
-    MIN_CH,
     MAX_CH,
+    LAYOUTS,
+    PREF_VISIBLE,
+    PREF_SCALE,
+    normalizeLayout,
+    layoutInfo,
+    getVisiblePref,
+    setVisiblePref,
+    getScalePref,
+    setScalePref,
+    getProgramPref,
+    setProgramPref,
+    getPlayoutPref,
+    setPlayoutPref,
     getSoloPref,
     setSoloPref,
     resume,
     attach,
-    clampChannels,
   };
 })(typeof window !== "undefined" ? window : globalThis);

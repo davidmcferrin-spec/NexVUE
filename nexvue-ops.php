@@ -49,7 +49,7 @@ const LOGO_ALLOWED_MIMES = [
 const EDITABLE_KEYS = [
     'CHANNEL_ALIAS', 'INPUT_TYPE', 'SRT_URI', 'SRT_LATENCY_MS',
     'DEINT_FIELDS', 'BITRATE_KBPS', 'GOP_FRAMES',
-    'ENABLE_AUDIO', 'AUDIO_FRAME_MS', 'AUDIO_BITRATE_BPS', 'AUDIO_CHANNELS',
+    'ENABLE_AUDIO', 'AUDIO_FRAME_MS', 'AUDIO_BITRATE_BPS', 'AUDIO_CHANNELS', 'AUDIO_LAYOUT',
     'DECKLINK_BUFFER_FRAMES', 'DECKLINK_DROP_NO_SIGNAL_FRAMES', 'VIDEO_ENCODER', 'EXTRA_ENC_ARGS',
     'LO_ENABLE', 'LO_PRESET', 'LO_WIDTH', 'LO_HEIGHT', 'LO_BITRATE_KBPS', 'LO_FPS',
     'LO_TARGET_USAGE', 'LO_QUEUE_BUFFERS', 'LO_GOP_FRAMES',
@@ -754,6 +754,7 @@ if ($action === 'aliases') {
     $aliases = [];
     $devices = [];
     $audioChannels = [];
+    $audioLayouts = [];
     foreach (list_channel_ids() as $id) {
         $r = sudo_run(['/usr/local/bin/nexvue-ops-env-read.sh', (string)$id]);
         if ($r['code'] !== 0) {
@@ -771,23 +772,41 @@ if ($action === 'aliases') {
         $aliases[(string)$id] = $label;
         $dev = $keys['DEVICE_NUMBER'] ?? (string)$id;
         $devices[$path] = is_numeric($dev) ? (int)$dev : $id;
-        // AUDIO_CHANNELS 2–6 for Player/Multiview VU meters (blank → 2).
-        $ac = isset($keys['AUDIO_CHANNELS']) ? trim((string)$keys['AUDIO_CHANNELS']) : '';
-        $acN = ($ac !== '' && ctype_digit($ac)) ? (int)$ac : 2;
-        if ($acN < 2) {
-            $acN = 2;
+        // AUDIO_LAYOUT preferred; legacy AUDIO_CHANNELS maps to a layout.
+        $layout = isset($keys['AUDIO_LAYOUT']) ? strtolower(trim((string)$keys['AUDIO_LAYOUT'])) : '';
+        $layout = str_replace(['-', '.'], ['_', ''], $layout);
+        if ($layout === '5_1' || $layout === '51' || $layout === 'surround') {
+            $layout = '51';
+        } elseif ($layout === '5_1_sap' || $layout === '51_sap' || $layout === 'surround_sap') {
+            $layout = '51_sap';
+        } elseif ($layout === 'sap') {
+            $layout = 'stereo_sap';
+        } elseif ($layout !== 'stereo' && $layout !== 'stereo_sap' && $layout !== '51' && $layout !== '51_sap') {
+            $ac = isset($keys['AUDIO_CHANNELS']) ? trim((string)$keys['AUDIO_CHANNELS']) : '';
+            $acN = ($ac !== '' && ctype_digit($ac)) ? (int)$ac : 2;
+            if ($acN === 4) {
+                $layout = 'stereo_sap';
+            } elseif ($acN === 6 || $acN === 3 || $acN === 5) {
+                $layout = '51';
+            } elseif ($acN >= 8) {
+                $layout = '51_sap';
+            } else {
+                $layout = 'stereo';
+            }
         }
-        if ($acN > 6) {
-            $acN = 6;
-        }
+        $chMap = ['stereo' => 2, 'stereo_sap' => 4, '51' => 6, '51_sap' => 8];
+        $acN = $chMap[$layout] ?? 2;
         $audioChannels[$path] = $acN;
         $audioChannels[(string)$id] = $acN;
+        $audioLayouts[$path] = $layout;
+        $audioLayouts[(string)$id] = $layout;
     }
     echo json_encode([
         'ok' => true,
         'aliases' => $aliases,
         'devices' => $devices,
         'audio_channels' => $audioChannels,
+        'audio_layouts' => $audioLayouts,
     ]);
     exit;
 }

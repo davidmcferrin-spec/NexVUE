@@ -548,8 +548,14 @@
     AUDIO_CHANNELS: {
       label: "AUDIO_CHANNELS",
       type: "select",
-      options: ["2", "3", "4", "5", "6"],
-      tip: "Discrete Opus channels for Player/Multiview VU meters and per-channel solo (2–6). DeckLink opens 2 or the 8-ch group then converts to this count. Blank = 2. Solo is browser-local only.",
+      options: ["2", "4", "6", "8"],
+      tip: "Legacy channel count — prefer AUDIO_LAYOUT. 2=stereo, 4=stereo+SAP, 6=5.1, 8=5.1+SAP. Blank ignored when AUDIO_LAYOUT is set.",
+    },
+    AUDIO_LAYOUT: {
+      label: "AUDIO_LAYOUT",
+      type: "select",
+      options: ["stereo", "51", "stereo_sap", "51_sap"],
+      tip: "Discrete Opus transport (no Dolby). stereo=L/R; 51=embeds 1–6; stereo_sap=1–2+7–8; 51_sap=1–8 (SAP on 7–8). Player can fold 5.1→stereo or play discrete surround; Main/SAP is per-browser. Blank = stereo (or derived from AUDIO_CHANNELS).",
     },
     DECKLINK_BUFFER_FRAMES: {
       label: "DECKLINK_BUFFER_FRAMES",
@@ -666,7 +672,7 @@
     {
       id: "audio",
       title: "Audio",
-      keys: ["ENABLE_AUDIO", "AUDIO_FRAME_MS", "AUDIO_BITRATE_BPS", "AUDIO_CHANNELS"],
+      keys: ["ENABLE_AUDIO", "AUDIO_FRAME_MS", "AUDIO_BITRATE_BPS", "AUDIO_LAYOUT", "AUDIO_CHANNELS"],
     },
     {
       id: "lo",
