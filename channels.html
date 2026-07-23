@@ -271,6 +271,31 @@
   td .lo-yes { color: var(--ok); }
   td .lo-no { color: var(--dim); }
   td .lo-denied { color: #c9a227; }
+  .audio-probe {
+    margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--edge);
+  }
+  .audio-probe .probe-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .audio-probe .probe-hint { color: var(--dim); font-size: 12px; margin: 8px 0 0; line-height: 1.4; }
+  .audio-probe .probe-result { margin-top: 10px; font-size: 12px; }
+  .audio-probe .embed-row {
+    display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0;
+  }
+  .audio-probe .embed {
+    min-width: 42px; padding: 4px 6px; text-align: center;
+    border: 1px solid var(--edge); border-radius: 3px; background: var(--bg);
+  }
+  .audio-probe .embed.active { border-color: var(--ok); color: var(--ok); }
+  .audio-probe .embed.silent { color: var(--dim); }
+  .audio-probe .embed .n { display: block; font-weight: 600; }
+  .audio-probe .embed .db { display: block; font-size: 10px; }
+  .audio-probe .suggest-list { list-style: none; margin: 8px 0 0; padding: 0; }
+  .audio-probe .suggest-list li {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 6px 0; border-top: 1px solid var(--edge);
+  }
+  .audio-probe .suggest-list label { cursor: pointer; flex: 1; }
+  .audio-probe .suggest-list .score { color: var(--dim); font-size: 11px; }
+  .audio-probe .suggest-list .exact { color: var(--ok); }
 </style>
 </head>
 <body>
@@ -555,7 +580,7 @@
       label: "AUDIO_LAYOUT",
       type: "select",
       options: ["stereo", "51", "stereo_sap", "51_sap"],
-      tip: "Discrete Opus transport (no Dolby). stereo=L/R; 51=embeds 1–6; stereo_sap=1–2+7–8; 51_sap=1–8 (SAP on 7–8). Player can fold 5.1→stereo or play discrete surround; Main/SAP is per-browser. Blank = stereo (or derived from AUDIO_CHANNELS).",
+      tip: "Discrete Opus transport (no Dolby). stereo=L/R; 51=embeds 1–6; stereo_sap=1–2+7–8; 51_sap=1–8 (SAP on 7–8). Use Detect audio… below to measure embeds. Player can fold 5.1→stereo or play discrete surround; Main/SAP is per-browser. Blank = stereo (or derived from AUDIO_CHANNELS).",
     },
     DECKLINK_BUFFER_FRAMES: {
       label: "DECKLINK_BUFFER_FRAMES",
@@ -723,10 +748,10 @@
       const present = g.keys.filter(k => set.has(k));
       if (!present.length) continue;
       present.forEach(k => used.add(k));
-      sections.push({ title: g.title, keys: present });
+      sections.push({ id: g.id, title: g.title, keys: present });
     }
     const other = keys.filter(k => !used.has(k));
-    if (other.length) sections.push({ title: "Other", keys: other });
+    if (other.length) sections.push({ id: "other", title: "Other", keys: other });
     return sections;
   }
 
@@ -878,6 +903,54 @@
     return strip;
   }
 
+  function buildAudioProbePanel() {
+    const box = document.createElement("div");
+    box.className = "audio-probe";
+    box.innerHTML =
+      `<div class="probe-bar">` +
+      `<button type="button" id="audio-probe-btn" title="Stop encoder briefly, measure SDI embeds 1–8">Detect audio…</button>` +
+      `<button type="button" class="primary" id="audio-probe-apply" disabled>Apply layout to form</button>` +
+      `</div>` +
+      `<p class="probe-hint">Stops this channel’s encoder for ~1–2s, measures PCM energy on DeckLink embeds 1–8, then restarts. ` +
+      `Suggestions are presence-based (not labels) — confirm against the source.</p>` +
+      `<div class="probe-result" id="audio-probe-result" hidden></div>`;
+    return box;
+  }
+
+  function renderAudioProbeResult(host, data) {
+    host.hidden = false;
+    const chans = data.channels || [];
+    const embeds = chans.map(c => {
+      const cls = c.active ? "active" : "silent";
+      const peak = (typeof c.peak_dbfs === "number") ? c.peak_dbfs.toFixed(0) : "—";
+      return `<div class="embed ${cls}" title="embed ${c.index}"><span class="n">${c.index}</span>` +
+        `<span class="db">${peak} dB</span></div>`;
+    }).join("");
+    const lock = data.input_locked
+      ? `locked · ${data.input_mode || "unknown"}`
+      : "unlocked / no video lock";
+    const activeN = data.active_count != null ? data.active_count : (data.active_mask || []).length;
+    const sugg = data.suggestions || [];
+    let list = "";
+    if (!sugg.length) {
+      list = `<p class="probe-hint">No layout matched the active embeds. Pick AUDIO_LAYOUT manually.</p>`;
+    } else {
+      list = `<ul class="suggest-list">` + sugg.map((s, i) => {
+        const exact = s.exact ? ` <span class="exact">exact</span>` : "";
+        return `<li><input type="radio" name="audio-probe-layout" value="${s.layout}" ` +
+          `id="probe-lay-${i}" ${i === 0 ? "checked" : ""}>` +
+          `<label for="probe-lay-${i}">${s.label}${exact}` +
+          `<div class="score">score ${s.score}</div></label></li>`;
+      }).join("") + `</ul>`;
+    }
+    host.innerHTML =
+      `<div><strong>Device ${data.device}</strong> · ${lock} · ${activeN} active embed(s)` +
+      (data.encoder_stopped ? " · encoder was restarted" : "") +
+      `</div>` +
+      `<div class="embed-row">${embeds}</div>` +
+      list;
+  }
+
   function buildEditSections(keys, keyList) {
     const frag = document.createDocumentFragment();
     frag.appendChild(buildIdentityStrip(keys));
@@ -906,6 +979,9 @@
         grid.appendChild(field);
       }
       wrap.appendChild(grid);
+      if (section.id === "audio") {
+        wrap.appendChild(buildAudioProbePanel());
+      }
       frag.appendChild(wrap);
     }
     return frag;
@@ -967,6 +1043,59 @@
     return frag;
   }
 
+  function wireAudioProbe() {
+    const btn = document.getElementById("audio-probe-btn");
+    const apply = document.getElementById("audio-probe-apply");
+    const result = document.getElementById("audio-probe-result");
+    if (!btn || !apply || !result) return;
+    apply.disabled = true;
+    btn.addEventListener("click", async () => {
+      if (selectedId == null) return;
+      if (!confirm(
+        `Detect embedded audio on channel ${selectedId}?\n\n` +
+        "This stops nexvue-encode@" + selectedId + " for about 1–2 seconds " +
+        "(viewers drop briefly), measures SDI embeds 1–8, then restarts the encoder."
+      )) {
+        return;
+      }
+      btn.disabled = true;
+      apply.disabled = true;
+      result.hidden = false;
+      result.textContent = "Probing DeckLink audio…";
+      setMsg(editMsg, "probing…");
+      try {
+        const data = await api("audio_probe", { id: selectedId, duration_ms: 1000 });
+        renderAudioProbeResult(result, data);
+        apply.disabled = !(data.suggestions && data.suggestions.length);
+        setMsg(editMsg, "probe done — pick a layout and Apply, then Save", "ok");
+      } catch (err) {
+        result.hidden = false;
+        result.textContent = "";
+        setMsg(editMsg, err.message, "err");
+        alert(err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    apply.addEventListener("click", () => {
+      const picked = editBody.querySelector('input[name="audio-probe-layout"]:checked');
+      if (!picked) {
+        alert("Select a suggested layout first (or set AUDIO_LAYOUT manually).");
+        return;
+      }
+      const sel = editBody.querySelector('select[data-key="AUDIO_LAYOUT"]');
+      if (!sel) {
+        alert("AUDIO_LAYOUT control missing");
+        return;
+      }
+      sel.value = picked.value;
+      // Clear legacy count so layout wins unambiguously on save.
+      const ch = editBody.querySelector('select[data-key="AUDIO_CHANNELS"]');
+      if (ch) ch.value = "";
+      setMsg(editMsg, `AUDIO_LAYOUT=${picked.value} set in form — Save channel to write`, "ok");
+    });
+  }
+
   async function openEditor(id) {
     selectedId = id;
     setMsg(editMsg, "");
@@ -986,6 +1115,7 @@
       editDot.className = "dot " + (summary && summary.active ? "ok" : "bad");
       editBody.innerHTML = "";
       editBody.appendChild(buildEditSections(keys, data.editable_keys || editableKeys));
+      wireAudioProbe();
       if (!editDlg.open) editDlg.showModal();
     } catch (err) {
       selectedId = null;

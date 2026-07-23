@@ -62,7 +62,7 @@ REQUIRED_FILES=(
   nexvue-ops-env-update.py nexvue-ops.sudoers
   nexvue-ops-status.sh nexvue-ops-journal.sh
   nexvue-ops-env-read.sh nexvue-ops-env-write.sh nexvue-ops-restart.sh
-  nexvue-ops-enable.sh
+  nexvue-ops-enable.sh nexvue-ops-audio-probe.sh
   channels-example.env
   nexvue-example.env
 )
@@ -201,6 +201,7 @@ install -m 755 "${REPO_DIR}/nexvue-ops-env-read.sh" /usr/local/bin/nexvue-ops-en
 install -m 755 "${REPO_DIR}/nexvue-ops-env-write.sh" /usr/local/bin/nexvue-ops-env-write.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-restart.sh" /usr/local/bin/nexvue-ops-restart.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-enable.sh" /usr/local/bin/nexvue-ops-enable.sh
+install -m 755 "${REPO_DIR}/nexvue-ops-audio-probe.sh" /usr/local/bin/nexvue-ops-audio-probe.sh
 # Caption JSON state (encode writes; Apache/www-data reads via nexvue-captions.php).
 install -d -m 755 -o nexvue -g nexvue /run/nexvue/captions 2>/dev/null \
   || mkdir -p /run/nexvue/captions
@@ -265,14 +266,16 @@ else
   warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
 fi
 
-step "5/5 decklink-status helper"
-if [ -x /usr/local/bin/decklink-status ]; then
-  ok "decklink-status already installed"
-elif [ -f "${REPO_DIR}/decklink-status.cpp" ] && ls /opt/decklink-sdk/Linux/include/DeckLinkAPI.h >/dev/null 2>&1; then
-  ( cd "${REPO_DIR}" && make DECKLINK_SDK=/opt/decklink-sdk && make install )
-  ok "decklink-status built from SDK at /opt/decklink-sdk"
+step "5/5 DeckLink helpers (status + audio probe)"
+if [ -f "${REPO_DIR}/decklink-status.cpp" ] && ls /opt/decklink-sdk/Linux/include/DeckLinkAPI.h >/dev/null 2>&1; then
+  ( cd "${REPO_DIR}" && make DECKLINK_SDK=/opt/decklink-sdk all && make install )
+  ok "decklink-status + decklink-audio-probe built from SDK at /opt/decklink-sdk"
+elif [ -x /usr/local/bin/decklink-status ] && [ -x /usr/local/bin/decklink-audio-probe ]; then
+  ok "decklink helpers already installed"
+elif [ -x /usr/local/bin/decklink-status ]; then
+  warn "decklink-status present but decklink-audio-probe missing — rebuild: make && sudo make install"
 else
-  warn "decklink-status not built — download the DeckLink SDK, then: make DECKLINK_SDK=/path && sudo make install (player input-status dots stay grey until then)"
+  warn "DeckLink helpers not built — download the SDK, then: make DECKLINK_SDK=/path && sudo make install (status dots + Settings Detect audio need them)"
 fi
 
 fi # !CHECK_ONLY
@@ -355,6 +358,7 @@ fi
 # Ops wrappers + sudoers
 for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
          nexvue-ops-env-write.sh nexvue-ops-restart.sh nexvue-ops-enable.sh \
+         nexvue-ops-audio-probe.sh \
          nexvue-ops-env-update.py nexvue-phase1-closeout.sh \
          nexvue-phase1-deploy-verify.sh nexvue-encode-storm-diagnose.sh; do
   [ -x "/usr/local/bin/$w" ] || [ -f "/usr/local/bin/$w" ] \
@@ -366,9 +370,11 @@ else
   warn "sudoers drop-in missing — Services/Settings need /etc/sudoers.d/nexvue-ops"
 fi
 
-# decklink-status
+# DeckLink helpers
 [ -x /usr/local/bin/decklink-status ] && ok "decklink-status helper present" \
   || warn "decklink-status helper not installed (optional; see step 5)"
+[ -x /usr/local/bin/decklink-audio-probe ] && ok "decklink-audio-probe helper present" \
+  || warn "decklink-audio-probe not installed (Settings → Detect audio; see step 5)"
 
 ###############################################################################
 # Optional: Phase 1 firewall rules (only with --firewall — never silent)

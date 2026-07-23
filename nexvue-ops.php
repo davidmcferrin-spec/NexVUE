@@ -7,13 +7,17 @@
  * (see nexvue-ops.sudoers / /usr/local/bin/nexvue-ops-*.sh).
  *
  * Actions (GET or POST JSON body):
- *   services | journal | journal_clear | channels_list | channel_get | channel_put
+ *   services | journal | journal_clear | audio_probe | channels_list | channel_get | channel_put
  *   | channels_bulk | restart | restart_encoders | set_enabled | set_running | aliases
  *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete
  *
  * journal_clear records a per-unit watermark via nexvue-ops-journal.sh clear
  * so the Services journal view hides prior lines for that unit only (systemd
  * cannot purge one unit from the binary journal; host-wide vacuum is gone).
+ *
+ * audio_probe stops nexvue-encode@N if running, runs decklink-audio-probe on
+ * the channel DEVICE_NUMBER (8ch PCM energy), restarts the unit, and returns
+ * per-embed levels + AUDIO_LAYOUT suggestions — operator confirms in Settings.
  *
  * restart_encoders restarts every systemd-enabled nexvue-encode@N (parked /
  * disabled slots are left alone). set_enabled toggles systemd enable/disable
@@ -628,6 +632,81 @@ function logo_delete(): void {
     }
 }
 
+/**
+ * Suggest AUDIO_LAYOUT values from 1-based active embed indices.
+ * Energy probe only — operator must confirm before writing .env.
+ *
+ * @param list<int> $activeMask
+ * @return list<array{layout:string,label:string,score:int,exact:bool}>
+ */
+function audio_probe_suggest(array $activeMask): array {
+    $active = [];
+    foreach ($activeMask as $i) {
+        $n = (int)$i;
+        if ($n >= 1 && $n <= 16) {
+            $active[$n] = true;
+        }
+    }
+    if ($active === []) {
+        return [];
+    }
+    $defs = [
+        [
+            'layout' => '51_sap',
+            'embeds' => [1, 2, 3, 4, 5, 6, 7, 8],
+            'label' => '5.1 + SAP (embeds 1–8)',
+        ],
+        [
+            'layout' => '51',
+            'embeds' => [1, 2, 3, 4, 5, 6],
+            'label' => '5.1 (embeds 1–6)',
+        ],
+        [
+            'layout' => 'stereo_sap',
+            'embeds' => [1, 2, 7, 8],
+            'label' => 'stereo + SAP (1–2 + 7–8)',
+        ],
+        [
+            'layout' => 'stereo',
+            'embeds' => [1, 2],
+            'label' => 'stereo (embeds 1–2)',
+        ],
+    ];
+    $out = [];
+    foreach ($defs as $d) {
+        $need = $d['embeds'];
+        $missing = 0;
+        foreach ($need as $e) {
+            if (!isset($active[$e])) {
+                $missing++;
+            }
+        }
+        if ($missing === count($need)) {
+            continue;
+        }
+        $extra = 0;
+        foreach (array_keys($active) as $e) {
+            if (!in_array($e, $need, true)) {
+                $extra++;
+            }
+        }
+        $score = 100 - (25 * $missing) - (8 * $extra);
+        if ($score < 1) {
+            continue;
+        }
+        $out[] = [
+            'layout' => $d['layout'],
+            'label' => $d['label'],
+            'score' => $score,
+            'exact' => ($missing === 0 && $extra === 0),
+        ];
+    }
+    usort($out, static function (array $a, array $b): int {
+        return $b['score'] <=> $a['score'];
+    });
+    return $out;
+}
+
 // Library mode for unit tests (php -r 'include …' without NEXVUE_OPS_HTTP).
 if (PHP_SAPI === 'cli' && getenv('NEXVUE_OPS_HTTP') === false) {
     return;
@@ -772,6 +851,106 @@ if ($action === 'journal_clear') {
         'unit' => $unit,
         'output' => trim($r['stdout'] . "\n" . $r['stderr']),
     ]);
+    exit;
+}
+
+// ---- audio_probe (DeckLink embedded PCM energy → layout suggestions) ---------
+
+if ($action === 'audio_probe') {
+    $id = $body['id'] ?? ($_GET['id'] ?? null);
+    if (!channel_id_ok($id)) {
+        fail(400, 'id must be 0-' . MAX_CHANNEL_ID);
+    }
+    $id = (int)$id;
+    $durationMs = (int)($body['duration_ms'] ?? ($_GET['duration_ms'] ?? 1000));
+    if ($durationMs < 200) {
+        $durationMs = 200;
+    }
+    if ($durationMs > 3000) {
+        $durationMs = 3000;
+    }
+
+    $envR = sudo_run(['/usr/local/bin/nexvue-ops-env-read.sh', (string)$id]);
+    if ($envR['code'] !== 0) {
+        fail(404, trim($envR['stderr']) !== '' ? trim($envR['stderr']) : 'channel env not found');
+    }
+    $env = json_decode($envR['stdout'], true);
+    if (!is_array($env)) {
+        fail(500, 'invalid channel env JSON');
+    }
+    $keys = $env['keys'] ?? $env;
+    if (!is_array($keys)) {
+        fail(500, 'invalid channel env keys');
+    }
+    $inputType = strtolower(trim((string)($keys['INPUT_TYPE'] ?? 'decklink')));
+    if ($inputType === '') {
+        $inputType = 'decklink';
+    }
+    if ($inputType !== 'decklink') {
+        fail(400, 'audio probe is DeckLink-only (INPUT_TYPE=decklink)');
+    }
+    $devRaw = trim((string)($keys['DEVICE_NUMBER'] ?? ''));
+    if ($devRaw === '' || !ctype_digit($devRaw)) {
+        fail(400, 'DEVICE_NUMBER missing or invalid');
+    }
+    $device = (int)$devRaw;
+    if ($device < 0 || $device > 15) {
+        fail(400, 'DEVICE_NUMBER out of range');
+    }
+
+    $unit = "nexvue-encode@{$id}";
+    $st = parse_unit_status(sudo_run(['/usr/local/bin/nexvue-ops-status.sh', $unit])['stdout']);
+    $wasRunning = ($st['state'] === 'active' || $st['state'] === 'activating');
+    $stopped = false;
+    if ($wasRunning) {
+        $stopR = sudo_run(['/usr/local/bin/nexvue-ops-enable.sh', 'stop', $unit]);
+        if ($stopR['code'] !== 0) {
+            fail(500, trim($stopR['stderr']) !== '' ? trim($stopR['stderr']) : 'failed to stop encoder for probe');
+        }
+        $stopped = true;
+        // Brief settle so DeckLink releases the exclusive open.
+        usleep(400000);
+    }
+
+    $probeArgv = ['/usr/local/bin/nexvue-ops-audio-probe.sh', (string)$device, (string)$durationMs];
+    $r = sudo_run($probeArgv);
+
+    if ($stopped) {
+        $startR = sudo_run(['/usr/local/bin/nexvue-ops-enable.sh', 'start', $unit]);
+        if ($startR['code'] !== 0) {
+            fail(500, 'probe ran but failed to restart ' . $unit . ': ' .
+                (trim($startR['stderr']) !== '' ? trim($startR['stderr']) : 'start failed'));
+        }
+    }
+
+    $probe = json_decode(trim($r['stdout']), true);
+    if (!is_array($probe)) {
+        $err = trim($r['stderr']);
+        fail(500, $err !== '' ? $err : 'audio probe returned invalid JSON');
+    }
+    if (($probe['ok'] ?? false) !== true) {
+        $msg = (string)($probe['error'] ?? 'probe failed');
+        if (!empty($probe['busy'])) {
+            $msg = 'DeckLink device busy (stop other capture on this connector and retry)';
+        }
+        if ($msg === 'probe_not_installed') {
+            $msg = 'decklink-audio-probe not installed — run: make && sudo make install';
+        }
+        fail(500, $msg);
+    }
+
+    $mask = [];
+    if (isset($probe['active_mask']) && is_array($probe['active_mask'])) {
+        foreach ($probe['active_mask'] as $m) {
+            $mask[] = (int)$m;
+        }
+    }
+    $suggestions = audio_probe_suggest($mask);
+    $probe['suggestions'] = $suggestions;
+    $probe['channel_id'] = $id;
+    $probe['encoder_stopped'] = $stopped;
+    $probe['ok'] = true;
+    echo json_encode($probe);
     exit;
 }
 

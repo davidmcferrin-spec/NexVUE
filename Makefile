@@ -1,4 +1,4 @@
-# Build decklink-status.
+# Build decklink-status + decklink-audio-probe.
 #
 # Requires the Blackmagic DeckLink SDK (free, license-gated — grab the
 # "Desktop Video SDK" from the Blackmagic support site and unzip). Use the
@@ -25,7 +25,7 @@ DECKLINK_SDK ?= /opt/decklink-sdk
 
 CXX      ?= g++
 CXXFLAGS += -std=c++17 -O2 -Wall -Wextra
-LDLIBS   += -ldl -lpthread
+LDLIBS   += -ldl -lpthread -lm
 
 decklink-status: decklink-status.cpp
 	@sdk='$(DECKLINK_SDK)'; \
@@ -38,10 +38,24 @@ decklink-status: decklink-status.cpp
 	echo "Using dispatch: $$dispatch"; \
 	$(CXX) $(CXXFLAGS) -I"$$incdir" -o decklink-status decklink-status.cpp "$$dispatch" $(LDLIBS)
 
-install: decklink-status
+decklink-audio-probe: decklink-audio-probe.cpp
+	@sdk='$(DECKLINK_SDK)'; \
+	hdr="$$(find -L "$$sdk" -name DeckLinkAPI.h 2>/dev/null | head -n1)"; \
+	dispatch="$$(find -L "$$sdk" -name DeckLinkAPIDispatch.cpp 2>/dev/null | head -n1)"; \
+	if [ -z "$$hdr" ]; then echo "ERROR: DeckLinkAPI.h not found under $$sdk/Linux"; exit 1; fi; \
+	if [ -z "$$dispatch" ]; then echo "ERROR: DeckLinkAPIDispatch.cpp not found under $$sdk/Linux"; exit 1; fi; \
+	incdir="$$(dirname "$$hdr")"; \
+	echo "Using headers:  $$incdir"; \
+	echo "Using dispatch: $$dispatch"; \
+	$(CXX) $(CXXFLAGS) -I"$$incdir" -o decklink-audio-probe decklink-audio-probe.cpp "$$dispatch" $(LDLIBS)
+
+all: decklink-status decklink-audio-probe
+
+install: all
 	install -m 755 decklink-status /usr/local/bin/
+	install -m 755 decklink-audio-probe /usr/local/bin/
 
 clean:
-	rm -f decklink-status
+	rm -f decklink-status decklink-audio-probe
 
-.PHONY: install clean
+.PHONY: all install clean
