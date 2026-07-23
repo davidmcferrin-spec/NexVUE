@@ -292,9 +292,9 @@ Then from a LAN machine:
 - **Usage metrics:** top nav → Metrics (`/metrics.html` + `nexvue-metrics.php`
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
-  (Follow / Clear view) plus **Vacuum journal…** (host-wide
-  `journalctl --rotate` + `--vacuum-time`/`--vacuum-size` via allowlisted
-  presets — not per-unit; confirm before running).
+  (Follow / Clear view) plus **Clear journal…** for the selected unit
+  (`journal_clear` watermark via `nexvue-ops-journal.sh` — hides prior lines
+  for that unit only in the ops UI; not a host-wide vacuum).
   (near `tail -f`). LAN-trust ops.
 - **Settings:** top nav → Settings — optional station **logo** (Branding
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,

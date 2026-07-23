@@ -237,6 +237,9 @@ if id www-data >/dev/null 2>&1; then
   chmod 750 /var/lib/nexvue/branding 2>/dev/null || true
 fi
 
+# Per-unit Services journal clear watermarks (root writes via sudo journal wrapper).
+install -d -m 755 /var/lib/nexvue/journal-cleared
+
 # Apache docroot: player, multiviewer, metrics, ops pages + PHP.
 # Override with NEXVUE_WEBROOT if the site isn't under /var/www/html.
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"

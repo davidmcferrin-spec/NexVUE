@@ -7,12 +7,13 @@
  * (see nexvue-ops.sudoers / /usr/local/bin/nexvue-ops-*.sh).
  *
  * Actions (GET or POST JSON body):
- *   services | journal | journal_vacuum | channels_list | channel_get | channel_put
+ *   services | journal | journal_clear | channels_list | channel_get | channel_put
  *   | channels_bulk | restart | restart_encoders | set_enabled | set_running | aliases
  *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete
  *
- * journal_vacuum runs journalctl --rotate + --vacuum-time/--vacuum-size via
- * nexvue-ops-journal.sh (host-wide systemd journal; allowlisted presets only).
+ * journal_clear records a per-unit watermark via nexvue-ops-journal.sh clear
+ * so the Services journal view hides prior lines for that unit only (systemd
+ * cannot purge one unit from the binary journal; host-wide vacuum is gone).
  *
  * restart_encoders restarts every systemd-enabled nexvue-encode@N (parked /
  * disabled slots are left alone). set_enabled toggles systemd enable/disable
@@ -751,42 +752,24 @@ if ($action === 'journal') {
     exit;
 }
 
-// ---- journal_vacuum (host-wide systemd journal; allowlisted presets) ----------
+// ---- journal_clear (selected unit only; watermark, not host vacuum) ----------
 
-if ($action === 'journal_vacuum') {
-    $mode = $body['mode'] ?? ($_GET['mode'] ?? 'time');
-    $value = $body['value'] ?? ($_GET['value'] ?? '7d');
-    if (!is_string($mode) || !is_string($value)) {
-        fail(400, 'mode and value required');
-    }
-    $mode = strtolower(trim($mode));
-    $value = trim($value);
-    $timeOk = ['1d', '3d', '7d', '14d', '30d'];
-    $sizeOk = ['50M', '100M', '200M', '500M', '1G'];
-    if ($mode === 'time') {
-        if (!in_array($value, $timeOk, true)) {
-            fail(400, 'value must be one of: ' . implode(' ', $timeOk));
-        }
-    } elseif ($mode === 'size') {
-        if (!in_array($value, $sizeOk, true)) {
-            fail(400, 'value must be one of: ' . implode(' ', $sizeOk));
-        }
-    } else {
-        fail(400, 'mode must be time or size');
+if ($action === 'journal_clear') {
+    $unit = $body['unit'] ?? ($_GET['unit'] ?? '');
+    if (!is_string($unit) || !unit_allowed($unit)) {
+        fail(400, 'invalid unit');
     }
     $r = sudo_run([
         '/usr/local/bin/nexvue-ops-journal.sh',
-        'vacuum',
-        $mode,
-        $value,
+        'clear',
+        $unit,
     ]);
     if ($r['code'] !== 0) {
-        fail(500, trim($r['stderr']) !== '' ? trim($r['stderr']) : 'journal vacuum failed');
+        fail(500, trim($r['stderr']) !== '' ? trim($r['stderr']) : 'journal clear failed');
     }
     echo json_encode([
         'ok' => true,
-        'mode' => $mode,
-        'value' => $value,
+        'unit' => $unit,
         'output' => trim($r['stdout'] . "\n" . $r['stderr']),
     ]);
     exit;
