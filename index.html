@@ -103,6 +103,16 @@
   #state.ok { color: var(--ok); }
   #state.bad { color: var(--bad); }
   .qlabel { color: var(--dim); }
+  .vol-wrap {
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .vol-wrap input[type="range"] {
+    width: 100px; padding: 0; height: 6px; accent-color: var(--acc);
+    cursor: pointer; background: transparent; border: none;
+  }
+  .vol-wrap #vol-pct {
+    min-width: 3em; color: var(--dim); font-size: 12px;
+  }
   /* Video fills the centered frame; letterbox on the right when height-limited. */
   .stage {
     flex: 1; min-height: 0; width: 100%;
@@ -239,14 +249,19 @@
   <button id="flip" class="tgl" title="Reflect top-bottom (inverted mounts)">Flip ↕</button>
   <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
   <button id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
-  <button id="mute" class="tgl" title="Mute audio (this browser only — Web Audio path)">Mute</button>
+  <button id="mute" class="tgl" title="Mute (this browser only)">Mute</button>
+  <span class="vol-wrap" title="Volume (this browser only — Web Audio)">
+    <span class="qlabel">vol</span>
+    <input type="range" id="volume" min="0" max="100" step="1" value="100" aria-label="Volume">
+    <span id="vol-pct">100%</span>
+  </span>
   <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip)">⛶ Fullscreen</button>
 </div>
 
 <div class="stage">
   <div class="videowrap">
-    <video id="video" autoplay playsinline controls muted></video>
-    <!-- muted: browsers block un-muted autoplay; unmute via controls once playing -->
+    <video id="video" autoplay playsinline muted></video>
+    <!-- muted: autoplay policy + Web Audio owns playout (VU/solo/SAP). No native controls. -->
     <div id="cc-overlay" hidden aria-live="polite"></div>
     <div id="kicked-overlay" hidden role="status" aria-live="polite">
       <div class="kicked-title">Disconnected by an administrator</div>
@@ -333,12 +348,20 @@
   ccBtn.classList.toggle("active", captionsOn);
   paintCaptions();
 
-  // VU meters + per-channel solo (browser-local; video element stays muted).
+  // VU meters + volume (browser-local; <video> stays muted, no native controls).
   const muteBtn = $("mute");
+  const volEl = $("volume");
+  const volPct = $("vol-pct");
   function paintMuteBtn() {
     const muted = !vu || !vu.isListening();
     muteBtn.classList.toggle("active", muted);
     muteBtn.textContent = muted ? "Muted" : "Mute";
+  }
+  function paintVolume() {
+    const v = vu ? vu.getVolume() : NexVueVu.getVolumePref();
+    const pct = Math.round(v * 100);
+    volEl.value = String(pct);
+    volPct.textContent = pct + "%";
   }
   const vu = NexVueVu.attach({
     container: videoWrap,
@@ -350,8 +373,12 @@
   const vuBtn = $("vu");
   let vuOn = NexVueVu.getVisiblePref();
   vuBtn.classList.toggle("active", vuOn);
-  if (vu) vu.setVisible(vuOn);
+  if (vu) {
+    vu.setVisible(vuOn);
+    vu.setVolume(NexVueVu.getVolumePref());
+  }
   paintMuteBtn();
+  paintVolume();
 
   // Auto-switch policy constants (mirror these in the Phase 2 portal player)
   const DOWN_LOSS = 0.03, DOWN_AFTER_S = 3;
@@ -919,6 +946,18 @@
     vu.setListen(!vu.isListening());
     NexVueVu.resume();
     paintMuteBtn();
+  });
+
+  volEl.addEventListener("input", () => {
+    const v = (parseInt(volEl.value, 10) || 0) / 100;
+    if (vu) vu.setVolume(v);
+    else NexVueVu.setVolumePref(v);
+    paintVolume();
+    if (v > 0 && vu && !vu.isListening()) {
+      vu.setListen(true);
+      paintMuteBtn();
+    }
+    NexVueVu.resume();
   });
 
   // Fullscreen the WRAPPER (not the video element), so the video's inline

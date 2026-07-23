@@ -10,6 +10,8 @@
  * Per-browser prefs (localStorage) never change encode or other viewers:
  *   nexvue-vu-on          1 | 0               (show/hide meter overlay)
  *   nexvue-vu-scale       1 | 0               (show dBFS scale beside meters)
+ *   nexvue-audio-muted    1 | 0               (Web Audio listen off)
+ *   nexvue-audio-volume   0..1               (Web Audio master gain)
  *   nexvue-audio-program  main | sap
  *   nexvue-audio-playout  stereo | surround   (5.1 → stereo mixdown vs discrete)
  *   nexvue-vu-solo        -1 | channel index  (engineering solo)
@@ -20,6 +22,7 @@
   const PREF_VISIBLE = "nexvue-vu-on";
   const PREF_SCALE = "nexvue-vu-scale";
   const PREF_MUTED = "nexvue-audio-muted";
+  const PREF_VOLUME = "nexvue-audio-volume";
   const PREF_SOLO = "nexvue-vu-solo";
   const PREF_PROGRAM = "nexvue-audio-program";
   const PREF_PLAYOUT = "nexvue-audio-playout";
@@ -126,6 +129,28 @@
       localStorage.setItem(PREF_MUTED, on ? "1" : "0");
     } catch { /* private mode */ }
     return !!on;
+  }
+
+  /** Linear gain 0–1 (default 1). */
+  function getVolumePref() {
+    try {
+      const raw = localStorage.getItem(PREF_VOLUME);
+      if (raw === null || raw === "") return 1;
+      const n = parseFloat(raw);
+      if (!Number.isFinite(n)) return 1;
+      return Math.max(0, Math.min(1, n));
+    } catch {
+      return 1;
+    }
+  }
+
+  function setVolumePref(v) {
+    const n = Math.max(0, Math.min(1, Number(v)));
+    const out = Number.isFinite(n) ? n : 1;
+    try {
+      localStorage.setItem(PREF_VOLUME, String(out));
+    } catch { /* private mode */ }
+    return out;
   }
 
   function getProgramPref() {
@@ -344,6 +369,8 @@
     let listen = !!opts.listen;
     let visible = opts.visible !== undefined ? !!opts.visible : getVisiblePref();
     let scaleOn = opts.scale !== undefined ? !!opts.scale : getScalePref();
+    let volume = opts.volume !== undefined ? Math.max(0, Math.min(1, Number(opts.volume))) : getVolumePref();
+    if (!Number.isFinite(volume)) volume = 1;
     let program = getProgramPref();
     let playout = getPlayoutPref();
     let solo = getSoloPref();
@@ -446,14 +473,27 @@
       });
     }
 
+    function effectiveMasterGain() {
+      return listen ? volume : 0;
+    }
+
     function applyRouting() {
       // Solo: mute non-solo transport channels at chGains (meters still live).
       chGains.forEach((g, i) => {
         if (!g) return;
         g.gain.value = (solo < 0 || solo === i) ? 1 : 0;
       });
-      if (masterGain) masterGain.gain.value = listen ? 1 : 0;
+      if (masterGain) masterGain.gain.value = effectiveMasterGain();
       paintToolbar();
+    }
+
+    function setVolume(v, volOpts) {
+      const persist = !(volOpts && volOpts.persist === false);
+      volume = Math.max(0, Math.min(1, Number(v)));
+      if (!Number.isFinite(volume)) volume = 1;
+      if (persist) setVolumePref(volume);
+      if (masterGain) masterGain.gain.value = effectiveMasterGain();
+      return volume;
     }
 
     function setSolo(ch) {
@@ -681,7 +721,7 @@
         const splitN = Math.max(channelCount, detected || channelCount);
         splitter = ctx.createChannelSplitter(Math.min(MAX_CH, Math.max(splitN, channelCount)));
         masterGain = ctx.createGain();
-        masterGain.gain.value = listen ? 1 : 0;
+        masterGain.gain.value = effectiveMasterGain();
 
         source.connect(splitter);
 
@@ -749,22 +789,9 @@
       setSolo(-1);
     });
 
-    let syncingMute = false;
+    // Element must stay muted — playout is Web Audio only (no native controls).
     function keepElementMuted() {
-      if (syncingMute) return;
-      // Native video unmute → enable Web Audio listen (element stays muted).
-      if (!video.muted) {
-        listen = true;
-        setMutedPref(false);
-        if (masterGain) masterGain.gain.value = 1;
-        resume();
-        syncingMute = true;
-        video.muted = true;
-        syncingMute = false;
-        if (typeof onListenChange === "function") {
-          try { onListenChange(true); } catch { /* ignore */ }
-        }
-      }
+      if (!video.muted) video.muted = true;
     }
     video.addEventListener("volumechange", keepElementMuted);
 
@@ -797,8 +824,8 @@
         listen = !!on;
         const persist = !(listenOpts && listenOpts.persist === false);
         if (persist) setMutedPref(!listen);
-        if (masterGain) masterGain.gain.value = listen ? 1 : 0;
-        // Element must stay muted — native controls unmute is remapped below.
+        if (masterGain) masterGain.gain.value = effectiveMasterGain();
+        // Element must stay muted — audio is via Web Audio only.
         video.muted = true;
         if (listen) resume();
         if (onListenChange) {
@@ -806,6 +833,8 @@
         }
       },
       isListening: () => listen,
+      setVolume,
+      getVolume: () => volume,
       setLayout(raw) {
         const next = layoutInfo(raw);
         if (next.id === layout.id) return;
@@ -848,6 +877,7 @@
     PREF_VISIBLE,
     PREF_SCALE,
     PREF_MUTED,
+    PREF_VOLUME,
     normalizeLayout,
     layoutInfo,
     getVisiblePref,
@@ -856,6 +886,8 @@
     setScalePref,
     getMutedPref,
     setMutedPref,
+    getVolumePref,
+    setVolumePref,
     getProgramPref,
     setProgramPref,
     getPlayoutPref,

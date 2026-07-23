@@ -66,6 +66,16 @@
     font: inherit; font-size: 12px; cursor: pointer;
   }
   .topnav .theme-toggle:hover { border-color: var(--acc); color: var(--acc); }
+  .vol-wrap {
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .vol-wrap input[type="range"] {
+    width: 100px; padding: 0; height: 6px; accent-color: var(--acc);
+    cursor: pointer; background: transparent; border: none;
+  }
+  .vol-wrap #vol-pct {
+    min-width: 3em; color: var(--dim); font-size: 12px;
+  }
   .bar {
     display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     margin-bottom: 12px; flex-shrink: 0;
@@ -255,6 +265,12 @@
   <button id="q-lo" class="q active">LO</button>
   <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
   <button id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
+  <button id="mute" class="tgl" title="Mute focused pane (this browser only)">Mute</button>
+  <span class="vol-wrap" title="Volume (this browser only — Web Audio)">
+    <span class="qlabel">vol</span>
+    <input type="range" id="volume" min="0" max="100" step="1" value="100" aria-label="Volume">
+    <span id="vol-pct">100%</span>
+  </span>
   <button id="fs" title="Fullscreen multiview">⛶ Fullscreen</button>
   <span id="state">idle</span>
 </div>
@@ -329,7 +345,11 @@
   let captionsOn = NexVueCaptions.getPref();
   const ccBtn = $("cc");
   const vuBtn = $("vu");
+  const muteBtn = $("mute");
+  const volEl = $("volume");
+  const volPct = $("vol-pct");
   let vuOn = NexVueVu.getVisiblePref();
+  let userMuted = NexVueVu.getMutedPref();
   ccBtn.classList.toggle("active", captionsOn);
   vuBtn.classList.toggle("active", vuOn);
   function paintAllCaptions() {
@@ -343,6 +363,27 @@
       if (p && p.vu) p.vu.setVisible(vuOn);
     }
   }
+  function applyVolumeAll() {
+    const v = NexVueVu.getVolumePref();
+    const pct = Math.round(v * 100);
+    volEl.value = String(pct);
+    volPct.textContent = pct + "%";
+    for (const p of panes) {
+      if (p && p.vu) p.vu.setVolume(v, { persist: false });
+    }
+  }
+  function paintMuteBtn() {
+    muteBtn.classList.toggle("active", userMuted || audioPane < 0);
+    muteBtn.textContent = userMuted ? "Muted" : "Mute";
+  }
+  function applyListenAll() {
+    panes.forEach((p, i) => {
+      if (!p.vu) return;
+      const on = !userMuted && i === audioPane && !!p.base;
+      p.vu.setListen(on, { persist: false });
+    });
+    paintMuteBtn();
+  }
   ccBtn.addEventListener("click", () => {
     captionsOn = !captionsOn;
     NexVueCaptions.setPref(captionsOn);
@@ -355,6 +396,25 @@
     vuBtn.classList.toggle("active", vuOn);
     applyVuVisible();
   });
+  muteBtn.addEventListener("click", () => {
+    userMuted = !userMuted;
+    NexVueVu.setMutedPref(userMuted);
+    applyListenAll();
+    NexVueVu.resume();
+  });
+  volEl.addEventListener("input", () => {
+    const v = (parseInt(volEl.value, 10) || 0) / 100;
+    NexVueVu.setVolumePref(v);
+    applyVolumeAll();
+    if (v > 0 && userMuted) {
+      userMuted = false;
+      NexVueVu.setMutedPref(false);
+      applyListenAll();
+    }
+    NexVueVu.resume();
+  });
+  applyVolumeAll();
+  paintMuteBtn();
 
   // Session metrics for the focused pane (audio-active, else first connected).
   let prevBytes = 0, prevTs = 0;
@@ -488,6 +548,7 @@
       listen: false,
       layout: "stereo",
       visible: vuOn,
+      volume: NexVueVu.getVolumePref(),
     });
 
     select.addEventListener("change", () => {
@@ -676,7 +737,8 @@
       if (pane.vu && ev.streams[0]) {
         const layout = audioLayoutByPath[pane.base] || "stereo";
         pane.vu.setStream(ev.streams[0], layout);
-        pane.vu.setListen(audioPane === pane.index, { persist: false });
+        pane.vu.setVolume(NexVueVu.getVolumePref(), { persist: false });
+        pane.vu.setListen(!userMuted && audioPane === pane.index, { persist: false });
       }
     };
     pc.onconnectionstatechange = () => {
@@ -739,8 +801,8 @@
     panes.forEach((p, i) => {
       p.el.classList.toggle("audio-active", i === index && !!p.base);
       p.video.muted = true;
-      if (p.vu) p.vu.setListen(i === index && !!p.base, { persist: false });
     });
+    applyListenAll();
     if (index >= 0) NexVueVu.resume();
     resetRtcBaseline();
     updateFocusLabel();
