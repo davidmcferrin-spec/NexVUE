@@ -305,19 +305,17 @@ Then from a LAN machine:
   shown in the top nav next to **NexVUE** when present) plus channel list
   (LO column: yes/no/denied; **Restart all encoders** for enabled slots);
   click a row (or use Bulk edit) to open a modal editor for
-  `/etc/nexvue/channels/<N>.env`. Audio section has **AUDIO_EMBEDS** checkboxes
-  (which embeds 1–8 the Player offers) plus **Detect audio…** (briefly stops
-  the encoder, runs `decklink-audio-probe`, suggests a player role + embeds
-  to Apply + Save). Encode always publishes all 8 embeds.
-  Hover a field label ~2s for an explainer
-  (what it does, recommended / valid range, and what blank means — same
-  pattern as Player session metric tiles). Optional `CHANNEL_ALIAS` for
-  friendly labels; path stays `chN`. Save asks before restarting encoders.
-  **Factory defaults…** in the editor footer resets the channel: every
-  editable key is written blank (blank = built-in default, so alias clears,
-  LO turns off and frees its pool slot, audio returns to stereo, all tuning
-  knobs revert); `DEVICE_NUMBER` / `CHANNEL_PATH` / `RTSP_URL` are identity
-  and never touched. Takes effect on the encoder restart offered after.
+  `/etc/nexvue/channels/<N>.env`. Editor shows only live encode/player knobs
+  (human labels): display name, HI video, audio on/off + player role + embed
+  VU checkboxes + **Detect audio…**, LO pool request + preset, and a collapsed
+  Advanced block. Unused supervisor/SRT/legacy keys are hidden (still wiped by
+  **Factory defaults…**). Audio-on and LO-on reveal their dependent fields.
+  Encode always publishes all 8 embeds when audio is on. Hover a field label
+  ~2s for an explainer. Path stays `chN`. Save asks before restarting encoders.
+  **Factory defaults…** blanks every editable key (alias cleared, LO off,
+  audio/player role to built-in defaults); `DEVICE_NUMBER` / `CHANNEL_PATH` /
+  `RTSP_URL` are identity and never touched. Takes effect on the encoder
+  restart offered after.
   Every page has a **Light/Dark** toggle (`localStorage.nexvue-theme`,
   default dark); shared helpers live in `nexvue-ui.js`.
 

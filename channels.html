@@ -200,12 +200,34 @@
   .form-section:last-child { margin-bottom: 0; }
   .form-section h3 {
     font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
-    color: var(--muted); margin: 0 0 10px; font-weight: 600;
+    color: var(--muted); margin: 0 0 6px; font-weight: 600;
     padding-bottom: 6px; border-bottom: 1px solid var(--edge);
   }
+  .form-section .section-blurb {
+    color: var(--dim); font-size: 12px; margin: 0 0 10px; line-height: 1.4;
+  }
+  .form-section[hidden], .field[hidden], .bulk-field[hidden], .audio-probe[hidden] {
+    display: none !important;
+  }
+  details.form-advanced {
+    margin-top: 4px; border: 1px solid var(--edge); border-radius: 6px;
+    background: var(--bg); padding: 0 10px 10px;
+  }
+  details.form-advanced > summary {
+    cursor: pointer; list-style: none; padding: 10px 0 6px;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted); font-weight: 600; user-select: none;
+  }
+  details.form-advanced > summary::-webkit-details-marker { display: none; }
+  details.form-advanced > summary::before {
+    content: "▸ "; color: var(--dim);
+  }
+  details.form-advanced[open] > summary::before { content: "▾ "; }
+  details.form-advanced .section-blurb { margin-top: 0; }
   .form-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px;
   }
+  .field.field-span-2 { grid-column: 1 / -1; }
   .field {
     display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted);
     min-width: 0;
@@ -228,7 +250,7 @@
   }
   .embeds-picker label {
     display: inline-flex; align-items: center; gap: 4px;
-    font-size: 12px; color: var(--fg); cursor: pointer; user-select: none;
+    font-size: 12px; color: var(--text); cursor: pointer; user-select: none;
   }
   .embeds-picker label input { margin: 0; }
   .embeds-picker .embeds-hint {
@@ -323,7 +345,7 @@
   <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
 </nav>
 
-<p class="warn">Edits <code>/etc/nexvue/channels/*.env</code>. MediaMTX path stays <code>chN</code>; set <code>CHANNEL_ALIAS</code> for a friendly label. Restart is optional after save. Click a row to edit; select rows for bulk edit.</p>
+<p class="warn">Edits <code>/etc/nexvue/channels/*.env</code>. Path stays <code>chN</code> (device slot is fixed); set a display name for Player / Multiview. Encode is always DeckLink SDI → 8ch Opus when audio is on. Restart is optional after save. Click a row to edit; select rows for bulk edit.</p>
 
 <div class="panel">
   <h2>Channel list</h2>
@@ -338,8 +360,8 @@
   <table>
     <thead>
       <tr>
-        <th></th><th>ID</th><th>Path</th><th>Alias</th><th>Src</th><th>Bitrate</th>
-        <th>Deint</th><th>Audio</th><th title="LO rendition (LO_ENABLE)">LO</th><th>Status</th>
+        <th></th><th>ID</th><th>Path</th><th>Alias</th><th>Bitrate</th>
+        <th>Output</th><th>Audio</th><th title="Low-res rendition (LO pool)">LO</th><th>Status</th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
@@ -529,115 +551,106 @@
     el.addEventListener("blur", () => { if (tipAnchor === el) hideFieldTip(); });
   }
 
+  // UI surface only — unused / supervisor-era keys stay writable via hand-edited
+  // .env and factory-default wipe, but are not shown in the editor.
   const FIELD_META = {
     CHANNEL_ALIAS: {
-      label: "Alias (display name)",
+      label: "Display name",
       type: "text",
-      tip: "Friendly label shown in Player, Multiview, and Settings. Does not change the MediaMTX path — WHEP still uses CHANNEL_PATH (ch0, ch1, …). Spaces are fine (quoted on write). Blank = UIs show the path only.",
-    },
-    INPUT_TYPE: {
-      label: "INPUT_TYPE",
-      type: "select",
-      options: ["decklink", "srt"],
-      tip: "Live source for this channel. decklink = SDI capture (DEVICE_NUMBER). srt is reserved for a future Phase 1.5 redesign — production ExecStart is nexvue-encode.sh (DeckLink only). Blank = decklink.",
-    },
-    SRT_URI: {
-      label: "SRT_URI",
-      type: "text",
-      tip: "Full srt:// URI. Caller example: srt://encoder:9000?mode=caller. Listener example: srt://:9001?mode=listener&latency=120. Required when INPUT_TYPE=srt.",
-    },
-    SRT_LATENCY_MS: {
-      label: "SRT_LATENCY_MS",
-      type: "text",
-      tip: "SRT receiver latency in milliseconds (srtsrc latency property). Typical 80–200. Blank = 120.",
-    },
-    DEINT_FIELDS: {
-      label: "DEINT_FIELDS",
-      type: "select",
-      options: ["all", "top"],
-      tip: "Output cadence from a 1080i59.94 source. all → 1080p59.94 full motion (program / director / talent return). top → 1080p29.97 at about half encode cost (multiview walls, prompter). Blank = all.",
+      tip: "Friendly label in Player, Multiview, and Settings. Does not change the MediaMTX path (still ch0, ch1, …). Spaces are fine. Blank = UIs show the path only.",
     },
     BITRATE_KBPS: {
-      label: "BITRATE_KBPS",
+      label: "HI bitrate (kbps)",
       type: "text",
-      tip: "HI-rendition H.264 CBR bitrate in kbps. Typical: 4000–6000 for 1080p59.94; 2500–3000 for 29.97p. Default 5000. Blank = 5000.",
+      tip: "Primary H.264 CBR bitrate in kbps. Typical: 4000–6000 for 1080p59.94; 2500–3000 for 29.97p. Blank = 5000.",
     },
     GOP_FRAMES: {
-      label: "GOP_FRAMES",
+      label: "Keyframe interval (frames)",
       type: "text",
-      tip: "Keyframe interval in frames. Affects viewer join / channel-switch time only — not steady-state latency. 30 = faster switching; 60 is the usual trade-off. Blank = 60.",
+      tip: "GOP length. Affects viewer join / channel-switch time only — not steady-state latency. 30 = faster switching; 60 is the usual trade-off. Blank = 60.",
     },
-    ENABLE_AUDIO: {
-      label: "ENABLE_AUDIO",
+    DEINT_FIELDS: {
+      label: "Interlace output",
       type: "select",
-      options: ["true", "false"],
-      tip: "Include Opus audio in the stream. false removes the browser A/V-sync buffer (~40–60 ms lower latency) — recommended for prompter / multiview channels. Blank = true.",
-    },
-    AUDIO_FRAME_MS: {
-      label: "AUDIO_FRAME_MS",
-      type: "select",
-      options: ["2", "5", "10", "20", "40", "60"],
-      tip: "Opus frame size in milliseconds. 10 is the low-latency default. Blank = 10.",
-    },
-    AUDIO_BITRATE_BPS: {
-      label: "AUDIO_BITRATE_BPS",
-      type: "text",
-      tip: "Opus bitrate in bits per second. Encode always publishes 8ch discrete Opus; default 384000 (384 kbps). Max 512000 (WebRTC packet-size cliff). Blank = 384000.",
-    },
-    AUDIO_EMBEDS: {
-      label: "AUDIO_EMBEDS",
-      type: "embeds",
-      tip: "Which SDI embeds (1–8) are offered in the Player / Multiview VU and listen UI. Encode always ingests and publishes all 8 embeds — unchecking here only hides them from operators in the browser. Blank = all eight enabled.",
-    },
-    AUDIO_CHANNELS: {
-      label: "AUDIO_CHANNELS",
-      type: "select",
-      options: ["2", "4", "6", "8"],
-      tip: "Legacy only — ignored by encode (always 8ch). Prefer AUDIO_LAYOUT (player role) + AUDIO_EMBEDS (which embeds the UI offers).",
-    },
-    AUDIO_LAYOUT: {
-      label: "AUDIO_LAYOUT",
-      type: "select",
-      options: ["stereo", "51", "stereo_sap", "51_sap"],
-      tip: "Player role preset only (does not change encode). Encode always opens DeckLink 8ch and publishes 8ch Opus to HI and LO. stereo=Main L/R; 51=Main 1–6; stereo_sap=Main 1–2 + SAP 7–8; 51_sap=Main 1–6 + SAP 7–8. Use Detect audio… + embed checkboxes below. Blank = 51_sap.",
-    },
-    DECKLINK_BUFFER_FRAMES: {
-      label: "DECKLINK_BUFFER_FRAMES",
-      type: "select",
-      options: ["1", "2", "3", "4"],
-      tip: "DeckLink driver frame queue depth. Keep small for latency (2 is recommended). Blank = 2.",
-    },
-    DECKLINK_DROP_NO_SIGNAL_FRAMES: {
-      label: "DECKLINK_DROP_NO_SIGNAL_FRAMES",
-      type: "select",
-      options: ["true", "false"],
-      tip: "true = drop frames while unlocked. false (default, Phase-1-stable) = push black while unlocked. Try true only if you see not-negotiated right after Input source detected. Blank = false.",
+      options: ["all", "top"],
+      optionLabels: {
+        all: "All fields → 1080p59.94",
+        top: "Top field → 1080p29.97",
+      },
+      tip: "From a 1080i59.94 source: all = full-motion 59.94p (program / director). top = 29.97p at about half encode cost (multiview / prompter). Blank = all.",
     },
     VIDEO_ENCODER: {
-      label: "VIDEO_ENCODER",
+      label: "Video encoder",
       type: "select",
       options: ["vah264enc", "x264enc"],
-      tip: "Video encoder. vah264enc = Intel Quick Sync / VA-API (production). x264enc = CPU fallback for bring-up / debug only — much higher CPU. Blank = vah264enc.",
+      optionLabels: {
+        vah264enc: "Intel Quick Sync (vah264enc)",
+        x264enc: "CPU fallback (x264enc)",
+      },
+      tip: "vah264enc = production (VA-API / Quick Sync). x264enc = bring-up / debug only — much higher CPU. Blank = vah264enc.",
     },
-    EXTRA_ENC_ARGS: {
-      label: "EXTRA_ENC_ARGS",
-      type: "text",
-      tip: "Extra GStreamer encoder properties appended to the encode element (e.g. cpb-size=…). Leave blank unless you know you need a specific property — almost everyone should leave this empty.",
+    DECKLINK_BUFFER_FRAMES: {
+      label: "DeckLink buffer (frames)",
+      type: "select",
+      options: ["1", "2", "3", "4"],
+      tip: "Capture queue depth. Keep small for latency — 2 is recommended. Blank = 2.",
     },
-    LO_ENABLE: {
-      label: "LO_ENABLE",
+    ENABLE_AUDIO: {
+      label: "Publish audio",
       type: "select",
       options: ["true", "false"],
-      tip: "Request a second lower-bitrate encode as <path>lo for player auto-switch under packet loss. Station-wide floating pool (MAX_LO_RENDITIONS, default 6): only the first N requesters by channel id actually get LO. Settings rejects a 7th enable. Blank = false.",
+      optionLabels: { true: "On (Opus 8ch)", false: "Off (video only)" },
+      tip: "Include Opus in the stream. Off removes the browser A/V-sync buffer (~40–60 ms lower latency) — useful for prompter / pure-video walls. Blank = on.",
+    },
+    AUDIO_LAYOUT: {
+      label: "Player audio role",
+      type: "select",
+      options: ["stereo", "51", "stereo_sap", "51_sap"],
+      optionLabels: {
+        stereo: "Stereo (Main L/R)",
+        "51": "5.1 (Main 1–6)",
+        stereo_sap: "Stereo + SAP (1–2 + 7–8)",
+        "51_sap": "5.1 + SAP (1–6 + 7–8)",
+      },
+      tip: "Player / Multiview role only — does not change encode. Encode always publishes discrete 8ch Opus. Use Detect audio… to suggest a role from live embeds. Blank = 5.1 + SAP.",
+      depends: { ENABLE_AUDIO: true },
+    },
+    AUDIO_EMBEDS: {
+      label: "Show embeds in VU / listen",
+      type: "embeds",
+      tip: "Which SDI embeds (1–8) appear in Player / Multiview VU and listen controls. Encode always publishes all 8 — unchecking only hides them in the browser. Blank = all eight.",
+      depends: { ENABLE_AUDIO: true },
+      span: 2,
+    },
+    AUDIO_FRAME_MS: {
+      label: "Opus frame size (ms)",
+      type: "select",
+      options: ["2", "5", "10", "20", "40", "60"],
+      tip: "Opus packet duration. 10 ms is the low-latency default. Blank = 10.",
+      depends: { ENABLE_AUDIO: true },
+    },
+    AUDIO_BITRATE_BPS: {
+      label: "Opus bitrate (bps)",
+      type: "text",
+      tip: "Bits per second for the 8ch Opus track. Default 384000 (384 kbps). Max 512000 (WebRTC packet-size cliff). Blank = 384000.",
+      depends: { ENABLE_AUDIO: true },
+    },
+    LO_ENABLE: {
+      label: "Low-res rendition (LO)",
+      type: "select",
+      options: ["true", "false"],
+      optionLabels: { true: "On (request pool slot)", false: "Off" },
+      tip: "Second lower-bitrate encode as <path>lo for player auto-switch under loss. Station pool MAX_LO_RENDITIONS (default 6): Settings rejects a 7th enable. Blank = off.",
     },
     LO_PRESET: {
-      label: "LO_PRESET",
+      label: "LO resolution",
       type: "select",
       options: ["720p", "540p", "480p", "360p", "240p", "180p"],
-      tip: "LO resolution ladder (height) with safe default bitrates. Prefer this over custom LO_WIDTH/HEIGHT. Blank = 720p when LO is enabled.",
+      tip: "LO height ladder with safe default bitrates. Prefer this over custom width/height under Advanced. Blank = 720p when LO is on.",
+      depends: { LO_ENABLE: true },
     },
     LO_FPS: {
-      label: "LO_FPS",
+      label: "LO frame rate",
       type: "select",
       options: ["30000/1001", "60000/1001", "15000/1001"],
       optionLabels: {
@@ -645,98 +658,84 @@
         "60000/1001": "59.94 (match HI)",
         "15000/1001": "14.99 (lowest bandwidth)",
       },
-      tip: "LO output framerate (GStreamer fraction only). Free-form values like 29.97 break the pipeline. Blank = 30000/1001.",
-    },
-    LO_TARGET_USAGE: {
-      label: "LO_TARGET_USAGE",
-      type: "select",
-      options: ["3", "4", "5", "7"],
-      optionLabels: {
-        "3": "3 (better quality — may drop frames)",
-        "4": "4 (balanced)",
-        "5": "5 (faster)",
-        "7": "7 (default / fastest)",
-      },
-      tip: "vah264enc target-usage for LO only (1–7). HI stays at 7. Blank = 7. Values below 7 can make LO play at a few fps under load (QoS drops on the scale path).",
-    },
-    LO_QUEUE_BUFFERS: {
-      label: "LO_QUEUE_BUFFERS",
-      type: "select",
-      options: ["8", "16", "24", "32"],
-      tip: "LO video queue depth before scale/encode. Deeper = fewer drops under iGPU pressure. Blank = 16.",
+      tip: "LO output framerate (GStreamer fraction). Free-form values like 29.97 break the pipeline. Blank = 29.97.",
+      depends: { LO_ENABLE: true },
     },
     LO_BITRATE_KBPS: {
-      label: "LO_BITRATE_KBPS",
+      label: "LO bitrate override (kbps)",
       type: "text",
-      tip: "Explicit LO CBR bitrate in kbps; overrides the preset default. Blank = use the preset bitrate for LO_PRESET.",
+      tip: "Explicit LO CBR bitrate; overrides the preset default. Blank = use the preset bitrate for the selected resolution.",
+      depends: { LO_ENABLE: true },
     },
     LO_WIDTH: {
-      label: "LO_WIDTH",
+      label: "LO width (px)",
       type: "text",
-      tip: "Advanced: explicit LO width (even pixels). Leave blank to use LO_PRESET.",
+      tip: "Advanced: explicit LO width (even pixels). Leave blank to use LO resolution preset.",
+      depends: { LO_ENABLE: true },
     },
     LO_HEIGHT: {
-      label: "LO_HEIGHT",
+      label: "LO height (px)",
       type: "text",
-      tip: "Advanced: explicit LO height (even pixels). Leave blank to use LO_PRESET.",
+      tip: "Advanced: explicit LO height (even pixels). Leave blank to use LO resolution preset.",
+      depends: { LO_ENABLE: true },
     },
-    LO_GOP_FRAMES: {
-      label: "LO_GOP_FRAMES",
-      type: "select",
-      options: ["30", "60"],
-      tip: "LO keyframe interval. Blank inherits GOP_FRAMES (HI).",
-    },
-    SIGNAL_LOSS_DEBOUNCE_S: {
-      label: "SIGNAL_LOSS_DEBOUNCE_S",
+    EXTRA_ENC_ARGS: {
+      label: "Extra encoder args",
       type: "text",
-      tip: "Seconds of continuous live-source unlock before switching LIVE → NO SIGNAL slate. Keep generous so brief hiccups heal as black frames without a slate flash. Default 15. Typical range 5–30.",
-    },
-    SIGNAL_ACQUIRE_DEBOUNCE_S: {
-      label: "SIGNAL_ACQUIRE_DEBOUNCE_S",
-      type: "text",
-      tip: "Seconds of continuous lock + valid video before promoting SLATE → LIVE. Prevents flapping on intermittent reconnect. Default 1.",
-    },
-    DECKLINK_RETRY_S: {
-      label: "DECKLINK_RETRY_S",
-      type: "text",
-      tip: "Seconds to wait before rebuilding the live capture/decode branch (DeckLink or SRT) after a hard ERROR/EOS. Slate keeps publishing in the meantime. Default 3.",
+      tip: "Extra GStreamer encoder properties appended to the encode element (e.g. cpb-size=…). Leave blank unless you need a specific property.",
     },
   };
 
   const FIELD_GROUPS = [
-    { id: "general", title: "General", keys: ["CHANNEL_ALIAS", "INPUT_TYPE", "SRT_URI", "SRT_LATENCY_MS"] },
+    {
+      id: "general",
+      title: "General",
+      blurb: "Identity (device / path) is fixed per slot. Alias is display-only.",
+      keys: ["CHANNEL_ALIAS"],
+    },
     {
       id: "video",
       title: "Video",
+      blurb: "HI encode from DeckLink SDI. Source connector is the channel slot device number.",
       keys: [
         "BITRATE_KBPS", "GOP_FRAMES", "DEINT_FIELDS", "VIDEO_ENCODER",
-        "DECKLINK_BUFFER_FRAMES", "DECKLINK_DROP_NO_SIGNAL_FRAMES",
+        "DECKLINK_BUFFER_FRAMES",
       ],
     },
     {
       id: "audio",
       title: "Audio",
-      keys: ["ENABLE_AUDIO", "AUDIO_FRAME_MS", "AUDIO_BITRATE_BPS", "AUDIO_EMBEDS", "AUDIO_LAYOUT", "AUDIO_CHANNELS"],
+      blurb: "Encode always publishes discrete 8-channel Opus when audio is on. Role and embed checkboxes only change Player / Multiview.",
+      keys: [
+        "ENABLE_AUDIO", "AUDIO_LAYOUT", "AUDIO_EMBEDS",
+        "AUDIO_FRAME_MS", "AUDIO_BITRATE_BPS",
+      ],
+      probe: true,
     },
     {
       id: "lo",
-      title: "Low-res rendition (floating pool)",
-      keys: [
-        "LO_ENABLE", "LO_PRESET", "LO_FPS", "LO_TARGET_USAGE",
-        "LO_QUEUE_BUFFERS", "LO_BITRATE_KBPS",
-      ],
+      title: "Low-res rendition",
+      blurb: "Optional second encode for ABR under packet loss. Limited by the station LO pool.",
+      keys: ["LO_ENABLE", "LO_PRESET", "LO_FPS", "LO_BITRATE_KBPS"],
     },
     {
-      id: "lo-advanced",
-      title: "LO advanced (leave blank)",
-      keys: ["LO_WIDTH", "LO_HEIGHT", "LO_GOP_FRAMES"],
-    },
-    {
-      id: "encoder-advanced",
-      title: "Encoder advanced",
-      keys: ["EXTRA_ENC_ARGS"],
+      id: "advanced",
+      title: "Advanced",
+      blurb: "Leave blank unless you need a custom LO raster or a specific encoder property.",
+      keys: ["LO_WIDTH", "LO_HEIGHT", "EXTRA_ENC_ARGS"],
+      advanced: true,
     },
   ];
+
+  function uiKeyList() {
+    const out = [];
+    for (const g of FIELD_GROUPS) {
+      for (const k of g.keys) {
+        if (FIELD_META[k] && !out.includes(k)) out.push(k);
+      }
+    }
+    return out;
+  }
 
   async function api(action, body) {
     const res = await fetch("nexvue-ops.php", {
@@ -762,16 +761,54 @@
   function groupedKeys(keys) {
     const set = new Set(keys);
     const sections = [];
-    const used = new Set();
     for (const g of FIELD_GROUPS) {
-      const present = g.keys.filter(k => set.has(k));
+      const present = g.keys.filter(k => set.has(k) && FIELD_META[k]);
       if (!present.length) continue;
-      present.forEach(k => used.add(k));
-      sections.push({ id: g.id, title: g.title, keys: present });
+      sections.push({
+        id: g.id,
+        title: g.title,
+        blurb: g.blurb || "",
+        keys: present,
+        advanced: !!g.advanced,
+        probe: !!g.probe,
+      });
     }
-    const other = keys.filter(k => !used.has(k));
-    if (other.length) sections.push({ id: "other", title: "Other", keys: other });
     return sections;
+  }
+
+  function effectiveFlag(vals, key, defaultOn) {
+    const v = String(vals[key] ?? "").trim().toLowerCase();
+    if (!v) return defaultOn;
+    return v === "true";
+  }
+
+  function readFormValues(root) {
+    const vals = {};
+    root.querySelectorAll("[data-key]").forEach(el => {
+      vals[el.dataset.key] = el.value;
+    });
+    return vals;
+  }
+
+  function applyDependencies(root) {
+    if (!root) return;
+    const vals = readFormValues(root);
+    root.querySelectorAll("[data-depends-key]").forEach(el => {
+      const key = el.dataset.dependsKey;
+      const want = el.dataset.dependsWant === "true";
+      const defaultOn = key === "ENABLE_AUDIO";
+      const on = effectiveFlag(vals, key, defaultOn);
+      el.hidden = on !== want;
+    });
+  }
+
+  function wireDependencies(root) {
+    if (!root) return;
+    const refresh = () => applyDependencies(root);
+    root.querySelectorAll('select[data-key="ENABLE_AUDIO"], select[data-key="LO_ENABLE"]').forEach(el => {
+      el.addEventListener("change", refresh);
+    });
+    refresh();
   }
 
   function parseEmbedsCsv(raw) {
@@ -917,7 +954,6 @@
       } else {
         loHtml = `<span class="lo-no">no</span>`;
       }
-      const src = (c.INPUT_TYPE || "decklink") === "srt" ? "SRT" : "SDI";
       // Disabled + not running = parked: neutral dot and "disabled" label,
       // even if the last run left a stale `failed` behind — no live fault.
       const parked = c.enabled === "disabled" && !c.active;
@@ -925,15 +961,16 @@
       const stateTxt = parked
         ? "disabled"
         : (c.state || "—") + (c.enabled === "disabled" ? " · disabled" : "");
+      const deint = c.DEINT_FIELDS === "top" ? "29.97p" : (c.DEINT_FIELDS === "all" ? "59.94p" : (c.DEINT_FIELDS || "—"));
+      const audio = c.ENABLE_AUDIO === "false" ? "off" : (c.ENABLE_AUDIO === "true" || !c.ENABLE_AUDIO ? "on" : (c.ENABLE_AUDIO || "—"));
       return `<tr class="row" data-id="${c.id}">
         <td><input type="checkbox" class="sel" value="${c.id}"></td>
         <td><span class="dot ${dot}"></span>${c.id}</td>
         <td>${esc(c.CHANNEL_PATH || ("ch" + c.id))}</td>
         <td>${esc(alias)}</td>
-        <td>${esc(src)}</td>
         <td>${esc(c.BITRATE_KBPS || "—")}</td>
-        <td>${esc(c.DEINT_FIELDS || "—")}</td>
-        <td>${esc(c.ENABLE_AUDIO || "—")}</td>
+        <td>${esc(deint)}</td>
+        <td>${esc(audio)}</td>
         <td>${loHtml}</td>
         <td>${esc(stateTxt)}</td>
       </tr>`;
@@ -971,15 +1008,20 @@
   function buildIdentityStrip(keys) {
     const strip = document.createElement("div");
     strip.className = "identity";
-    for (const rk of ["DEVICE_NUMBER", "CHANNEL_PATH", "RTSP_URL"]) {
+    const rows = [
+      ["Device", keys.DEVICE_NUMBER],
+      ["Path", keys.CHANNEL_PATH],
+      ["Publish URL", keys.RTSP_URL],
+    ];
+    for (const [label, val] of rows) {
       const item = document.createElement("div");
       item.className = "item";
       const k = document.createElement("span");
       k.className = "k";
-      k.textContent = rk;
+      k.textContent = label;
       const v = document.createElement("span");
       v.className = "v";
-      v.textContent = keys[rk] || "—";
+      v.textContent = (val == null || val === "") ? "—" : String(val);
       item.appendChild(k);
       item.appendChild(v);
       strip.appendChild(item);
@@ -990,13 +1032,15 @@
   function buildAudioProbePanel() {
     const box = document.createElement("div");
     box.className = "audio-probe";
+    box.dataset.dependsKey = "ENABLE_AUDIO";
+    box.dataset.dependsWant = "true";
     box.innerHTML =
       `<div class="probe-bar">` +
       `<button type="button" id="audio-probe-btn" title="Stop encoder briefly, measure SDI embeds 1–8">Detect audio…</button>` +
-      `<button type="button" class="primary" id="audio-probe-apply" disabled>Apply layout to form</button>` +
+      `<button type="button" class="primary" id="audio-probe-apply" disabled>Apply to form</button>` +
       `</div>` +
-      `<p class="probe-hint">Stops this channel’s encoder for ~1–2s, measures PCM energy on DeckLink embeds 1–8, then restarts. ` +
-      `Suggestions set the player role (AUDIO_LAYOUT) and which embeds the UI offers (AUDIO_EMBEDS) — encode always publishes all 8.</p>` +
+      `<p class="probe-hint">Stops this encoder ~1–2s (viewers drop briefly), measures embeds 1–8, then restarts. ` +
+      `Suggestions only set the player role and VU/listen embeds — Save to write. Encode always publishes all 8.</p>` +
       `<div class="probe-result" id="audio-probe-result" hidden></div>`;
     return box;
   }
@@ -1016,8 +1060,8 @@
     const activeN = data.active_count != null ? data.active_count : (data.active_mask || []).length;
     const sugg = data.suggestions || [];
     let list = "";
-    if (!sugg.length) {
-      list = `<p class="probe-hint">No layout matched the active embeds. Pick AUDIO_LAYOUT manually.</p>`;
+      if (!sugg.length) {
+      list = `<p class="probe-hint">No layout matched the active embeds. Pick Player audio role manually.</p>`;
     } else {
       list = `<ul class="suggest-list">` + sugg.map((s, i) => {
         const exact = s.exact ? ` <span class="exact">exact</span>` : "";
@@ -1039,56 +1083,15 @@
       list;
   }
 
-  function buildEditSections(keys, keyList) {
-    const frag = document.createDocumentFragment();
-    frag.appendChild(buildIdentityStrip(keys));
-    for (const section of groupedKeys(keyList)) {
-      const wrap = document.createElement("section");
-      wrap.className = "form-section";
-      const h = document.createElement("h3");
-      h.textContent = section.title;
-      wrap.appendChild(h);
-      const grid = document.createElement("div");
-      grid.className = "form-grid";
-      for (const key of section.keys) {
-        const meta = FIELD_META[key] || { label: key, type: "text" };
-        const field = document.createElement("label");
-        field.className = "field";
-        const title = document.createElement("span");
-        title.className = "label-row";
-        title.textContent = meta.label || key;
-        if (meta.tip) {
-          title.setAttribute("data-tip", meta.tip);
-          title.setAttribute("tabindex", "0");
-          wireFieldTip(title);
-        }
-        field.appendChild(title);
-        field.appendChild(makeControl(key, keys[key] || "", { blankUnset: true }));
-        grid.appendChild(field);
-      }
-      wrap.appendChild(grid);
-      if (section.id === "audio") {
-        wrap.appendChild(buildAudioProbePanel());
-      }
-      frag.appendChild(wrap);
-    }
-    return frag;
-  }
-
-  function buildBulkSections(keyList) {
-    const frag = document.createDocumentFragment();
-    for (const section of groupedKeys(keyList)) {
-      const wrap = document.createElement("section");
-      wrap.className = "form-section";
-      const h = document.createElement("h3");
-      h.textContent = section.title;
-      wrap.appendChild(h);
-      const grid = document.createElement("div");
-      grid.className = "form-grid";
-      for (const key of section.keys) {
-        const meta = FIELD_META[key] || { label: key, type: "text" };
+  function appendSectionFields(grid, sectionKeys, values, { blankUnset, bulk }) {
+    for (const key of sectionKeys) {
+      const meta = FIELD_META[key] || { label: key, type: "text" };
+      if (bulk) {
+        // Bulk always shows every UI key (no depends hide) so operators can
+        // patch LO/audio details without also enabling the parent toggle.
         const row = document.createElement("div");
         row.className = "bulk-field";
+        if (meta.span === 2) row.classList.add("field-span-2");
         const labelRow = document.createElement("label");
         labelRow.className = "label-row";
         const cb = document.createElement("input");
@@ -1106,25 +1109,102 @@
         labelRow.appendChild(cb);
         labelRow.appendChild(lab);
         const control = makeControl(key, "", { blankUnset: false });
-        control.addEventListener("input", () => {
+        const markEnabled = () => {
           if (!cb.checked) {
             cb.checked = true;
             row.classList.add("enabled");
           }
-        });
-        control.addEventListener("change", () => {
-          if (!cb.checked) {
-            cb.checked = true;
-            row.classList.add("enabled");
-          }
-        });
+        };
+        control.addEventListener("input", markEnabled);
+        control.addEventListener("change", markEnabled);
         cb.addEventListener("change", () => {
           row.classList.toggle("enabled", cb.checked);
         });
         row.appendChild(labelRow);
         row.appendChild(control);
         grid.appendChild(row);
+        continue;
       }
+      const field = document.createElement("label");
+      field.className = "field";
+      if (meta.span === 2) field.classList.add("field-span-2");
+      if (meta.depends) {
+        const depKey = Object.keys(meta.depends)[0];
+        field.dataset.dependsKey = depKey;
+        field.dataset.dependsWant = meta.depends[depKey] ? "true" : "false";
+      }
+      const title = document.createElement("span");
+      title.className = "label-row";
+      title.textContent = meta.label || key;
+      if (meta.tip) {
+        title.setAttribute("data-tip", meta.tip);
+        title.setAttribute("tabindex", "0");
+        wireFieldTip(title);
+      }
+      field.appendChild(title);
+      field.appendChild(makeControl(key, values[key] || "", { blankUnset }));
+      grid.appendChild(field);
+    }
+  }
+
+  function buildEditSections(keys, keyList) {
+    const frag = document.createDocumentFragment();
+    frag.appendChild(buildIdentityStrip(keys));
+    for (const section of groupedKeys(keyList)) {
+      const wrap = section.advanced
+        ? document.createElement("details")
+        : document.createElement("section");
+      wrap.className = section.advanced ? "form-advanced" : "form-section";
+      if (section.advanced) {
+        const sum = document.createElement("summary");
+        sum.textContent = section.title;
+        wrap.appendChild(sum);
+      } else {
+        const h = document.createElement("h3");
+        h.textContent = section.title;
+        wrap.appendChild(h);
+      }
+      if (section.blurb) {
+        const blurb = document.createElement("p");
+        blurb.className = "section-blurb";
+        blurb.textContent = section.blurb;
+        wrap.appendChild(blurb);
+      }
+      const grid = document.createElement("div");
+      grid.className = "form-grid";
+      appendSectionFields(grid, section.keys, keys, { blankUnset: true, bulk: false });
+      wrap.appendChild(grid);
+      if (section.probe) wrap.appendChild(buildAudioProbePanel());
+      frag.appendChild(wrap);
+    }
+    return frag;
+  }
+
+  function buildBulkSections(keyList) {
+    const frag = document.createDocumentFragment();
+    for (const section of groupedKeys(keyList)) {
+      const wrap = section.advanced
+        ? document.createElement("details")
+        : document.createElement("section");
+      wrap.className = section.advanced ? "form-advanced" : "form-section";
+      if (section.advanced) {
+        const sum = document.createElement("summary");
+        sum.textContent = section.title;
+        wrap.appendChild(sum);
+      } else {
+        const h = document.createElement("h3");
+        h.textContent = section.title;
+        wrap.appendChild(h);
+      }
+      if (section.blurb) {
+        const blurb = document.createElement("p");
+        blurb.className = "section-blurb";
+        blurb.textContent = section.blurb;
+        wrap.appendChild(blurb);
+      }
+      const grid = document.createElement("div");
+      grid.className = "form-grid";
+      appendSectionFields(grid, section.keys, {}, { blankUnset: false, bulk: true });
       wrap.appendChild(grid);
       frag.appendChild(wrap);
     }
@@ -1168,18 +1248,15 @@
     apply.addEventListener("click", () => {
       const picked = editBody.querySelector('input[name="audio-probe-layout"]:checked');
       if (!picked) {
-        alert("Select a suggested layout first (or set AUDIO_LAYOUT / embeds manually).");
+        alert("Select a suggested layout first (or set Player audio role / embeds manually).");
         return;
       }
       const sel = editBody.querySelector('select[data-key="AUDIO_LAYOUT"]');
       if (!sel) {
-        alert("AUDIO_LAYOUT control missing");
+        alert("Player audio role control missing");
         return;
       }
       sel.value = picked.value;
-      const ch = editBody.querySelector('select[data-key="AUDIO_CHANNELS"]');
-      if (ch) ch.value = "";
-      // Prefer embeds_csv from the suggestion radio's sibling data; fall back to layout defaults.
       let embedsCsv = picked.dataset.embeds || "";
       if (!embedsCsv) {
         const li = picked.closest("li");
@@ -1199,9 +1276,9 @@
       }
       setMsg(
         editMsg,
-        `AUDIO_LAYOUT=${picked.value}` +
-          (embedsCsv ? `, AUDIO_EMBEDS=${embedsCsv}` : "") +
-          " set in form — Save channel to write",
+        `Player role=${picked.value}` +
+          (embedsCsv ? `, embeds=${embedsCsv}` : "") +
+          " — Save channel to write",
         "ok"
       );
     });
@@ -1225,7 +1302,8 @@
         : path;
       editDot.className = "dot " + (summary && summary.active ? "ok" : "bad");
       editBody.innerHTML = "";
-      editBody.appendChild(buildEditSections(keys, data.editable_keys || editableKeys));
+      editBody.appendChild(buildEditSections(keys, uiKeyList()));
+      wireDependencies(editBody);
       wireAudioProbe();
       if (!editDlg.open) editDlg.showModal();
     } catch (err) {
@@ -1249,7 +1327,8 @@
     bulkHeading.textContent = `Bulk edit — ${ids.length} channel${ids.length === 1 ? "" : "s"}`;
     bulkSub.textContent = `Channels ${ids.join(", ")}. Check parameters to apply. Does not change DEVICE_NUMBER / CHANNEL_PATH.`;
     bulkBody.innerHTML = "";
-    bulkBody.appendChild(buildBulkSections(editableKeys));
+    bulkBody.appendChild(buildBulkSections(uiKeyList()));
+    wireDependencies(bulkBody);
     bulkApply.disabled = false;
     bulkApply.textContent = `Apply to ${ids.length} channel${ids.length === 1 ? "" : "s"}`;
     if (!bulkDlg.open) bulkDlg.showModal();
@@ -1347,13 +1426,15 @@
     // DEVICE_NUMBER / CHANNEL_PATH / RTSP_URL are identity and never touched.
     if (!confirm(
       `Reset channel ${selectedId} to factory defaults?\n\n` +
-      "Every editable setting is blanked: alias cleared, input back to DeckLink, " +
-      "video 5000 kbps / deinterlace all, audio 8ch Opus @ 384 kbps (all embeds), " +
-      "LO rendition off, all tuning knobs to defaults.\n" +
-      "DEVICE_NUMBER and CHANNEL_PATH are kept. Takes effect on encoder restart."
+      "Clears display name, HI video to 5000 kbps / full-rate deinterlace, " +
+      "audio on (8ch Opus @ 384 kbps, all embeds, 5.1+SAP player role), " +
+      "LO off, and advanced knobs blank.\n" +
+      "Device number and path are kept. Takes effect on encoder restart."
     )) {
       return;
     }
+    // Blank every server-editable key (including legacy keys no longer shown)
+    // so hand-edited leftovers do not stick around after a factory reset.
     const patch = {};
     for (const key of editableKeys) patch[key] = "";
     try {
@@ -1372,9 +1453,10 @@
     if (selectedId == null) return;
     setMsg(editMsg, "");
     const patch = {};
+    const allowed = new Set(uiKeyList());
     editBody.querySelectorAll("[data-key]").forEach(el => {
       const key = el.dataset.key;
-      if (!editableKeys.includes(key) && !FIELD_META[key]) return;
+      if (!allowed.has(key)) return;
       patch[key] = el.value;
     });
     try {
