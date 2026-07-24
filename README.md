@@ -299,7 +299,10 @@ Then from a LAN machine:
   zip of journals, `/etc/nexvue` channel/MediaMTX config, metrics samples, and
   small `/run/nexvue` state via `nexvue-ops.php?action=support_bundle` →
   `nexvue-ops-support-bundle.sh` → `nexvue-support-bundle.py` (zips land under
-  `/var/lib/nexvue/support`, pruned after 24h). LAN-trust ops.
+  `/var/lib/nexvue/support`, pruned after 24h). **Update from repo…** fetches
+  `origin/<branch>`, hard-resets the clone (`/etc/nexvue/repo.path`), and runs
+  `setup.sh` (`nexvue-ops-update.sh`). Does not restart encoders. Top-nav shows
+  **vX.Y.Z** from the `VERSION` file (`nexvue-version.php`). LAN-trust ops.
 - **Settings:** top nav → Settings — optional station **logo** (Branding
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
   shown in the top nav next to **NexVUE** when present) plus channel list

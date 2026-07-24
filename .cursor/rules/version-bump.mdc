@@ -1,0 +1,36 @@
+---
+description: Bump repo VERSION on meaningful NexVUE changes
+alwaysApply: true
+---
+
+# Version bump (required)
+
+NexVUE ships a semver file at repo root `VERSION` (shown in the top-nav via
+`nexvue-version.php`). **Update it in the same change set** whenever you finish
+userful work — do not leave VERSION stale.
+
+## When to bump
+
+- **Patch (x.y.Z):** bug fixes, copy/docs-only that operators rely on, small UI
+  polish, test-only fixes tied to behavior.
+- **Minor (x.Y.0):** new features, new ops actions, new Settings/Services
+  controls, player behavior changes, new deploy helpers.
+- **Major (X.0.0):** breaking config/API/pipeline changes operators must notice.
+
+Skip bump only for pure chore with zero user/operator impact (e.g. typo in an
+agent transcript, formatting that cannot affect runtime).
+
+## How
+
+1. Read `VERSION`, choose the next semver, write the single-line file
+   (`1.2.3` — no `v` prefix, no extra text).
+2. Keep README/CLAUDE mentions of versioning accurate if you touch those docs.
+3. Do not invent git tags unless the user asks; bumping `VERSION` is enough for
+   the UI badge after `setup.sh` / Update from repo.
+
+## Example
+
+```text
+# was 1.0.0 — added Services → Update from repo
+1.1.0
+```

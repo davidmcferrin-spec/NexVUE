@@ -230,6 +230,11 @@ specifically because this box can't get additional ports opened.
  zip…** (`support_bundle`) builds a redacted journals+config+metrics+state
  zip via `nexvue-ops-support-bundle.sh` → `nexvue-support-bundle.py`
  (hours 1|6|12|24|48|72; output `/var/lib/nexvue/support`, 24h retention).
+ **Update from repo…** (`update_status` / `update_repo`) runs
+ `nexvue-ops-update.sh`: fetch + hard-reset to `origin/$NEXVUE_UPDATE_BRANCH`
+ (default `main`) using `/etc/nexvue/repo.path`, then `setup.sh`. Semver lives
+ in repo `VERSION`; top-nav badge via `nexvue-version.php` +
+ `/var/lib/nexvue/version.json`.
  Settings Channel list shows LO yes/no (pool-denied) and
  **Restart all encoders** (`restart_encoders`: systemd-enabled encode slots
  only); Services has the same bulk restart. Channel editor **Factory
@@ -250,3 +255,5 @@ specifically because this box can't get additional ports opened.
   or changed logic (`test/`). Complete file rewrites over accumulated diffs.
 - Architecture decisions confirmed with the owner before code.
 - Keep README.md and this file updated with every meaningful change.
+- **Bump `VERSION` (semver) with every meaningful change** — top-nav badge and
+  Update-from-repo stamp; see `.cursor/rules/version-bump.mdc`.

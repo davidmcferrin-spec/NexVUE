@@ -10,10 +10,15 @@
  *   services | journal | journal_clear | audio_probe | channels_list | channel_get | channel_put
  *   | channels_bulk | restart | restart_encoders | set_enabled | set_running | aliases
  *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete | support_bundle
+ *   | update_status | update_repo
  *
  * support_bundle returns application/zip (not JSON): builds a redacted
  * journals+config+state zip via nexvue-ops-support-bundle.sh for the
  * requested hours window (1|6|12|24|48|72).
+ *
+ * update_status / update_repo call nexvue-ops-update.sh (git fetch + hard-reset
+ * to origin/NEXVUE_UPDATE_BRANCH + setup.sh). LAN-trust — anyone with Services
+ * can redeploy the box.
  *
  * journal_clear records a per-unit watermark via nexvue-ops-journal.sh clear
  * so the Services journal view hides prior lines for that unit only (systemd
@@ -877,6 +882,41 @@ if ($action === 'support_bundle') {
         ob_end_clean();
     }
     readfile($real);
+    exit;
+}
+
+// ---- update_status / update_repo (JSON from nexvue-ops-update.sh) ------------
+
+if ($action === 'update_status' || $action === 'update_repo') {
+    if (function_exists('set_time_limit')) {
+        @set_time_limit($action === 'update_repo' ? 600 : 120);
+    }
+    $verb = $action === 'update_repo' ? 'apply' : 'status';
+    $r = sudo_run(['/usr/local/bin/nexvue-ops-update.sh', $verb]);
+    $raw = trim($r['stdout']);
+    $parsed = json_decode($raw, true);
+    if (!is_array($parsed)) {
+        // Wrapper may have printed JSON on stderr via fail_json before exit.
+        $errRaw = trim($r['stderr']);
+        $errParsed = json_decode($errRaw, true);
+        if (is_array($errParsed) && isset($errParsed['error'])) {
+            fail(500, (string)$errParsed['error']);
+        }
+        fail(
+            500,
+            $errRaw !== ''
+                ? $errRaw
+                : 'update helper returned no JSON (is nexvue-ops-update.sh installed?)'
+        );
+    }
+    if ($r['code'] !== 0 || empty($parsed['ok'])) {
+        fail(500, (string)($parsed['error'] ?? 'update helper failed'));
+    }
+    if (!headers_sent()) {
+        header('Content-Type: application/json');
+        header('Cache-Control: no-store');
+    }
+    echo json_encode($parsed, JSON_UNESCAPED_SLASHES);
     exit;
 }
 

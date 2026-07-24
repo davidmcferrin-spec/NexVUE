@@ -119,6 +119,10 @@
     background: var(--bg); color: var(--text); border: 1px solid var(--edge);
     border-radius: 4px; padding: 6px 8px; font: inherit;
   }
+  .support-bundle-bar .update-meta {
+    color: var(--dim); font-size: 12px; max-width: 28em;
+  }
+  .support-bundle-bar .update-meta.available { color: var(--acc); }
   button.primary {
     background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600;
   }
@@ -170,6 +174,8 @@
       <option value="72">Last 72 hours</option>
     </select>
     <button type="button" class="primary" id="btn-support-bundle" title="Download redacted journals + config + runtime state as a zip">Download zip…</button>
+    <span class="update-meta" id="update-meta" title="Git update status">—</span>
+    <button type="button" id="btn-update-repo" title="Fetch origin, hard-reset the clone, and re-run setup.sh">Update from repo…</button>
   </div>
 </div>
 
@@ -509,6 +515,112 @@
     });
   }
 
+  const updateBtn = document.getElementById("btn-update-repo");
+  const updateMeta = document.getElementById("update-meta");
+  let lastUpdateStatus = null;
+
+  function paintUpdateMeta(data) {
+    lastUpdateStatus = data;
+    if (!updateMeta) return;
+    if (!data || !data.ok) {
+      updateMeta.textContent = "update: unavailable";
+      updateMeta.classList.remove("available");
+      updateMeta.title = (data && data.error) || "Could not read git status";
+      return;
+    }
+    const ver = data.version || "?";
+    const sha = data.git_sha || "?";
+    const behind = Number(data.behind) || 0;
+    const ahead = Number(data.ahead) || 0;
+    let txt = `v${ver} · ${sha}`;
+    if (behind > 0) txt += ` · ${behind} behind`;
+    else txt += " · up to date";
+    if (ahead > 0) txt += ` · ${ahead} local ahead (will discard)`;
+    if (data.dirty) txt += " · dirty";
+    updateMeta.textContent = txt;
+    updateMeta.classList.toggle("available", behind > 0);
+    updateMeta.title =
+      `repo ${data.repo || "?"} · branch ${data.update_branch || data.git_branch || "?"}` +
+      (data.fetch_warning ? `\nfetch: ${data.fetch_warning}` : "");
+    const nav = document.getElementById("nav-version");
+    if (nav) {
+      nav.classList.toggle("update-available", behind > 0);
+    }
+  }
+
+  async function refreshUpdateStatus() {
+    if (!updateMeta) return;
+    updateMeta.textContent = "checking…";
+    try {
+      const data = await api("update_status", {});
+      paintUpdateMeta(data);
+    } catch (err) {
+      paintUpdateMeta({ ok: false, error: err.message });
+    }
+  }
+
+  if (updateBtn) {
+    updateBtn.addEventListener("click", async () => {
+      try {
+        await refreshUpdateStatus();
+      } catch { /* painted */ }
+      const st = lastUpdateStatus || {};
+      const behind = Number(st.behind) || 0;
+      const ahead = Number(st.ahead) || 0;
+      const branch = st.update_branch || st.git_branch || "main";
+      if (!st.ok) {
+        alert(st.error || "Update status unavailable — fix repo.path / git remote first.");
+        return;
+      }
+      if (behind <= 0) {
+        alert(
+          "Already up to date with origin/" + branch +
+          " (v" + (st.version || "?") + " · " + (st.git_sha || "?") + ").\n\n" +
+          "To reinstall from the current clone without pulling, SSH and run:\n  sudo ./setup.sh"
+        );
+        return;
+      }
+      if (!confirm(
+        `Update NexVUE from git (origin/${branch})?\n\n` +
+        `${behind} commit(s) will be applied.\n` +
+        (ahead > 0 ? `WARNING: ${ahead} local commit(s) on the clone will be discarded.\n` : "") +
+        (st.dirty ? "WARNING: uncommitted changes in tracked files will be discarded.\n" : "") +
+        "\nThis hard-resets the clone to origin/" + branch + " and runs setup.sh.\n" +
+        "Encoders are NOT restarted automatically — use Restart all encoders after."
+      )) {
+        return;
+      }
+      updateBtn.disabled = true;
+      statusEl.textContent = "Updating from repo (git + setup.sh)…";
+      try {
+        const data = await api("update_repo", {});
+        paintUpdateMeta(Object.assign({}, data, {
+          behind: 0,
+          ahead: 0,
+          dirty: false,
+          update_available: false,
+        }));
+        if (window.NexVUEUI && NexVUEUI.refreshVersion) NexVUEUI.refreshVersion();
+        statusEl.textContent = data.changed
+          ? `Updated to v${data.version} (${data.git_sha}) — restart encoders if needed`
+          : (data.message || "Already up to date");
+        alert(
+          (data.changed
+            ? `Updated to v${data.version} (${data.git_sha}).\n\n`
+            : "Already up to date.\n\n") +
+          "Reload this page to pick up UI changes. Restart encoders if encode scripts changed."
+        );
+      } catch (err) {
+        statusEl.textContent = "update error: " + err.message;
+        alert(err.message);
+      } finally {
+        updateBtn.disabled = false;
+        refreshUpdateStatus();
+      }
+    });
+  }
+
+  refreshUpdateStatus();
   refreshServices();
   setInterval(refreshServices, 2000);
   setInterval(() => { if (follow && selected) pollJournal(false); }, 5000);

@@ -64,6 +64,9 @@ REQUIRED_FILES=(
   nexvue-ops-env-read.sh nexvue-ops-env-write.sh nexvue-ops-restart.sh
   nexvue-ops-enable.sh nexvue-ops-audio-probe.sh
   nexvue-ops-support-bundle.sh nexvue-support-bundle.py
+  nexvue-ops-update.sh
+  nexvue-version.php
+  VERSION
   channels-example.env
   nexvue-example.env
 )
@@ -205,12 +208,42 @@ install -m 755 "${REPO_DIR}/nexvue-ops-enable.sh" /usr/local/bin/nexvue-ops-enab
 install -m 755 "${REPO_DIR}/nexvue-ops-audio-probe.sh" /usr/local/bin/nexvue-ops-audio-probe.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-support-bundle.sh" /usr/local/bin/nexvue-ops-support-bundle.sh
 install -m 755 "${REPO_DIR}/nexvue-support-bundle.py" /usr/local/bin/nexvue-support-bundle.py
+install -m 755 "${REPO_DIR}/nexvue-ops-update.sh" /usr/local/bin/nexvue-ops-update.sh
 # Support-bundle zip staging (www-data must read finished zips).
 install -d -m 750 -o root -g www-data /var/lib/nexvue/support 2>/dev/null \
   || install -d -m 750 /var/lib/nexvue/support
 chgrp www-data /var/lib/nexvue/support 2>/dev/null || true
 chmod 750 /var/lib/nexvue/support 2>/dev/null || true
 ok "support bundle dir: /var/lib/nexvue/support"
+# Remember clone path for Services → Update from repo.
+printf '%s\n' "${REPO_DIR}" > /etc/nexvue/repo.path
+chmod 644 /etc/nexvue/repo.path
+ok "repo.path → ${REPO_DIR}"
+# Version stamp (nav badge + support).
+install -d -m 755 /usr/local/share/nexvue
+install -m 644 "${REPO_DIR}/VERSION" /usr/local/share/nexvue/VERSION
+VER_STR="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION" 2>/dev/null || echo 0.0.0)"
+GIT_SHA=""
+GIT_FULL=""
+GIT_BR=""
+if [ -d "${REPO_DIR}/.git" ]; then
+  GIT_SHA="$(git -C "${REPO_DIR}" rev-parse --short=12 HEAD 2>/dev/null || true)"
+  GIT_FULL="$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || true)"
+  GIT_BR="$(git -C "${REPO_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+fi
+TS_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > /var/lib/nexvue/version.json <<EOF
+{
+  "version": "${VER_STR}",
+  "git_sha": "${GIT_SHA}",
+  "git_full": "${GIT_FULL}",
+  "git_branch": "${GIT_BR}",
+  "repo": "${REPO_DIR}",
+  "updated_at": "${TS_UTC}"
+}
+EOF
+chmod 644 /var/lib/nexvue/version.json
+ok "version ${VER_STR}${GIT_SHA:+ (${GIT_SHA})}"
 # Caption JSON state (encode writes; Apache/www-data reads via nexvue-captions.php).
 install -d -m 755 -o nexvue -g nexvue /run/nexvue/captions 2>/dev/null \
   || mkdir -p /run/nexvue/captions
@@ -265,6 +298,8 @@ if [ -d "${WEBROOT}" ]; then
                  "${REPO_DIR}/nexvue-ui.js" \
                  "${REPO_DIR}/nexvue-vu.js" \
                  "${REPO_DIR}/nexvue-logo.php" \
+                 "${REPO_DIR}/nexvue-version.php" \
+                 "${REPO_DIR}/VERSION" \
                  "${REPO_DIR}/chart.umd.min.js" \
                  "${REPO_DIR}/services.html" \
                  "${REPO_DIR}/channels.html" \
@@ -272,7 +307,7 @@ if [ -d "${WEBROOT}" ]; then
                  "${WEBROOT}/"
   ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / captions / branding)"
 else
-  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
+  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php nexvue-version.php VERSION chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
 fi
 
 step "5/5 DeckLink helpers (status + audio probe)"
@@ -368,7 +403,7 @@ fi
 for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
          nexvue-ops-env-write.sh nexvue-ops-restart.sh nexvue-ops-enable.sh \
          nexvue-ops-audio-probe.sh nexvue-ops-support-bundle.sh \
-         nexvue-support-bundle.py \
+         nexvue-support-bundle.py nexvue-ops-update.sh \
          nexvue-ops-env-update.py nexvue-phase1-closeout.sh \
          nexvue-phase1-deploy-verify.sh nexvue-encode-storm-diagnose.sh; do
   [ -x "/usr/local/bin/$w" ] || [ -f "/usr/local/bin/$w" ] \
@@ -378,6 +413,16 @@ if [ -d /var/lib/nexvue/support ]; then
   ok "support bundle dir: /var/lib/nexvue/support"
 else
   warn "support bundle dir missing — Services Download zip needs /var/lib/nexvue/support"
+fi
+if [ -f /etc/nexvue/repo.path ]; then
+  ok "repo.path: $(tr -d '\r\n' </etc/nexvue/repo.path)"
+else
+  warn "repo.path missing — Services Update needs /etc/nexvue/repo.path (re-run setup.sh from the clone)"
+fi
+if [ -f /usr/local/share/nexvue/VERSION ]; then
+  ok "VERSION: $(tr -d '[:space:]' </usr/local/share/nexvue/VERSION)"
+else
+  warn "VERSION stamp missing under /usr/local/share/nexvue"
 fi
 if [ -f /etc/sudoers.d/nexvue-ops ]; then
   ok "sudoers drop-in: /etc/sudoers.d/nexvue-ops"

@@ -157,6 +157,16 @@ def which_version(cmd: str, args: list[str]) -> str:
 
 def collect_host(dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
+    for src, name in (
+        (Path("/usr/local/share/nexvue/VERSION"), "nexvue-VERSION.txt"),
+        (Path("/var/lib/nexvue/version.json"), "nexvue-version.json"),
+        (Path("/etc/nexvue/repo.path"), "nexvue-repo.path.txt"),
+    ):
+        if src.is_file():
+            try:
+                write_text(dest / name, src.read_text(encoding="utf-8", errors="replace"))
+            except OSError as exc:
+                write_text(dest / f"{name}.error.txt", f"{exc}\n")
     write_text(dest / "uname.txt", run_cmd(["uname", "-a"])[1])
     write_text(dest / "uptime.txt", run_cmd(["uptime"])[1])
     write_text(dest / "free.txt", run_cmd(["free", "-h"])[1])

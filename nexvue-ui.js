@@ -1,17 +1,38 @@
 /**
- * nexvue-ui.js — shared theme + nav logo helpers for all NexVUE pages.
+ * nexvue-ui.js — shared theme + nav logo + version badge for all NexVUE pages.
  *
  * Load synchronously in <head> so the theme is applied before first paint
- * (no light/dark flash). Wires #theme-toggle and .nav-logo on DOMContentLoaded.
+ * (no light/dark flash). Wires #theme-toggle, .nav-logo, and #nav-version
+ * on DOMContentLoaded.
  *
  * localStorage key: nexvue-theme ("dark" | "light"); default dark.
  * Dispatches window event "nexvue-theme-changed" with detail: { theme }.
+ * Version comes from nexvue-version.php (VERSION file + optional git stamp).
  */
 (function (global) {
   "use strict";
 
   var STORAGE_KEY = "nexvue-theme";
   var LOGO_SRC = "nexvue-logo.php";
+  var VERSION_URL = "nexvue-version.php";
+
+  function ensureVersionCss() {
+    if (global.document.getElementById("nexvue-ui-version-css")) return;
+    var s = global.document.createElement("style");
+    s.id = "nexvue-ui-version-css";
+    s.textContent =
+      ".topnav .nav-version{" +
+      "margin-left:6px;margin-right:0;padding:4px 8px;" +
+      "border:1px solid var(--edge,#2c3542);border-radius:4px;" +
+      "color:var(--dim,#98a6b5);font-size:11px;letter-spacing:.02em;" +
+      "user-select:none;white-space:nowrap;" +
+      "}" +
+      ".topnav .nav-version[hidden]{display:none!important}" +
+      ".topnav .nav-version.update-available{" +
+      "color:var(--acc,#56c4f5);border-color:var(--acc,#56c4f5)" +
+      "}";
+    (global.document.head || global.document.documentElement).appendChild(s);
+  }
 
   function normalizeTheme(value) {
     return value === "light" ? "light" : "dark";
@@ -123,6 +144,59 @@
   // Apply before paint (script is in <head>).
   applyTheme(readStoredTheme());
 
+  function ensureVersionEl() {
+    var el = global.document.getElementById("nav-version");
+    if (el) return el;
+    var btn = global.document.getElementById("theme-toggle");
+    var nav = global.document.querySelector("nav.topnav");
+    if (!nav) return null;
+    el = global.document.createElement("span");
+    el.id = "nav-version";
+    el.className = "nav-version";
+    el.hidden = true;
+    el.setAttribute("title", "NexVUE version");
+    // Sit to the right of the theme toggle (toggle keeps margin-left:auto).
+    if (btn && btn.parentNode === nav) {
+      if (btn.nextSibling) nav.insertBefore(el, btn.nextSibling);
+      else nav.appendChild(el);
+    } else {
+      nav.appendChild(el);
+    }
+    return el;
+  }
+
+  function paintVersion(data) {
+    ensureVersionCss();
+    var el = ensureVersionEl();
+    if (!el || !data || !data.ok) return;
+    var ver = String(data.version || "").trim() || "0.0.0";
+    el.textContent = "v" + ver;
+    var tip = "NexVUE v" + ver;
+    if (data.git_sha) tip += " · " + data.git_sha;
+    if (data.git_branch) tip += " (" + data.git_branch + ")";
+    el.title = tip;
+    el.hidden = false;
+  }
+
+  function loadVersion() {
+    ensureVersionCss();
+    ensureVersionEl();
+    if (typeof global.fetch !== "function") return;
+    global
+      .fetch(VERSION_URL, { cache: "no-store" })
+      .then(function (res) {
+        return res.json();
+      })
+      .then(paintVersion)
+      .catch(function () {
+        /* version badge optional */
+      });
+  }
+
+  function refreshVersion() {
+    loadVersion();
+  }
+
   onReady(function () {
     syncToggle();
     var btn = global.document.getElementById("theme-toggle");
@@ -135,6 +209,7 @@
     for (var i = 0; i < logos.length; i++) {
       wireLogo(logos[i]);
     }
+    loadVersion();
   });
 
   global.NexVUEUI = {
@@ -142,6 +217,7 @@
     setTheme: setTheme,
     toggleTheme: toggleTheme,
     refreshNavLogo: refreshNavLogo,
+    refreshVersion: refreshVersion,
     STORAGE_KEY: STORAGE_KEY,
     LOGO_SRC: LOGO_SRC,
   };
