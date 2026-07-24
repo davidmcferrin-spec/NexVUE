@@ -231,7 +231,9 @@ specifically because this box can't get additional ports opened.
  hides prior lines for the selected unit only (systemd cannot purge one
  unit from the binary journal; host-wide vacuum was removed). Settings Channel list shows LO yes/no (pool-denied) and
  **Restart all encoders** (`restart_encoders`: systemd-enabled encode slots
- only); Services has the same bulk restart. Disable and Stop both run
+ only); Services has the same bulk restart. Channel editor **Factory
+ defaults…** writes every editable key blank via `channel_put` (blank =
+ built-in default; frees LO pool slot; identity keys untouched). Disable and Stop both run
  `reset-failed` so a parked encoder
  doesn't show stale red "failed"; any disabled + not-running unit (even
  with a stale `failed` from an SSH-side disable) renders neutral

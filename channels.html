@@ -370,6 +370,7 @@
   <div class="modal-body" id="edit-body"></div>
   <div class="modal-footer">
     <span class="msg" id="edit-msg" aria-live="polite"></span>
+    <button type="button" class="danger" id="edit-defaults" title="Blank every editable setting so the encoder falls back to built-in defaults (alias cleared, LO off, stereo audio). DEVICE_NUMBER / CHANNEL_PATH are kept.">Factory defaults…</button>
     <button type="button" id="edit-cancel">Cancel</button>
     <button type="button" class="primary" id="save-one">Save channel</button>
   </div>
@@ -1226,6 +1227,33 @@
       load();
     } catch (err) {
       alert(err.message);
+    }
+  });
+
+  document.getElementById("edit-defaults").addEventListener("click", async () => {
+    if (selectedId == null) return;
+    // Factory default = blank every editable key: the encoder falls back to
+    // its built-in defaults (blank semantics are the documented contract).
+    // DEVICE_NUMBER / CHANNEL_PATH / RTSP_URL are identity and never touched.
+    if (!confirm(
+      `Reset channel ${selectedId} to factory defaults?\n\n` +
+      "Every editable setting is blanked: alias cleared, input back to DeckLink, " +
+      "video 5000 kbps / deinterlace all, audio stereo, LO rendition off, all tuning knobs to defaults.\n" +
+      "DEVICE_NUMBER and CHANNEL_PATH are kept. Takes effect on encoder restart."
+    )) {
+      return;
+    }
+    const patch = {};
+    for (const key of editableKeys) patch[key] = "";
+    try {
+      const data = await api("channel_put", { id: selectedId, patch });
+      stateEl.textContent = `channel ${selectedId} reset to factory defaults`;
+      setMsg(editMsg, "Factory defaults written", "ok");
+      closeEditor();
+      await load();
+      askRestart(data.restart_units || []);
+    } catch (err) {
+      setMsg(editMsg, err.message, "err");
     }
   });
 

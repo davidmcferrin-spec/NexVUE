@@ -187,6 +187,36 @@ class TestApplyPatch(unittest.TestCase):
         with self.assertRaises(ValueError):
             mod.apply_patch(SAMPLE, {"MAX_DEVICES": "4"})
 
+    def test_factory_defaults_blank_all_editable_keys(self):
+        # Settings "Factory defaults…" sends channel_put with EVERY editable
+        # key set to "" — the blank-means-default contract. Every sanitizer
+        # must accept empty, identity keys must survive, and the result must
+        # still source cleanly in bash with all values empty (so the encoder
+        # script's ${VAR:-default} fallbacks take over).
+        patch = {k: "" for k in mod.EDITABLE_KEYS}
+        out = mod.apply_patch(SAMPLE, patch)
+        keys = mod.parse_env_text(out)
+        self.assertEqual(keys["DEVICE_NUMBER"], "0")
+        self.assertEqual(keys["CHANNEL_PATH"], "ch0")
+        for k in mod.EDITABLE_KEYS:
+            self.assertEqual(keys.get(k, ""), "", f"{k} not blanked")
+        import shutil
+        import subprocess
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash not available")
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "0.env"
+            p.write_text(out, encoding="utf-8")
+            r = subprocess.run(
+                [bash, "-c",
+                 'set -a; . "$1"; printf %s "${BITRATE_KBPS:-5000}:${ENABLE_AUDIO:-true}"',
+                 "_", str(p)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout, "5000:true")
+
 
 if __name__ == "__main__":
     unittest.main()

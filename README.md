@@ -308,6 +308,11 @@ Then from a LAN machine:
   (what it does, recommended / valid range, and what blank means — same
   pattern as Player session metric tiles). Optional `CHANNEL_ALIAS` for
   friendly labels; path stays `chN`. Save asks before restarting encoders.
+  **Factory defaults…** in the editor footer resets the channel: every
+  editable key is written blank (blank = built-in default, so alias clears,
+  LO turns off and frees its pool slot, audio returns to stereo, all tuning
+  knobs revert); `DEVICE_NUMBER` / `CHANNEL_PATH` / `RTSP_URL` are identity
+  and never touched. Takes effect on the encoder restart offered after.
   Every page has a **Light/Dark** toggle (`localStorage.nexvue-theme`,
   default dark); shared helpers live in `nexvue-ui.js`.
 
