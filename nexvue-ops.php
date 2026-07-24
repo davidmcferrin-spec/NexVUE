@@ -9,7 +9,11 @@
  * Actions (GET or POST JSON body):
  *   services | journal | journal_clear | audio_probe | channels_list | channel_get | channel_put
  *   | channels_bulk | restart | restart_encoders | set_enabled | set_running | aliases
- *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete
+ *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete | support_bundle
+ *
+ * support_bundle returns application/zip (not JSON): builds a redacted
+ * journals+config+state zip via nexvue-ops-support-bundle.sh for the
+ * requested hours window (1|6|12|24|48|72).
  *
  * journal_clear records a per-unit watermark via nexvue-ops-journal.sh clear
  * so the Services journal view hides prior lines for that unit only (systemd
@@ -57,7 +61,7 @@ const LOGO_ALLOWED_MIMES = [
 const EDITABLE_KEYS = [
     'CHANNEL_ALIAS', 'INPUT_TYPE', 'SRT_URI', 'SRT_LATENCY_MS',
     'DEINT_FIELDS', 'BITRATE_KBPS', 'GOP_FRAMES',
-    'ENABLE_AUDIO', 'AUDIO_FRAME_MS', 'AUDIO_BITRATE_BPS', 'AUDIO_CHANNELS', 'AUDIO_LAYOUT',
+    'ENABLE_AUDIO', 'AUDIO_FRAME_MS', 'AUDIO_BITRATE_BPS', 'AUDIO_CHANNELS', 'AUDIO_LAYOUT', 'AUDIO_EMBEDS',
     'DECKLINK_BUFFER_FRAMES', 'DECKLINK_DROP_NO_SIGNAL_FRAMES', 'VIDEO_ENCODER', 'EXTRA_ENC_ARGS',
     'LO_ENABLE', 'LO_PRESET', 'LO_WIDTH', 'LO_HEIGHT', 'LO_BITRATE_KBPS', 'LO_FPS',
     'LO_TARGET_USAGE', 'LO_QUEUE_BUFFERS', 'LO_GOP_FRAMES',
@@ -633,17 +637,49 @@ function logo_delete(): void {
 }
 
 /**
- * Suggest AUDIO_LAYOUT values from 1-based active embed indices.
+ * Parse AUDIO_EMBEDS (comma list of 1–8). Blank / all → [1..8].
+ *
+ * @return list<int>
+ */
+function parse_audio_embeds(?string $raw): array {
+    $raw = strtolower(trim((string)$raw));
+    if ($raw === '' || $raw === '1-8' || $raw === 'all' || $raw === '*') {
+        return [1, 2, 3, 4, 5, 6, 7, 8];
+    }
+    $out = [];
+    $seen = [];
+    foreach (explode(',', $raw) as $part) {
+        $part = trim($part);
+        if ($part === '' || !ctype_digit($part)) {
+            continue;
+        }
+        $n = (int)$part;
+        if ($n < 1 || $n > 8 || isset($seen[$n])) {
+            continue;
+        }
+        $seen[$n] = true;
+        $out[] = $n;
+    }
+    if ($out === []) {
+        return [1, 2, 3, 4, 5, 6, 7, 8];
+    }
+    sort($out);
+    return $out;
+}
+
+/**
+ * Suggest AUDIO_LAYOUT role presets + AUDIO_EMBEDS from active embed indices.
+ * Encode is always 8ch — suggestions only set player/Settings metadata.
  * Energy probe only — operator must confirm before writing .env.
  *
  * @param list<int> $activeMask
- * @return list<array{layout:string,label:string,score:int,exact:bool}>
+ * @return list<array{layout:string,label:string,score:int,exact:bool,embeds:list<int>,embeds_csv:string}>
  */
 function audio_probe_suggest(array $activeMask): array {
     $active = [];
     foreach ($activeMask as $i) {
         $n = (int)$i;
-        if ($n >= 1 && $n <= 16) {
+        if ($n >= 1 && $n <= 8) {
             $active[$n] = true;
         }
     }
@@ -694,11 +730,16 @@ function audio_probe_suggest(array $activeMask): array {
         if ($score < 1) {
             continue;
         }
+        // Prefer enabling every embed the probe heard (plus the preset's set).
+        $enable = array_values(array_unique(array_merge($need, array_keys($active))));
+        sort($enable);
         $out[] = [
             'layout' => $d['layout'],
             'label' => $d['label'],
             'score' => $score,
             'exact' => ($missing === 0 && $extra === 0),
+            'embeds' => $enable,
+            'embeds_csv' => implode(',', $enable),
         ];
     }
     usort($out, static function (array $a, array $b): int {
@@ -711,9 +752,6 @@ function audio_probe_suggest(array $activeMask): array {
 if (PHP_SAPI === 'cli' && getenv('NEXVUE_OPS_HTTP') === false) {
     return;
 }
-
-header('Content-Type: application/json');
-header('Cache-Control: no-store');
 
 function read_json_body(): array {
     $raw = file_get_contents('php://input');
@@ -778,6 +816,72 @@ function action_from_request(array $body): string {
 
 $body = read_json_body();
 $action = action_from_request($body);
+
+// ---- support_bundle (binary zip — before JSON Content-Type) -------------------
+
+if ($action === 'support_bundle') {
+    // Journals for 72h can exceed PHP's default 30s.
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(180);
+    }
+    $hours = (int)($body['hours'] ?? ($_GET['hours'] ?? 24));
+    $allowed = [1, 6, 12, 24, 48, 72];
+    if (!in_array($hours, $allowed, true)) {
+        fail(400, 'hours must be one of: 1, 6, 12, 24, 48, 72');
+    }
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+    if (!is_string($ip) || $ip === '') {
+        $ip = 'unknown';
+    }
+    $ip = substr(preg_replace('/[^0-9a-fA-F.:]/', '', $ip) ?? '', 0, 64);
+    $argv = ['/usr/local/bin/nexvue-ops-support-bundle.sh', (string)$hours];
+    if ($ip !== '') {
+        $argv[] = $ip;
+    }
+    $r = sudo_run($argv);
+    if ($r['code'] !== 0) {
+        fail(
+            500,
+            trim($r['stderr']) !== ''
+                ? trim($r['stderr'])
+                : 'support bundle failed (is nexvue-ops-support-bundle.sh installed?)'
+        );
+    }
+    $lines = preg_split("/\r\n|\n|\r/", trim($r['stdout'])) ?: [];
+    $path = '';
+    foreach (array_reverse($lines) as $line) {
+        $line = trim($line);
+        if ($line !== '' && str_starts_with($line, '/') && str_ends_with($line, '.zip')) {
+            $path = $line;
+            break;
+        }
+    }
+    if ($path === '' || !is_file($path)) {
+        fail(500, 'support bundle produced no zip path');
+    }
+    $real = realpath($path);
+    $supportRoot = realpath('/var/lib/nexvue/support');
+    if ($real === false || $supportRoot === false || !str_starts_with($real, $supportRoot . DIRECTORY_SEPARATOR)) {
+        fail(500, 'refusing to serve zip outside /var/lib/nexvue/support');
+    }
+    $basename = basename($real);
+    if (!preg_match('/^nexvue-support-[A-Za-z0-9._-]+\.zip$/', $basename)) {
+        fail(500, 'unexpected bundle filename');
+    }
+    header('Content-Type: application/zip');
+    header('Content-Disposition: attachment; filename="' . $basename . '"');
+    header('Content-Length: ' . (string)filesize($real));
+    header('Cache-Control: no-store');
+    header('X-Content-Type-Options: nosniff');
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    readfile($real);
+    exit;
+}
+
+header('Content-Type: application/json');
+header('Cache-Control: no-store');
 
 // ---- services -----------------------------------------------------------------
 
@@ -961,6 +1065,7 @@ if ($action === 'aliases') {
     $devices = [];
     $audioChannels = [];
     $audioLayouts = [];
+    $audioEmbeds = [];
     foreach (list_channel_ids() as $id) {
         $r = sudo_run(['/usr/local/bin/nexvue-ops-env-read.sh', (string)$id]);
         if ($r['code'] !== 0) {
@@ -978,7 +1083,7 @@ if ($action === 'aliases') {
         $aliases[(string)$id] = $label;
         $dev = $keys['DEVICE_NUMBER'] ?? (string)$id;
         $devices[$path] = is_numeric($dev) ? (int)$dev : $id;
-        // AUDIO_LAYOUT preferred; legacy AUDIO_CHANNELS maps to a layout.
+        // AUDIO_LAYOUT is a player role preset only — encode is always 8ch Opus.
         $layout = isset($keys['AUDIO_LAYOUT']) ? strtolower(trim((string)$keys['AUDIO_LAYOUT'])) : '';
         $layout = str_replace(['-', '.'], ['_', ''], $layout);
         if ($layout === '5_1' || $layout === '51' || $layout === 'surround') {
@@ -989,23 +1094,25 @@ if ($action === 'aliases') {
             $layout = 'stereo_sap';
         } elseif ($layout !== 'stereo' && $layout !== 'stereo_sap' && $layout !== '51' && $layout !== '51_sap') {
             $ac = isset($keys['AUDIO_CHANNELS']) ? trim((string)$keys['AUDIO_CHANNELS']) : '';
-            $acN = ($ac !== '' && ctype_digit($ac)) ? (int)$ac : 2;
+            $acN = ($ac !== '' && ctype_digit($ac)) ? (int)$ac : 8;
             if ($acN === 4) {
                 $layout = 'stereo_sap';
             } elseif ($acN === 6 || $acN === 3 || $acN === 5) {
                 $layout = '51';
-            } elseif ($acN >= 8) {
-                $layout = '51_sap';
-            } else {
+            } elseif ($acN === 2) {
                 $layout = 'stereo';
+            } else {
+                $layout = '51_sap';
             }
         }
-        $chMap = ['stereo' => 2, 'stereo_sap' => 4, '51' => 6, '51_sap' => 8];
-        $acN = $chMap[$layout] ?? 2;
-        $audioChannels[$path] = $acN;
-        $audioChannels[(string)$id] = $acN;
+        $embeds = parse_audio_embeds($keys['AUDIO_EMBEDS'] ?? '');
+        // Transport is always 8ch Opus (HI and LO share the same track).
+        $audioChannels[$path] = 8;
+        $audioChannels[(string)$id] = 8;
         $audioLayouts[$path] = $layout;
         $audioLayouts[(string)$id] = $layout;
+        $audioEmbeds[$path] = $embeds;
+        $audioEmbeds[(string)$id] = $embeds;
     }
     echo json_encode([
         'ok' => true,
@@ -1013,6 +1120,7 @@ if ($action === 'aliases') {
         'devices' => $devices,
         'audio_channels' => $audioChannels,
         'audio_layouts' => $audioLayouts,
+        'audio_embeds' => $audioEmbeds,
     ]);
     exit;
 }

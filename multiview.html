@@ -342,6 +342,7 @@
   let rendition = "lo";  // "hi" | "lo" — LO default for multi-session load
   let audioPane = -1;    // index of listening pane, or -1
   let audioLayoutByPath = {};
+  let audioEmbedsByPath = {};
   // Declared before VU/volume helpers — applyVolumeAll() runs at init and
   // must not hit the const TDZ (would abort the whole script before panes
   // are created, leaving the dual/quad grid empty).
@@ -569,7 +570,10 @@
       }
       pane.base = val;
       pane.captionClient.setChannel(val);
-      if (pane.vu) pane.vu.setLayout(audioLayoutByPath[val] || "stereo");
+      if (pane.vu) {
+        pane.vu.setLayout(audioLayoutByPath[val] || "51_sap");
+        pane.vu.setEmbeds(audioEmbedsByPath[val] || "1-8");
+      }
       empty.classList.add("hidden");
       acquireWakeLock();
       openPane(pane);
@@ -738,8 +742,9 @@
       // Always mute the element — audible pane uses Web Audio (VU solo/mix).
       pane.video.muted = true;
       if (pane.vu && ev.streams[0]) {
-        const layout = audioLayoutByPath[pane.base] || "stereo";
-        pane.vu.setStream(ev.streams[0], layout);
+        const layout = audioLayoutByPath[pane.base] || "51_sap";
+        const embeds = audioEmbedsByPath[pane.base];
+        pane.vu.setStream(ev.streams[0], layout, embeds);
         pane.vu.setVolume(NexVueVu.getVolumePref(), { persist: false });
         pane.vu.setListen(!userMuted && audioPane === pane.index, { persist: false });
       }
@@ -1188,7 +1193,7 @@
     sync();
   })();
 
-  // Friendly labels + AUDIO_CHANNELS hints from ops API when available.
+  // Friendly labels + AUDIO_LAYOUT / AUDIO_EMBEDS from ops API when available.
   (async () => {
     try {
       const res = await fetch("nexvue-ops.php?action=aliases");
@@ -1202,6 +1207,7 @@
           audioLayoutByPath[k] = NexVueVu.normalizeLayout(data.audio_channels[k]);
         });
       }
+      if (data.audio_embeds) audioEmbedsByPath = data.audio_embeds;
       panes.forEach(p => {
         [...p.select.options].forEach(opt => {
           if (!opt.value) return;
@@ -1209,7 +1215,8 @@
           if (label) opt.textContent = label === opt.value ? opt.value : `${label} (${opt.value})`;
         });
         if (p.base && p.vu) {
-          p.vu.setLayout(audioLayoutByPath[p.base] || "stereo");
+          p.vu.setLayout(audioLayoutByPath[p.base] || "51_sap");
+          p.vu.setEmbeds(audioEmbedsByPath[p.base] || "1-8");
         }
       });
     } catch { /* optional */ }

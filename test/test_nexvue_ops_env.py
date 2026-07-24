@@ -87,6 +87,21 @@ class TestApplyPatch(unittest.TestCase):
         with self.assertRaises(ValueError):
             mod.sanitize_value("AUDIO_LAYOUT", "dolby")
 
+    def test_audio_embeds_sanitize(self):
+        self.assertEqual(mod.sanitize_value("AUDIO_EMBEDS", ""), "")
+        self.assertEqual(
+            mod.sanitize_value("AUDIO_EMBEDS", "1-8"),
+            "1,2,3,4,5,6,7,8",
+        )
+        self.assertEqual(mod.sanitize_value("AUDIO_EMBEDS", "1,2,7,8"), "1,2,7,8")
+        self.assertEqual(mod.sanitize_value("AUDIO_EMBEDS", "8,2,2,1"), "1,2,8")
+        with self.assertRaises(ValueError):
+            mod.sanitize_value("AUDIO_EMBEDS", "1,9")
+        with self.assertRaises(ValueError):
+            mod.sanitize_value("AUDIO_EMBEDS", "0")
+        out = mod.apply_patch(SAMPLE, {"AUDIO_EMBEDS": "1,2,7,8"})
+        self.assertIn("AUDIO_EMBEDS=1,2,7,8", out)
+
     def test_rejects_shell_metachar(self):
         with self.assertRaises(ValueError):
             mod.apply_patch(SAMPLE, {"EXTRA_ENC_ARGS": "x;rm"})

@@ -38,6 +38,7 @@ EDITABLE_KEYS = frozenset({
     "AUDIO_BITRATE_BPS",
     "AUDIO_CHANNELS",
     "AUDIO_LAYOUT",
+    "AUDIO_EMBEDS",
     "DECKLINK_BUFFER_FRAMES",
     "DECKLINK_DROP_NO_SIGNAL_FRAMES",
     "VIDEO_ENCODER",
@@ -74,6 +75,8 @@ LO_TARGET_USAGE_ALLOWED = frozenset({"1", "2", "3", "4", "5", "6", "7"})
 AUDIO_FRAME_MS_ALLOWED = frozenset({"2", "5", "10", "20", "40", "60"})
 AUDIO_CHANNELS_ALLOWED = frozenset({"2", "4", "6", "8"})
 AUDIO_LAYOUT_ALLOWED = frozenset({"stereo", "51", "stereo_sap", "51_sap"})
+# 1-based SDI embeds enabled for browser VU / listen (metadata; encode is always 8ch).
+AUDIO_EMBEDS_DEFAULT = "1,2,3,4,5,6,7,8"
 DEINT_ALLOWED = frozenset({"all", "top"})
 VIDEO_ENCODER_ALLOWED = frozenset({"vah264enc", "x264enc"})
 BOOL_ALLOWED = frozenset({"true", "false"})
@@ -233,6 +236,27 @@ def sanitize_value(key: str, value: str) -> str:
         if low not in AUDIO_LAYOUT_ALLOWED:
             raise ValueError("AUDIO_LAYOUT must be stereo, 51, stereo_sap, or 51_sap")
         return low
+    if key == "AUDIO_EMBEDS":
+        # Blank = all eight (browser default). Accept "1,2,7,8" or "1-8".
+        if value == "":
+            return value
+        raw = value.lower().replace(" ", "")
+        if raw in ("1-8", "all", "*"):
+            return AUDIO_EMBEDS_DEFAULT
+        parts = [p for p in raw.split(",") if p]
+        if not parts:
+            raise ValueError("AUDIO_EMBEDS: list at least one embed 1-8")
+        seen: set[int] = set()
+        ordered: list[int] = []
+        for p in parts:
+            if not re.fullmatch(r"[1-8]", p):
+                raise ValueError("AUDIO_EMBEDS: each entry must be an integer 1-8")
+            n = int(p)
+            if n not in seen:
+                seen.add(n)
+                ordered.append(n)
+        ordered.sort()
+        return ",".join(str(n) for n in ordered)
     if key == "DECKLINK_BUFFER_FRAMES":
         return _require_int(key, value, lo=1, hi=16)
     if key == "DECKLINK_DROP_NO_SIGNAL_FRAMES":

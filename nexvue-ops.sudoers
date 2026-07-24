@@ -17,3 +17,4 @@ www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-env-write.sh *
 www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-restart.sh *
 www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-enable.sh *
 www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-audio-probe.sh *
+www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-support-bundle.sh *

@@ -199,27 +199,18 @@ specifically because this box can't get additional ports opened.
   tracks). Player/Multiview **VU / audio program** use `nexvue-vu.js`
   (Web Audio on the WHEP MediaStream). Top-bar **VU** toggle (like CC)
   shows/hides the meter overlay (`localStorage.nexvue-vu-on`, default on).
-  `AUDIO_LAYOUT` transports discrete
- Opus only (stereo / 51 / stereo_sap / 51_sap; SAP = embeds 7+8; `51`
- deinterleaves embeds 1–6 from an 8ch DeckLink open — bare audioconvert
- 8→6 not-negotiates and kills encode). Every >2ch layout MUST reach
- opusenc with POSITIONED channels: decklinkaudiosrc emits channel-mask=0,
- unpositioned multichannel encodes Opus mapping family 255, and NO RTP
- payloader exists for family 255 — rtspclientsink dies with "Could not
- create payloader". Fix (GStreamer 1.24: audioconvert can't relabel an
- unpositioned N-ch stream; the reorder knob is 1.26+) is per-branch mono
- channel-masks on the deinterleave/interleave remix, yielding family 1 /
- MULTIOPUS; SAP pairs ride as RL/RR (stereo_sap) or SL/SR (51_sap) —
- transport labels only, players address channels by index.
- Player / Multiview WHEP offers are SDP-munged (`nexvue-vu.js`
- `mungeWhepOfferSdp`) to add multiopus 3–8 with MediaMTX's fmtp table —
- Chrome will not advertise multiopus itself, and MediaMTX then answers
- 400 "codecs not supported by client" for any >2ch path.
- Settings **Detect audio…**
-  (`audio_probe` → `decklink-audio-probe`) measures embed energy and
-  suggests a layout for operator confirm. Per-browser
-  Main↔SAP and 5.1 stereo-fold vs discrete surround (`localStorage`) — never
-  changes encode or other viewers.
+  Encode always opens DeckLink 8ch and publishes 8ch positioned Opus
+  (default `AUDIO_BITRATE_BPS=384000`) tee'd to HI+LO. No 16ch path.
+  `AUDIO_LAYOUT` is a player role preset only; `AUDIO_EMBEDS` (Settings
+  checkboxes) gates which embeds the browser VU offers — metadata only.
+  Positioned channels are mandatory: decklinkaudiosrc emits channel-mask=0,
+  unpositioned multichannel encodes Opus family 255 (no RTP payloader).
+  Fix is per-branch mono channel-masks on deinterleave/interleave → family 1
+  / MULTIOPUS. Player / Multiview WHEP offers are SDP-munged (`nexvue-vu.js`
+  `mungeWhepOfferSdp`) for multiopus 3–8. Settings **Detect audio…**
+  (`audio_probe` → `decklink-audio-probe`) suggests role + embeds for
+  operator confirm. Per-browser Main↔SAP and 5.1 fold (`localStorage`) —
+  never changes encode or other viewers.
 - Ops pages (`services.html`, `channels.html`) use `nexvue-ops.php` +
  allowlisted sudo wrappers. Logo upload/delete is www-data direct write
  (no sudo). Settings channel editor (and bulk edit) field labels show a
@@ -233,7 +224,11 @@ specifically because this box can't get additional ports opened.
  shared units. **Clear journal…** (`journal_clear`) records a per-unit
  watermark via `nexvue-ops-journal.sh clear` so the Services journal view
  hides prior lines for the selected unit only (systemd cannot purge one
- unit from the binary journal; host-wide vacuum was removed). Settings Channel list shows LO yes/no (pool-denied) and
+ unit from the binary journal; host-wide vacuum was removed). **Download
+ zip…** (`support_bundle`) builds a redacted journals+config+metrics+state
+ zip via `nexvue-ops-support-bundle.sh` → `nexvue-support-bundle.py`
+ (hours 1|6|12|24|48|72; output `/var/lib/nexvue/support`, 24h retention).
+ Settings Channel list shows LO yes/no (pool-denied) and
  **Restart all encoders** (`restart_encoders`: systemd-enabled encode slots
  only); Services has the same bulk restart. Channel editor **Factory
  defaults…** writes every editable key blank via `channel_put` (blank =

@@ -295,15 +295,20 @@ Then from a LAN machine:
   (Follow / Clear view) plus **Clear journal…** for the selected unit
   (`journal_clear` watermark via `nexvue-ops-journal.sh` — hides prior lines
   for that unit only in the ops UI; not a host-wide vacuum).
-  (near `tail -f`). LAN-trust ops.
+  **Support bundle** (hours dropdown + **Download zip…**) builds a redacted
+  zip of journals, `/etc/nexvue` channel/MediaMTX config, metrics samples, and
+  small `/run/nexvue` state via `nexvue-ops.php?action=support_bundle` →
+  `nexvue-ops-support-bundle.sh` → `nexvue-support-bundle.py` (zips land under
+  `/var/lib/nexvue/support`, pruned after 24h). LAN-trust ops.
 - **Settings:** top nav → Settings — optional station **logo** (Branding
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
   shown in the top nav next to **NexVUE** when present) plus channel list
   (LO column: yes/no/denied; **Restart all encoders** for enabled slots);
   click a row (or use Bulk edit) to open a modal editor for
-  `/etc/nexvue/channels/<N>.env`. Audio section **Detect audio…** stops the
-  channel encoder briefly, runs `decklink-audio-probe` on `DEVICE_NUMBER`
-  (8ch PCM energy), suggests `AUDIO_LAYOUT`, and lets you Apply + Save.
+  `/etc/nexvue/channels/<N>.env`. Audio section has **AUDIO_EMBEDS** checkboxes
+  (which embeds 1–8 the Player offers) plus **Detect audio…** (briefly stops
+  the encoder, runs `decklink-audio-probe`, suggests a player role + embeds
+  to Apply + Save). Encode always publishes all 8 embeds.
   Hover a field label ~2s for an explainer
   (what it does, recommended / valid range, and what blank means — same
   pattern as Player session metric tiles). Optional `CHANNEL_ALIAS` for
@@ -932,25 +937,19 @@ Services/Settings).
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Player and Multiview show the alias when set;
   WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Settings page.
-  `AUDIO_LAYOUT` (`stereo`|`51`|`stereo_sap`|`51_sap`) sets embeds: SAP is
-  always SDI 7+8; 5.1 is embeds 1–6 (deinterleave of first six from an
-  8ch DeckLink open — not a bare audioconvert 8→6, which not-negotiates).
-  Every >2ch layout carries explicit channel positions through the
-  deinterleave/interleave remix (per-branch mono `channel-mask`, then a
-  positioned capsfilter into opusenc): decklinkaudiosrc outputs
-  unpositioned channels (`channel-mask=0`), and unpositioned multichannel
-  makes opusenc emit mapping family 255 — which has **no RTP payloader**,
-  so rtspclientsink fails at startup with `Could not create payloader`.
-  Positioned input encodes family 1, payloaded as MULTIOPUS (the
-  libwebrtc convention MediaMTX forwards to WHEP). SAP pairs ride as
-  rear (stereo_sap) or side (51_sap) positions — transport labels only.
-  Legacy `AUDIO_CHANNELS` 2/4/6/8 still maps.
-  Player / Multiview munge the WHEP SDP offer to add `multiopus` payload
-  types (`nexvue-vu.js`, same algorithm as MediaMTX's own `reader.js`) —
-  Chrome does not advertise multichannel Opus in `createOffer()`, and
-  without that munge MediaMTX returns WHEP **400** (`codecs not supported
-  by client`) even when the path is online with Opus+H264. Use
-  Chrome/Edge for >2ch layouts; Firefox/Safari stay stereo-only.
+  Encode **always** opens DeckLink 8ch and publishes **8ch positioned Opus**
+  (default `AUDIO_BITRATE_BPS=384000`) to HI and LO (one Opus encode, tee'd).
+  Per-branch mono `channel-mask` through deinterleave/interleave is required:
+  decklinkaudiosrc emits `channel-mask=0`, and unpositioned multichannel
+  makes opusenc emit mapping family 255 — which has **no RTP payloader**.
+  Positioned input encodes family 1 / MULTIOPUS. `AUDIO_LAYOUT`
+  (`stereo`|`51`|`stereo_sap`|`51_sap`) is a **player role preset only**
+  (Main/SAP/5.1 UI). `AUDIO_EMBEDS` (Settings checkboxes, e.g. `1,2,7,8`)
+  chooses which embeds the browser VU offers — metadata only; encode still
+  publishes all eight. No 16ch path. Player / Multiview munge the WHEP SDP
+  offer to add `multiopus` (`nexvue-vu.js`, same as MediaMTX `reader.js`) —
+  Chrome does not advertise it in `createOffer()`, and without that munge
+  MediaMTX returns WHEP **400**. Use Chrome/Edge for multichannel Opus.
 - **Ops pages (Services / Settings)** call `nexvue-ops.php`, which uses
   allowlisted sudo wrappers under `/usr/local/bin/nexvue-ops-*` (sudoers drop-in
   `/etc/sudoers.d/nexvue-ops`). Channel saves write env files only; restart is an
@@ -974,7 +973,9 @@ Services/Settings).
   stale `failed` from before it was parked (e.g. disabled over SSH without
   `reset-failed`) — renders as neutral "disabled", never failure-red, on
   both Services and Settings; `failed` stays red only while the unit is
-  enabled, where it is a live fault.
+  enabled, where it is a live fault. Support zip download uses the same
+  sudoers allowlist (`nexvue-ops-support-bundle.sh`); URL userinfo and
+  password/passphrase/token values are redacted before zip.
 - **Multiviewer defaults to LO** with a global HI/LO toggle (quad = up to four
   simultaneous WHEP sessions). Only one pane is unmuted at a time — click a
   pane to select audio. Switching Dual↔Quad tears down hidden panes so unused

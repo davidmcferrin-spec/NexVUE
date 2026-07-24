@@ -1,11 +1,11 @@
 /**
  * nexvue-vu.js — shared Web-Audio VU + program/playout for Player / Multiview.
  *
- * Transport is discrete Opus only (no Dolby). Layouts from the edge:
- *   stereo      L R                         (2)
- *   51          L R C LFE Ls Rs              (6)
- *   stereo_sap  L R SAP_L SAP_R              (4)  — SAP = SDI embeds 7+8
- *   51_sap      L R C LFE Ls Rs SAP_L SAP_R  (8)
+ * Transport is always 8ch discrete Opus (SDI embeds 1–8 → indices 0–7):
+ *   L R C LFE Ls Rs SAPL SAPR
+ * AUDIO_LAYOUT is a role preset for Main/SAP/5.1 routing only.
+ * AUDIO_EMBEDS (Settings checkboxes) gates which meters/listen channels
+ * the UI offers — encode still publishes all eight.
  *
  * Per-browser prefs (localStorage) never change encode or other viewers:
  *   nexvue-vu-on          1 | 0               (show/hide meter overlay)
@@ -39,28 +39,58 @@
   const MIX_S = 0.707;
   const MIX_LFE = 0.5;
 
+  // Fixed transport labels — encode always publishes 8ch in this order.
+  const TRANSPORT_LABELS = ["L", "R", "C", "LFE", "Ls", "Rs", "SAPL", "SAPR"];
+
+  // Role presets: how Main/SAP/5.1 buttons map onto the fixed 8ch transport.
+  // channels is always 8 for metering; main/sap index into transport 0–7.
   const LAYOUTS = {
     stereo: {
-      id: "stereo", channels: 2, has51: false, hasSap: false,
-      labels: ["L", "R"],
+      id: "stereo", channels: 8, has51: false, hasSap: false,
+      labels: TRANSPORT_LABELS,
       main: [0, 1], sap: null,
     },
     "51": {
-      id: "51", channels: 6, has51: true, hasSap: false,
-      labels: ["L", "R", "C", "LFE", "Ls", "Rs"],
+      id: "51", channels: 8, has51: true, hasSap: false,
+      labels: TRANSPORT_LABELS,
       main: [0, 1, 2, 3, 4, 5], sap: null,
     },
     stereo_sap: {
-      id: "stereo_sap", channels: 4, has51: false, hasSap: true,
-      labels: ["L", "R", "SAPL", "SAPR"],
-      main: [0, 1], sap: [2, 3],
+      id: "stereo_sap", channels: 8, has51: false, hasSap: true,
+      labels: TRANSPORT_LABELS,
+      // Transport is always embeds 1–8; SAP rides on 7–8 (indices 6–7),
+      // not a packed 4ch remix like the old encode path.
+      main: [0, 1], sap: [6, 7],
     },
     "51_sap": {
       id: "51_sap", channels: 8, has51: true, hasSap: true,
-      labels: ["L", "R", "C", "LFE", "Ls", "Rs", "SAPL", "SAPR"],
+      labels: TRANSPORT_LABELS,
       main: [0, 1, 2, 3, 4, 5], sap: [6, 7],
     },
   };
+
+  function normalizeEmbeds(raw) {
+    if (raw == null || raw === "") return [0, 1, 2, 3, 4, 5, 6, 7];
+    if (Array.isArray(raw)) {
+      const out = [];
+      const seen = new Set();
+      for (const v of raw) {
+        let n = Number(v);
+        if (!Number.isFinite(n)) continue;
+        // Accept 1-based embeds or 0-based indices.
+        if (n >= 1 && n <= 8) n = n - 1;
+        if (n < 0 || n > 7 || seen.has(n)) continue;
+        seen.add(n);
+        out.push(n);
+      }
+      return out.length ? out.sort((a, b) => a - b) : [0, 1, 2, 3, 4, 5, 6, 7];
+    }
+    const s = String(raw).trim().toLowerCase();
+    if (!s || s === "1-8" || s === "all" || s === "*") {
+      return [0, 1, 2, 3, 4, 5, 6, 7];
+    }
+    return normalizeEmbeds(s.split(","));
+  }
 
   let sharedCtx = null;
 
@@ -364,8 +394,9 @@
     const btnScale = root.querySelector('[data-vu="scale"]');
     const allBtn = root.querySelector('[data-vu="all"]');
 
-    let layout = layoutInfo(opts.layout || "stereo");
-    let channelCount = layout.channels;
+    let layout = layoutInfo(opts.layout || "51_sap");
+    let channelCount = 8;
+    let embedsOn = new Set(normalizeEmbeds(opts.embeds));
     let listen = !!opts.listen;
     let visible = opts.visible !== undefined ? !!opts.visible : getVisiblePref();
     let scaleOn = opts.scale !== undefined ? !!opts.scale : getScalePref();
@@ -393,7 +424,10 @@
     let timeData = null;
 
     function effectiveProgram() {
-      if (program === "sap" && layout.hasSap) return "sap";
+      if (program === "sap" && layout.hasSap && layout.sap &&
+          layout.sap.every((i) => embedsOn.has(i))) {
+        return "sap";
+      }
       return "main";
     }
 
@@ -451,14 +485,15 @@
     function paintToolbar() {
       const prog = effectiveProgram();
       const play = effectivePlayout();
+      const sapEnabled = layout.hasSap && layout.sap &&
+        layout.sap.every((i) => embedsOn.has(i));
       btnMain.classList.toggle("active", prog === "main");
       btnSap.classList.toggle("active", prog === "sap");
-      btnSap.disabled = !layout.hasSap;
+      btnSap.disabled = !sapEnabled;
       btnStereo.classList.toggle("active", play === "stereo");
       btnSurround.classList.toggle("active", play === "surround");
       btnSurround.disabled = !layout.has51;
       btnStereo.disabled = !layout.has51;
-      // Stereo-only layouts: hide St/5.1 as N/A but keep visible disabled.
       if (!layout.has51) {
         btnStereo.classList.remove("active");
         btnSurround.classList.remove("active");
@@ -466,10 +501,15 @@
       btnScale.classList.toggle("active", scaleOn);
       allBtn.classList.toggle("active", solo < 0);
       chBtns.forEach((btn, i) => {
+        const embOn = embedsOn.has(i);
         const isSolo = solo === i;
         btn.classList.toggle("solo", isSolo);
-        btn.classList.toggle("dimmed", solo >= 0 && !isSolo);
+        btn.classList.toggle("dimmed", !embOn || (solo >= 0 && !isSolo));
+        btn.disabled = !embOn;
         btn.setAttribute("aria-pressed", isSolo ? "true" : "false");
+        btn.title = embOn
+          ? ("Solo " + (TRANSPORT_LABELS[i] || (i + 1)) + " (this browser only)")
+          : ("Embed " + (i + 1) + " disabled in Settings (AUDIO_EMBEDS)");
       });
     }
 
@@ -478,10 +518,11 @@
     }
 
     function applyRouting() {
-      // Solo: mute non-solo transport channels at chGains (meters still live).
+      // Settings-disabled embeds + solo mute at chGains (meters still live).
       chGains.forEach((g, i) => {
         if (!g) return;
-        g.gain.value = (solo < 0 || solo === i) ? 1 : 0;
+        const embOn = embedsOn.has(i);
+        g.gain.value = (embOn && (solo < 0 || solo === i)) ? 1 : 0;
       });
       if (masterGain) masterGain.gain.value = effectiveMasterGain();
       paintToolbar();
@@ -703,23 +744,16 @@
         const st = audioTracks[0].getSettings && audioTracks[0].getSettings();
         if (st && st.channelCount) detected = st.channelCount | 0;
       } catch { /* ignore */ }
-      // Prefer configured layout channel count; fall back to what decoded.
-      if (detected > 0 && detected !== layout.channels) {
-        // Browser may downmix; keep layout labels but clamp splitter to detected.
-        channelCount = Math.min(layout.channels, Math.max(detected, 2));
-      } else {
-        channelCount = layout.channels;
-      }
-      // If detection says fewer channels than layout, still show layout meters
-      // for silent missing embeds (honest about config).
-      channelCount = layout.channels;
+      // Encode always publishes 8ch; meter the full transport even if the
+      // browser reports a lower channelCount while decoding.
+      channelCount = 8;
       rebuildMeterDom();
 
       try {
         const audioStream = new MediaStream(audioTracks);
         source = ctx.createMediaStreamSource(audioStream);
-        const splitN = Math.max(channelCount, detected || channelCount);
-        splitter = ctx.createChannelSplitter(Math.min(MAX_CH, Math.max(splitN, channelCount)));
+        const splitN = Math.max(8, detected || 8);
+        splitter = ctx.createChannelSplitter(Math.min(MAX_CH, Math.max(splitN, 8)));
         masterGain = ctx.createGain();
         masterGain.gain.value = effectiveMasterGain();
 
@@ -801,11 +835,14 @@
 
     return {
       root,
-      setStream(stream, layoutOrChannels) {
+      setStream(stream, layoutOrChannels, embeds) {
         if (layoutOrChannels !== undefined && layoutOrChannels !== null) {
           layout = layoutInfo(layoutOrChannels);
-          channelCount = layout.channels;
         }
+        if (embeds !== undefined) {
+          embedsOn = new Set(normalizeEmbeds(embeds));
+        }
+        channelCount = 8;
         if (!stream) {
           teardownGraph();
           hasAudio = false;
@@ -819,6 +856,12 @@
           return;
         }
         buildGraph(stream);
+      },
+      setEmbeds(raw) {
+        embedsOn = new Set(normalizeEmbeds(raw));
+        if (solo >= 0 && !embedsOn.has(solo)) solo = setSoloPref(-1);
+        applyRouting();
+        if (!analysers.length) rebuildMeterDom();
       },
       setListen(on, listenOpts) {
         listen = !!on;
@@ -837,9 +880,12 @@
       getVolume: () => volume,
       setLayout(raw) {
         const next = layoutInfo(raw);
-        if (next.id === layout.id) return;
+        if (next.id === layout.id) {
+          paintToolbar();
+          return;
+        }
         layout = next;
-        channelCount = layout.channels;
+        channelCount = 8;
         if (connectedStreamId && video.srcObject) buildGraph(video.srcObject);
         else rebuildMeterDom();
       },
@@ -1040,12 +1086,14 @@
   global.NexVueVu = {
     MAX_CH,
     LAYOUTS,
+    TRANSPORT_LABELS,
     PREF_VISIBLE,
     PREF_SCALE,
     PREF_MUTED,
     PREF_VOLUME,
     MULTICHANNEL_OPUS_FMTP,
     normalizeLayout,
+    normalizeEmbeds,
     layoutInfo,
     mungeWhepOfferSdp,
     supportsMultiopus,

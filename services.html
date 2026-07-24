@@ -105,6 +105,25 @@
     white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--text);
   }
   #status { color: var(--dim); margin-left: auto; font-size: 12px; }
+  .page-head {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;
+    justify-content: space-between; margin-bottom: 12px;
+  }
+  .page-head .warn { margin: 0; flex: 1 1 280px; }
+  .support-bundle-bar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    flex-shrink: 0;
+  }
+  .support-bundle-bar label { color: var(--muted); font-size: 12px; }
+  .support-bundle-bar select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 6px 8px; font: inherit;
+  }
+  button.primary {
+    background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600;
+  }
+  button.primary:hover { filter: brightness(1.05); }
+  button:disabled { opacity: .55; cursor: not-allowed; }
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
     background: var(--backdrop); align-items: center; justify-content: center; padding: 16px;
@@ -138,7 +157,21 @@
   <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
 </nav>
 
-<p class="warn">Ops page (LAN-trust). Shows systemd status and recent journal lines — not a substitute for SSH.</p>
+<div class="page-head">
+  <p class="warn">Ops page (LAN-trust). Shows systemd status and recent journal lines — not a substitute for SSH. Support bundle includes journals, channel/MediaMTX config, and runtime state — secrets redacted; safe to hand off for bake-in.</p>
+  <div class="support-bundle-bar">
+    <label for="bundle-hours">Support bundle</label>
+    <select id="bundle-hours" title="Journal and metrics window">
+      <option value="1">Last 1 hour</option>
+      <option value="6">Last 6 hours</option>
+      <option value="12">Last 12 hours</option>
+      <option value="24" selected>Last 24 hours</option>
+      <option value="48">Last 48 hours</option>
+      <option value="72">Last 72 hours</option>
+    </select>
+    <button type="button" class="primary" id="btn-support-bundle" title="Download redacted journals + config + runtime state as a zip">Download zip…</button>
+  </div>
+</div>
 
 <div class="layout">
   <div class="panel">
@@ -429,6 +462,52 @@
       alert(err.message);
     }
   });
+
+  const bundleBtn = document.getElementById("btn-support-bundle");
+  const bundleHours = document.getElementById("bundle-hours");
+  if (bundleBtn && bundleHours) {
+    bundleBtn.addEventListener("click", async () => {
+      const hours = parseInt(bundleHours.value, 10) || 24;
+      if (!confirm(
+        `Build a redacted support bundle for the last ${hours} hour(s)?\n\n` +
+        "Includes journals, channel/MediaMTX config, metrics samples, and runtime state.\n" +
+        "Secrets (URL passwords, tokens) are stripped."
+      )) {
+        return;
+      }
+      bundleBtn.disabled = true;
+      statusEl.textContent = `Building support bundle (${hours}h)…`;
+      try {
+        const res = await fetch(
+          "nexvue-ops.php?action=support_bundle&hours=" + encodeURIComponent(String(hours)),
+          { method: "GET", cache: "no-store" }
+        );
+        const ct = (res.headers.get("Content-Type") || "").toLowerCase();
+        if (!res.ok || ct.indexOf("application/zip") < 0) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody.error || ("HTTP " + res.status));
+        }
+        const blob = await res.blob();
+        const dispo = res.headers.get("Content-Disposition") || "";
+        let fname = "nexvue-support.zip";
+        const m = /filename=\"([^\"]+)\"/i.exec(dispo);
+        if (m) fname = m[1];
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fname;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        statusEl.textContent = `Support bundle downloaded (${fname})`;
+      } catch (err) {
+        statusEl.textContent = "support bundle error: " + err.message;
+      } finally {
+        bundleBtn.disabled = false;
+      }
+    });
+  }
 
   refreshServices();
   setInterval(refreshServices, 2000);

@@ -63,6 +63,7 @@ REQUIRED_FILES=(
   nexvue-ops-status.sh nexvue-ops-journal.sh
   nexvue-ops-env-read.sh nexvue-ops-env-write.sh nexvue-ops-restart.sh
   nexvue-ops-enable.sh nexvue-ops-audio-probe.sh
+  nexvue-ops-support-bundle.sh nexvue-support-bundle.py
   channels-example.env
   nexvue-example.env
 )
@@ -202,6 +203,14 @@ install -m 755 "${REPO_DIR}/nexvue-ops-env-write.sh" /usr/local/bin/nexvue-ops-e
 install -m 755 "${REPO_DIR}/nexvue-ops-restart.sh" /usr/local/bin/nexvue-ops-restart.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-enable.sh" /usr/local/bin/nexvue-ops-enable.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-audio-probe.sh" /usr/local/bin/nexvue-ops-audio-probe.sh
+install -m 755 "${REPO_DIR}/nexvue-ops-support-bundle.sh" /usr/local/bin/nexvue-ops-support-bundle.sh
+install -m 755 "${REPO_DIR}/nexvue-support-bundle.py" /usr/local/bin/nexvue-support-bundle.py
+# Support-bundle zip staging (www-data must read finished zips).
+install -d -m 750 -o root -g www-data /var/lib/nexvue/support 2>/dev/null \
+  || install -d -m 750 /var/lib/nexvue/support
+chgrp www-data /var/lib/nexvue/support 2>/dev/null || true
+chmod 750 /var/lib/nexvue/support 2>/dev/null || true
+ok "support bundle dir: /var/lib/nexvue/support"
 # Caption JSON state (encode writes; Apache/www-data reads via nexvue-captions.php).
 install -d -m 755 -o nexvue -g nexvue /run/nexvue/captions 2>/dev/null \
   || mkdir -p /run/nexvue/captions
@@ -358,12 +367,18 @@ fi
 # Ops wrappers + sudoers
 for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
          nexvue-ops-env-write.sh nexvue-ops-restart.sh nexvue-ops-enable.sh \
-         nexvue-ops-audio-probe.sh \
+         nexvue-ops-audio-probe.sh nexvue-ops-support-bundle.sh \
+         nexvue-support-bundle.py \
          nexvue-ops-env-update.py nexvue-phase1-closeout.sh \
          nexvue-phase1-deploy-verify.sh nexvue-encode-storm-diagnose.sh; do
   [ -x "/usr/local/bin/$w" ] || [ -f "/usr/local/bin/$w" ] \
     && ok "ops helper: $w" || warn "ops helper missing: /usr/local/bin/$w"
 done
+if [ -d /var/lib/nexvue/support ]; then
+  ok "support bundle dir: /var/lib/nexvue/support"
+else
+  warn "support bundle dir missing — Services Download zip needs /var/lib/nexvue/support"
+fi
 if [ -f /etc/sudoers.d/nexvue-ops ]; then
   ok "sudoers drop-in: /etc/sudoers.d/nexvue-ops"
 else

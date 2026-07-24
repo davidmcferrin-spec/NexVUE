@@ -330,8 +330,9 @@
   let prevLost = 0, prevRecv = 0, haveLossBaseline = false;
   let badSeconds = 0, goodSeconds = 0, lastSwitchMs = 0;
   let prevApi = null;
-  // AUDIO_LAYOUT per chN from ops aliases (VU / Main-SAP / St-5.1).
+  // AUDIO_LAYOUT role + AUDIO_EMBEDS per chN from ops aliases (VU / Main-SAP).
   let audioLayoutByPath = {};
+  let audioEmbedsByPath = {};
 
   // Closed captions — side channel (nexvue-captions.php), not burned into video.
   const ccOverlay = $("cc-overlay");
@@ -619,8 +620,9 @@
       if (!video.srcObject) video.srcObject = ev.streams[0];
       // VU takes the MediaStream for meters + optional solo; element stays muted.
       if (vu && ev.streams[0]) {
-        const layout = audioLayoutByPath[currentBase] || "stereo";
-        vu.setStream(ev.streams[0], layout);
+        const layout = audioLayoutByPath[currentBase] || "51_sap";
+        const embeds = audioEmbedsByPath[currentBase];
+        vu.setStream(ev.streams[0], layout, embeds);
         // Default audible unless user previously chose Mute (this browser).
         vu.setListen(!NexVueVu.getMutedPref());
         NexVueVu.resume();
@@ -713,7 +715,10 @@
     if (qualityMode === "auto") rendition = "hi";
     if (rendition === "lo" && !loAvailable) rendition = "hi";
     captionClient.setChannel(base);
-    if (vu) vu.setLayout(audioLayoutByPath[base] || "stereo");
+    if (vu) {
+      vu.setLayout(audioLayoutByPath[base] || "51_sap");
+      if (audioEmbedsByPath[base]) vu.setEmbeds(audioEmbedsByPath[base]);
+    }
     NexVueVu.resume();
     openSession(pathFor(rendition));
   }
@@ -1036,15 +1041,19 @@
       if (data && data.ok && data.devices) devices = data.devices;
       if (data && data.ok && data.audio_layouts) {
         audioLayoutByPath = data.audio_layouts;
-        if (currentBase && vu) vu.setLayout(audioLayoutByPath[currentBase] || "stereo");
       } else if (data && data.ok && data.audio_channels) {
-        // Older ops without audio_layouts.
         const ac = data.audio_channels;
         audioLayoutByPath = {};
         Object.keys(ac).forEach((k) => {
           audioLayoutByPath[k] = NexVueVu.normalizeLayout(ac[k]);
         });
-        if (currentBase && vu) vu.setLayout(audioLayoutByPath[currentBase] || "stereo");
+      }
+      if (data && data.ok && data.audio_embeds) {
+        audioEmbedsByPath = data.audio_embeds;
+      }
+      if (currentBase && vu) {
+        vu.setLayout(audioLayoutByPath[currentBase] || "51_sap");
+        vu.setEmbeds(audioEmbedsByPath[currentBase] || "1-8");
       }
     } catch { /* ops API optional for bring-up */ }
     renderChannelButtons(aliases, devices);

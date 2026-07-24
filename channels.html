@@ -221,6 +221,19 @@
   .field input[type="text"], .field select {
     width: 100%; background: var(--bg);
   }
+  .embeds-picker {
+    display: flex; flex-wrap: wrap; gap: 6px 10px;
+    padding: 8px 10px; border: 1px solid var(--edge); border-radius: 6px;
+    background: var(--bg);
+  }
+  .embeds-picker label {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; color: var(--fg); cursor: pointer; user-select: none;
+  }
+  .embeds-picker label input { margin: 0; }
+  .embeds-picker .embeds-hint {
+    flex: 1 1 100%; font-size: 11px; color: var(--dim); margin: 0;
+  }
   .bulk-field {
     display: flex; flex-direction: column; gap: 4px;
     padding: 8px 10px; border: 1px solid var(--edge); border-radius: 6px;
@@ -370,7 +383,7 @@
   <div class="modal-body" id="edit-body"></div>
   <div class="modal-footer">
     <span class="msg" id="edit-msg" aria-live="polite"></span>
-    <button type="button" class="danger" id="edit-defaults" title="Blank every editable setting so the encoder falls back to built-in defaults (alias cleared, LO off, stereo audio). DEVICE_NUMBER / CHANNEL_PATH are kept.">Factory defaults…</button>
+    <button type="button" class="danger" id="edit-defaults" title="Blank every editable setting so the encoder falls back to built-in defaults (alias cleared, LO off, 8ch Opus @ 384 kbps, all embeds offered). DEVICE_NUMBER / CHANNEL_PATH are kept.">Factory defaults…</button>
     <button type="button" id="edit-cancel">Cancel</button>
     <button type="button" class="primary" id="save-one">Save channel</button>
   </div>
@@ -569,19 +582,24 @@
     AUDIO_BITRATE_BPS: {
       label: "AUDIO_BITRATE_BPS",
       type: "text",
-      tip: "Opus bitrate in bits per second. Default 128000 (128 kbps). Common range 64000–256000. Blank = 128000.",
+      tip: "Opus bitrate in bits per second. Encode always publishes 8ch discrete Opus; default 384000 (384 kbps). Max 512000 (WebRTC packet-size cliff). Blank = 384000.",
+    },
+    AUDIO_EMBEDS: {
+      label: "AUDIO_EMBEDS",
+      type: "embeds",
+      tip: "Which SDI embeds (1–8) are offered in the Player / Multiview VU and listen UI. Encode always ingests and publishes all 8 embeds — unchecking here only hides them from operators in the browser. Blank = all eight enabled.",
     },
     AUDIO_CHANNELS: {
       label: "AUDIO_CHANNELS",
       type: "select",
       options: ["2", "4", "6", "8"],
-      tip: "Legacy channel count — prefer AUDIO_LAYOUT. 2=stereo, 4=stereo+SAP, 6=5.1, 8=5.1+SAP. Blank ignored when AUDIO_LAYOUT is set.",
+      tip: "Legacy only — ignored by encode (always 8ch). Prefer AUDIO_LAYOUT (player role) + AUDIO_EMBEDS (which embeds the UI offers).",
     },
     AUDIO_LAYOUT: {
       label: "AUDIO_LAYOUT",
       type: "select",
       options: ["stereo", "51", "stereo_sap", "51_sap"],
-      tip: "Discrete Opus transport (no Dolby). stereo=L/R; 51=embeds 1–6; stereo_sap=1–2+7–8; 51_sap=1–8 (SAP on 7–8). Use Detect audio… below to measure embeds. Player can fold 5.1→stereo or play discrete surround; Main/SAP is per-browser. Blank = stereo (or derived from AUDIO_CHANNELS).",
+      tip: "Player role preset only (does not change encode). Encode always opens DeckLink 8ch and publishes 8ch Opus to HI and LO. stereo=Main L/R; 51=Main 1–6; stereo_sap=Main 1–2 + SAP 7–8; 51_sap=Main 1–6 + SAP 7–8. Use Detect audio… + embed checkboxes below. Blank = 51_sap.",
     },
     DECKLINK_BUFFER_FRAMES: {
       label: "DECKLINK_BUFFER_FRAMES",
@@ -698,7 +716,7 @@
     {
       id: "audio",
       title: "Audio",
-      keys: ["ENABLE_AUDIO", "AUDIO_FRAME_MS", "AUDIO_BITRATE_BPS", "AUDIO_LAYOUT", "AUDIO_CHANNELS"],
+      keys: ["ENABLE_AUDIO", "AUDIO_FRAME_MS", "AUDIO_BITRATE_BPS", "AUDIO_EMBEDS", "AUDIO_LAYOUT", "AUDIO_CHANNELS"],
     },
     {
       id: "lo",
@@ -756,9 +774,74 @@
     return sections;
   }
 
+  function parseEmbedsCsv(raw) {
+    const s = String(raw || "").trim().toLowerCase();
+    if (!s || s === "1-8" || s === "all" || s === "*") {
+      return [1, 2, 3, 4, 5, 6, 7, 8];
+    }
+    const out = [];
+    const seen = new Set();
+    for (const part of s.split(",")) {
+      const n = parseInt(part.trim(), 10);
+      if (n >= 1 && n <= 8 && !seen.has(n)) {
+        seen.add(n);
+        out.push(n);
+      }
+    }
+    return out.length ? out.sort((a, b) => a - b) : [1, 2, 3, 4, 5, 6, 7, 8];
+  }
+
+  function makeEmbedsControl(value, { blankUnset = false } = {}) {
+    const wrap = document.createElement("div");
+    wrap.className = "embeds-picker";
+    const hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.dataset.key = "AUDIO_EMBEDS";
+    const raw = value == null ? "" : String(value).trim();
+    // blankUnset + empty → keep value blank (server default = all 8) but show all checked.
+    const isBlankDefault = blankUnset && raw === "";
+    hidden.value = isBlankDefault ? "" : parseEmbedsCsv(raw).join(",");
+    const enabled = new Set(parseEmbedsCsv(isBlankDefault ? "1-8" : hidden.value));
+    const hint = document.createElement("p");
+    hint.className = "embeds-hint";
+    hint.textContent = "Encode always publishes embeds 1–8. Uncheck to hide from Player / Multiview only.";
+    wrap.appendChild(hint);
+    wrap.appendChild(hidden);
+    const sync = () => {
+      const on = [];
+      wrap.querySelectorAll('input[type="checkbox"][data-embed]').forEach(cb => {
+        if (cb.checked) on.push(parseInt(cb.dataset.embed, 10));
+      });
+      on.sort((a, b) => a - b);
+      // Empty selection → blank (all eight / default), matching sanitize.
+      hidden.value = on.length === 0 || on.length === 8 ? "" : on.join(",");
+      // Keep UI honest: clearing all re-checks all as "default all".
+      if (on.length === 0) {
+        wrap.querySelectorAll('input[type="checkbox"][data-embed]').forEach(cb => {
+          cb.checked = true;
+        });
+      }
+    };
+    for (let i = 1; i <= 8; i++) {
+      const lab = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.dataset.embed = String(i);
+      cb.checked = enabled.has(i);
+      cb.addEventListener("change", sync);
+      lab.appendChild(cb);
+      lab.appendChild(document.createTextNode(" " + i));
+      wrap.appendChild(lab);
+    }
+    return wrap;
+  }
+
   function makeControl(key, value, { blankUnset = false } = {}) {
     const meta = FIELD_META[key] || { label: key, type: "text" };
     let control;
+    if (meta.type === "embeds") {
+      return makeEmbedsControl(value, { blankUnset });
+    }
     if (meta.type === "select") {
       control = document.createElement("select");
       control.dataset.key = key;
@@ -913,7 +996,7 @@
       `<button type="button" class="primary" id="audio-probe-apply" disabled>Apply layout to form</button>` +
       `</div>` +
       `<p class="probe-hint">Stops this channel’s encoder for ~1–2s, measures PCM energy on DeckLink embeds 1–8, then restarts. ` +
-      `Suggestions are presence-based (not labels) — confirm against the source.</p>` +
+      `Suggestions set the player role (AUDIO_LAYOUT) and which embeds the UI offers (AUDIO_EMBEDS) — encode always publishes all 8.</p>` +
       `<div class="probe-result" id="audio-probe-result" hidden></div>`;
     return box;
   }
@@ -938,10 +1021,14 @@
     } else {
       list = `<ul class="suggest-list">` + sugg.map((s, i) => {
         const exact = s.exact ? ` <span class="exact">exact</span>` : "";
-        return `<li><input type="radio" name="audio-probe-layout" value="${s.layout}" ` +
-          `id="probe-lay-${i}" ${i === 0 ? "checked" : ""}>` +
+        const emb = (s.embeds_csv || (Array.isArray(s.embeds) ? s.embeds.join(",") : "") || "");
+        return `<li data-embeds="${emb}">` +
+          `<input type="radio" name="audio-probe-layout" value="${s.layout}" ` +
+          `data-embeds="${emb}" id="probe-lay-${i}" ${i === 0 ? "checked" : ""}>` +
           `<label for="probe-lay-${i}">${s.label}${exact}` +
-          `<div class="score">score ${s.score}</div></label></li>`;
+          `<div class="score">score ${s.score}` +
+          (emb ? ` · embeds ${emb}` : "") +
+          `</div></label></li>`;
       }).join("") + `</ul>`;
     }
     host.innerHTML =
@@ -1081,7 +1168,7 @@
     apply.addEventListener("click", () => {
       const picked = editBody.querySelector('input[name="audio-probe-layout"]:checked');
       if (!picked) {
-        alert("Select a suggested layout first (or set AUDIO_LAYOUT manually).");
+        alert("Select a suggested layout first (or set AUDIO_LAYOUT / embeds manually).");
         return;
       }
       const sel = editBody.querySelector('select[data-key="AUDIO_LAYOUT"]');
@@ -1090,10 +1177,33 @@
         return;
       }
       sel.value = picked.value;
-      // Clear legacy count so layout wins unambiguously on save.
       const ch = editBody.querySelector('select[data-key="AUDIO_CHANNELS"]');
       if (ch) ch.value = "";
-      setMsg(editMsg, `AUDIO_LAYOUT=${picked.value} set in form — Save channel to write`, "ok");
+      // Prefer embeds_csv from the suggestion radio's sibling data; fall back to layout defaults.
+      let embedsCsv = picked.dataset.embeds || "";
+      if (!embedsCsv) {
+        const li = picked.closest("li");
+        if (li && li.dataset.embeds) embedsCsv = li.dataset.embeds;
+      }
+      const embHidden = editBody.querySelector('input[data-key="AUDIO_EMBEDS"]');
+      if (embHidden) {
+        const list = parseEmbedsCsv(embedsCsv || "1-8");
+        embHidden.value = list.length === 8 ? "" : list.join(",");
+        const wrap = embHidden.closest(".embeds-picker");
+        if (wrap) {
+          const on = new Set(list);
+          wrap.querySelectorAll('input[type="checkbox"][data-embed]').forEach(cb => {
+            cb.checked = on.has(parseInt(cb.dataset.embed, 10));
+          });
+        }
+      }
+      setMsg(
+        editMsg,
+        `AUDIO_LAYOUT=${picked.value}` +
+          (embedsCsv ? `, AUDIO_EMBEDS=${embedsCsv}` : "") +
+          " set in form — Save channel to write",
+        "ok"
+      );
     });
   }
 
@@ -1238,7 +1348,8 @@
     if (!confirm(
       `Reset channel ${selectedId} to factory defaults?\n\n` +
       "Every editable setting is blanked: alias cleared, input back to DeckLink, " +
-      "video 5000 kbps / deinterlace all, audio stereo, LO rendition off, all tuning knobs to defaults.\n" +
+      "video 5000 kbps / deinterlace all, audio 8ch Opus @ 384 kbps (all embeds), " +
+      "LO rendition off, all tuning knobs to defaults.\n" +
       "DEVICE_NUMBER and CHANNEL_PATH are kept. Takes effect on encoder restart."
     )) {
       return;

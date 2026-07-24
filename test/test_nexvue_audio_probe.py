@@ -47,21 +47,28 @@ class TestAudioProbeSuggest(unittest.TestCase):
         self.assertTrue(s)
         self.assertEqual(s[0]["layout"], "stereo")
         self.assertTrue(s[0]["exact"])
+        self.assertEqual(s[0]["embeds_csv"], "1,2")
 
     def test_51_exact(self) -> None:
         s = php_suggest([1, 2, 3, 4, 5, 6])
         self.assertEqual(s[0]["layout"], "51")
         self.assertTrue(s[0]["exact"])
+        self.assertEqual(s[0]["embeds"], [1, 2, 3, 4, 5, 6])
 
     def test_stereo_sap_exact(self) -> None:
         s = php_suggest([1, 2, 7, 8])
         self.assertEqual(s[0]["layout"], "stereo_sap")
         self.assertTrue(s[0]["exact"])
+        self.assertEqual(s[0]["embeds_csv"], "1,2,7,8")
 
     def test_51_sap_exact(self) -> None:
         s = php_suggest([1, 2, 3, 4, 5, 6, 7, 8])
         self.assertEqual(s[0]["layout"], "51_sap")
         self.assertTrue(s[0]["exact"])
+        self.assertEqual(s[0]["embeds_csv"], "1,2,3,4,5,6,7,8")
+
+    def test_ignores_embeds_above_8(self) -> None:
+        self.assertEqual(php_suggest([9, 10]), [])
 
     def test_51_preferred_over_stereo_when_surround_hot(self) -> None:
         s = php_suggest([1, 2, 3, 4, 5, 6])

@@ -60,11 +60,16 @@ DEINT_FIELDS="$(strip_inline "${DEINT_FIELDS:-all}")"
 BITRATE_KBPS="$(strip_inline "${BITRATE_KBPS:-5000}")"
 GOP_FRAMES="$(strip_inline "${GOP_FRAMES:-60}")"
 ENABLE_AUDIO="$(strip_inline "${ENABLE_AUDIO:-true}")"
-AUDIO_BITRATE_BPS="$(strip_inline "${AUDIO_BITRATE_BPS:-128000}")"
+# Always-8 Opus (embeds 1–8). 384 kbps is the production default for discrete
+# multichannel; WebRTC/MULTIOPUS stays safe under the ~512 kbps packet cliff.
+AUDIO_BITRATE_BPS="$(strip_inline "${AUDIO_BITRATE_BPS:-384000}")"
 AUDIO_CHANNELS="$(strip_inline "${AUDIO_CHANNELS:-}")"
-# Layout: stereo | 51 | stereo_sap | 51_sap (SAP = SDI embeds 7+8).
-# Blank AUDIO_LAYOUT falls back to AUDIO_CHANNELS legacy (2→stereo, 6→51, 4→stereo_sap, 8/16→51_sap).
+# AUDIO_LAYOUT is a player role preset only (Main/SAP/5.1 UI) — encode always
+# opens DeckLink 8ch and publishes 8ch positioned Opus. AUDIO_EMBEDS (Settings
+# checkboxes) is metadata for which embeds are offered in the browser; it does
+# not change the pipeline. Blank layout falls back to AUDIO_CHANNELS legacy.
 AUDIO_LAYOUT="$(strip_inline "${AUDIO_LAYOUT:-}")"
+AUDIO_EMBEDS="$(strip_inline "${AUDIO_EMBEDS:-}")"
 AUDIO_FRAME_MS="$(strip_inline "${AUDIO_FRAME_MS:-10}")"
 # Audio queue depth in buffers. 16 (the old default) is only ~160-320ms of
 # headroom at typical Opus frame sizes — thin against any transient stall
@@ -144,31 +149,32 @@ esac
 case "${AUDIO_FRAME_MS}" in 2|5|10|20|40|60) ;; *)
     log "ERROR: AUDIO_FRAME_MS must be one of 2,5,10,20,40,60"; exit 64 ;;
 esac
-# Resolve AUDIO_LAYOUT (preferred) or legacy AUDIO_CHANNELS → layout + Opus channel count.
-# Transport is discrete Opus only (no Dolby). Channel order after remix:
-#   stereo:      L R                         (2)
-#   51:          L R C LFE Ls Rs              (6)  — SDI embeds 1–6
-#   stereo_sap:  L R SAP_L SAP_R              (4)  — embeds 1–2 + 7–8
-#   51_sap:      L R C LFE Ls Rs SAP_L SAP_R  (8)  — embeds 1–8
+# Always ingest + publish all 8 SDI embeds as discrete Opus (no Dolby, no 16ch).
+# Transport channel order (index = embed−1):
+#   0–5: L R C LFE Ls Rs   6–7: SAP_L SAP_R
+# AUDIO_LAYOUT / AUDIO_EMBEDS are player/Settings metadata only — never remix
+# the encode. Blank AUDIO_LAYOUT defaults to 51_sap (full Main+SAP UI).
 if [ -z "${AUDIO_LAYOUT}" ]; then
   case "${AUDIO_CHANNELS}" in
-    ""|2) AUDIO_LAYOUT=stereo ;;
+    ""|8) AUDIO_LAYOUT=51_sap ;;
+    2) AUDIO_LAYOUT=stereo ;;
     4) AUDIO_LAYOUT=stereo_sap ;;
     3|5|6) AUDIO_LAYOUT=51 ;;
-    8|16) AUDIO_LAYOUT=51_sap ;;
     *)
       log "ERROR: AUDIO_CHANNELS '${AUDIO_CHANNELS}' needs AUDIO_LAYOUT=stereo|51|stereo_sap|51_sap"; exit 64 ;;
   esac
 fi
 case "${AUDIO_LAYOUT}" in
-  stereo|2.0) AUDIO_LAYOUT=stereo; OPUS_CHANNELS=2; DECKLINK_AUDIO_CHANNELS=2; AUDIO_REMIX=none ;;
-  51|5.1|surround) AUDIO_LAYOUT=51; OPUS_CHANNELS=6; DECKLINK_AUDIO_CHANNELS=8; AUDIO_REMIX=first6 ;;
-  stereo_sap|sap) AUDIO_LAYOUT=stereo_sap; OPUS_CHANNELS=4; DECKLINK_AUDIO_CHANNELS=8; AUDIO_REMIX=stereo_sap ;;
-  51_sap|5.1_sap|surround_sap) AUDIO_LAYOUT=51_sap; OPUS_CHANNELS=8; DECKLINK_AUDIO_CHANNELS=8; AUDIO_REMIX=none8 ;;
+  stereo|2.0) AUDIO_LAYOUT=stereo ;;
+  51|5.1|surround) AUDIO_LAYOUT=51 ;;
+  stereo_sap|sap) AUDIO_LAYOUT=stereo_sap ;;
+  51_sap|5.1_sap|surround_sap) AUDIO_LAYOUT=51_sap ;;
   *)
     log "ERROR: AUDIO_LAYOUT must be stereo|51|stereo_sap|51_sap, got '${AUDIO_LAYOUT}'"; exit 64 ;;
 esac
-AUDIO_CHANNELS="${OPUS_CHANNELS}"
+DECKLINK_AUDIO_CHANNELS=8
+OPUS_CHANNELS=8
+AUDIO_CHANNELS=8
 if ! [[ "${AUDIO_RESAMPLE_QUALITY}" =~ ^([0-9]|10)$ ]]; then
     log "ERROR: AUDIO_RESAMPLE_QUALITY must be an integer 0-10, got '${AUDIO_RESAMPLE_QUALITY}'"; exit 64
 fi
@@ -303,78 +309,33 @@ if [ "${ENABLE_AUDIO}" = "true" ]; then
   # arrives. This is the standard GStreamer fix for that symptom.
   PIPELINE+=" ! audiorate"
   PIPELINE+=" ! audioconvert ! audioresample quality=${AUDIO_RESAMPLE_QUALITY}"
-  # Discrete Opus only (no Dolby). Remix embeds to the transport layout:
-  # stereo_sap pulls SDI 1–2 + 7–8; 51 keeps 1–6; 51_sap keeps 1–8.
-  # Two traps here, both fatal on real hardware:
-  #   1. first6 MUST deinterleave (not audioconvert 8→6): bare channel-count
-  #      reduction has no mix matrix and fails not-negotiated on opusenc,
-  #      which surfaces on decklinkaudiosrc and kills the pipeline during
-  #      Signal lost before lock returns — stereo (2ch, no remix) survives.
-  #   2. Every >2ch layout MUST reach opusenc with POSITIONED channels.
-  #      decklinkaudiosrc emits channel-mask=0 (unpositioned); opusenc then
-  #      encodes channel-mapping-family=255, and NO RTP payloader exists for
-  #      family 255 — rtspclientsink dies with "Could not create payloader".
-  #      Positioned input yields family 1, which rtpopuspay carries as
-  #      MULTIOPUS (the libwebrtc/Chrome multichannel Opus convention that
-  #      MediaMTX forwards to WHEP). GStreamer 1.24's audioconvert cannot
-  #      relabel an unpositioned N-channel stream (the reorder knob is
-  #      1.26+), but it CAN position a mono stream — so every >2ch layout
-  #      goes through deinterleave/interleave with a per-branch mono
-  #      channel-mask, the pattern documented on the interleave element.
-  #      Position labels are transport plumbing only: SAP pairs ride as
-  #      RL/RR (stereo_sap) or SL/SR (51_sap); the player addresses
-  #      channels by index, not by label.
+  # Always 8ch discrete Opus (no Dolby, no encode-time layout remix).
+  # decklinkaudiosrc emits channel-mask=0 (unpositioned); opusenc then encodes
+  # mapping family 255, and NO RTP payloader exists for family 255 —
+  # rtspclientsink dies with "Could not create payloader". Positioned input
+  # yields family 1 / MULTIOPUS. GStreamer 1.24 cannot relabel an unpositioned
+  # N-ch stream (reorder knob is 1.26+), but CAN position mono — so every
+  # embed goes through deinterleave/interleave with a per-branch mono
+  # channel-mask. Labels are transport plumbing only; players address by index.
+  # Same Opus track is teed to HI and LO when LO_ENABLE=true.
   remix_branch() { # $1=deinterleave pad (SDI embed, 0-based)  $2=interleave sink  $3=mono position bitmask
     PIPELINE+=" adl.src_$1 ! queue max-size-buffers=8 leaky=downstream"
     PIPELINE+=" ! audioconvert ! audio/x-raw,channels=1,channel-mask=(bitmask)$3"
     PIPELINE+=" ! ali.sink_$2"
   }
-  case "${AUDIO_REMIX}" in
-    stereo_sap)
-      PIPELINE+=" ! audio/x-raw,rate=48000,channels=${DECKLINK_AUDIO_CHANNELS}"
-      PIPELINE+=" ! deinterleave name=adl"
-      PIPELINE+=" interleave name=ali"
-      remix_branch 0 0 0x1   # embed 1 -> FL
-      remix_branch 1 1 0x2   # embed 2 -> FR
-      remix_branch 6 2 0x10  # embed 7 (SAP L) -> RL
-      remix_branch 7 3 0x20  # embed 8 (SAP R) -> RR
-      PIPELINE+=" ali. ! audioconvert"
-      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS},channel-mask=(bitmask)0x33"
-      ;;
-    first6)
-      PIPELINE+=" ! audio/x-raw,rate=48000,channels=${DECKLINK_AUDIO_CHANNELS}"
-      PIPELINE+=" ! deinterleave name=adl"
-      PIPELINE+=" interleave name=ali"
-      remix_branch 0 0 0x1   # embed 1 -> FL
-      remix_branch 1 1 0x2   # embed 2 -> FR
-      remix_branch 2 2 0x4   # embed 3 -> FC
-      remix_branch 3 3 0x8   # embed 4 -> LFE
-      remix_branch 4 4 0x10  # embed 5 -> RL (Ls)
-      remix_branch 5 5 0x20  # embed 6 -> RR (Rs)
-      PIPELINE+=" ali. ! audioconvert"
-      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS},channel-mask=(bitmask)0x3f"
-      ;;
-    none8)
-      PIPELINE+=" ! audio/x-raw,rate=48000,channels=${DECKLINK_AUDIO_CHANNELS}"
-      PIPELINE+=" ! deinterleave name=adl"
-      PIPELINE+=" interleave name=ali"
-      remix_branch 0 0 0x1    # embed 1 -> FL
-      remix_branch 1 1 0x2    # embed 2 -> FR
-      remix_branch 2 2 0x4    # embed 3 -> FC
-      remix_branch 3 3 0x8    # embed 4 -> LFE
-      remix_branch 4 4 0x10   # embed 5 -> RL (Ls)
-      remix_branch 5 5 0x20   # embed 6 -> RR (Rs)
-      remix_branch 6 6 0x400  # embed 7 (SAP L) -> SL
-      remix_branch 7 7 0x800  # embed 8 (SAP R) -> SR
-      PIPELINE+=" ali. ! audioconvert"
-      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS},channel-mask=(bitmask)0xc3f"
-      ;;
-    none)
-      # Stereo: 2ch defaults to FL/FR; opusenc emits family 0 (plain Opus).
-      PIPELINE+=" ! audioconvert"
-      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS}"
-      ;;
-  esac
+  PIPELINE+=" ! audio/x-raw,rate=48000,channels=${DECKLINK_AUDIO_CHANNELS}"
+  PIPELINE+=" ! deinterleave name=adl"
+  PIPELINE+=" interleave name=ali"
+  remix_branch 0 0 0x1    # embed 1 -> FL
+  remix_branch 1 1 0x2    # embed 2 -> FR
+  remix_branch 2 2 0x4    # embed 3 -> FC
+  remix_branch 3 3 0x8    # embed 4 -> LFE
+  remix_branch 4 4 0x10   # embed 5 -> RL (Ls)
+  remix_branch 5 5 0x20   # embed 6 -> RR (Rs)
+  remix_branch 6 6 0x400  # embed 7 (SAP L) -> SL
+  remix_branch 7 7 0x800  # embed 8 (SAP R) -> SR
+  PIPELINE+=" ali. ! audioconvert"
+  PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS},channel-mask=(bitmask)0xc3f"
   PIPELINE+=" ! opusenc bitrate=${AUDIO_BITRATE_BPS} frame-size=${AUDIO_FRAME_MS}"
   if [ "${LO_ENABLE}" = "true" ]; then
     PIPELINE+=" ! tee name=at"
@@ -398,7 +359,7 @@ if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
   PIPELINE+=" ! filesink location=${CAPTIONS_FIFO} buffer-mode=unbuffered sync=false append=false"
 fi
 
-log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) audio=${ENABLE_AUDIO} layout=${AUDIO_LAYOUT}(${OPUS_CHANNELS}ch) captions=${CAPTIONS_ACTIVE} enc=${VIDEO_ENCODER}"
+log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) audio=${ENABLE_AUDIO} layout=${AUDIO_LAYOUT}(8ch@${AUDIO_BITRATE_BPS}bps embeds=${AUDIO_EMBEDS:-1-8}) captions=${CAPTIONS_ACTIVE} enc=${VIDEO_ENCODER}"
 log "publishing HI to ${RTSP_URL}$([ "${LO_ENABLE}" = "true" ] && echo ", LO to ${LO_RTSP_URL}")"
 
 # Intentional word-splitting: PIPELINE is a gst-launch description whose
