@@ -133,26 +133,41 @@ grep -q "output-cc=true" <<<"$out" && fail "T19 output-cc should be absent"
 grep -q "ccextractor" <<<"$out" && fail "T19 ccextractor should be absent"
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 CAPTIONS_ENABLE=bogus expect_usage_64 "T19 accepted bogus CAPTIONS_ENABLE"
 
-# T20: AUDIO_CHANNELS stays discrete through Opus (no stereo downmix)
 # T20: AUDIO_LAYOUT discrete Opus (no stereo downmix / no Dolby)
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 run_encode)
 grep -q "decklinkaudiosrc device-number=0 channels=2" <<<"$out" || fail "T20 default stereo opens 2ch DeckLink"
 grep -q "audio/x-raw,format=S16LE,rate=48000,channels=2" <<<"$out" || fail "T20 default Opus stereo S16LE"
+grep -q "channels=2,channel-mask" <<<"$out" && fail "T20 stereo must not force a channel-mask (plain Opus, family 0)"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=51 run_encode)
 grep -q "decklinkaudiosrc device-number=0 channels=8" <<<"$out" || fail "T20 51 opens 8ch DeckLink"
 grep -q "deinterleave name=adl" <<<"$out" || fail "T20 51 remix deinterleave"
 grep -q "adl.src_5" <<<"$out" || fail "T20 51 keeps embed 6"
 grep -q "adl.src_6" <<<"$out" && fail "T20 51 must not pull embed 7"
-grep -q "audio/x-raw,format=S16LE,rate=48000,channels=6" <<<"$out" || fail "T20 51 Opus is 6ch S16LE"
+grep -q "audio/x-raw,format=S16LE,rate=48000,channels=6,channel-mask=(bitmask)0x3f" <<<"$out" || fail "T20 51 Opus is 6ch S16LE positioned 5.1"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=stereo_sap run_encode)
 grep -q "deinterleave name=adl" <<<"$out" || fail "T20 stereo_sap remix deinterleave"
 grep -q "adl.src_6" <<<"$out" || fail "T20 stereo_sap pulls embed 7"
 grep -q "adl.src_7" <<<"$out" || fail "T20 stereo_sap pulls embed 8"
-grep -q "audio/x-raw,format=S16LE,rate=48000,channels=4" <<<"$out" || fail "T20 stereo_sap Opus is 4ch S16LE"
+grep -q "audio/x-raw,format=S16LE,rate=48000,channels=4,channel-mask=(bitmask)0x33" <<<"$out" || fail "T20 stereo_sap Opus is 4ch S16LE positioned quad"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=51_sap run_encode)
-grep -q "audio/x-raw,format=S16LE,rate=48000,channels=8" <<<"$out" || fail "T20 51_sap Opus is 8ch S16LE"
+grep -q "deinterleave name=adl" <<<"$out" || fail "T20 51_sap remix deinterleave"
+grep -q "audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f" <<<"$out" || fail "T20 51_sap Opus is 8ch S16LE positioned 7.1"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_CHANNELS=6 run_encode)
 grep -q "channels=6" <<<"$out" || fail "T20 legacy AUDIO_CHANNELS=6 → 51"
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=bogus expect_usage_64 "T20 accepted bogus AUDIO_LAYOUT"
+
+# T21: family-255 regression guard — every interleave input branch must carry
+# a mono channel-mask so opusenc sees positioned channels (family 1 /
+# MULTIOPUS). Unpositioned multichannel encodes family 255, which has NO RTP
+# payloader: rtspclientsink dies with "Could not create payloader".
+count_branch_masks() { grep -o "channels=1,channel-mask=(bitmask)0x" <<<"$1" | wc -l; }
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=stereo_sap run_encode)
+[ "$(count_branch_masks "$out")" -eq 4 ] || fail "T21 stereo_sap needs 4 positioned branches"
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=51 run_encode)
+[ "$(count_branch_masks "$out")" -eq 6 ] || fail "T21 51 needs 6 positioned branches"
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=51_sap run_encode)
+[ "$(count_branch_masks "$out")" -eq 8 ] || fail "T21 51_sap needs 8 positioned branches"
+grep -q "channel-mask=(bitmask)0x400" <<<"$out" || fail "T21 51_sap SAP L rides as SL"
+grep -q "channel-mask=(bitmask)0x800" <<<"$out" || fail "T21 51_sap SAP R rides as SR"
 
 echo "All pipeline assembly tests passed."

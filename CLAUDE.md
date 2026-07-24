@@ -200,9 +200,18 @@ specifically because this box can't get additional ports opened.
   (Web Audio on the WHEP MediaStream). Top-bar **VU** toggle (like CC)
   shows/hides the meter overlay (`localStorage.nexvue-vu-on`, default on).
   `AUDIO_LAYOUT` transports discrete
-  Opus only (stereo / 51 / stereo_sap / 51_sap; SAP = embeds 7+8; `51`
-  deinterleaves embeds 1–6 from an 8ch DeckLink open — bare audioconvert
-  8→6 not-negotiates and kills encode). Settings **Detect audio…**
+ Opus only (stereo / 51 / stereo_sap / 51_sap; SAP = embeds 7+8; `51`
+ deinterleaves embeds 1–6 from an 8ch DeckLink open — bare audioconvert
+ 8→6 not-negotiates and kills encode). Every >2ch layout MUST reach
+ opusenc with POSITIONED channels: decklinkaudiosrc emits channel-mask=0,
+ unpositioned multichannel encodes Opus mapping family 255, and NO RTP
+ payloader exists for family 255 — rtspclientsink dies with "Could not
+ create payloader". Fix (GStreamer 1.24: audioconvert can't relabel an
+ unpositioned N-ch stream; the reorder knob is 1.26+) is per-branch mono
+ channel-masks on the deinterleave/interleave remix, yielding family 1 /
+ MULTIOPUS; SAP pairs ride as RL/RR (stereo_sap) or SL/SR (51_sap) —
+ transport labels only, players address channels by index.
+ Settings **Detect audio…**
   (`audio_probe` → `decklink-audio-probe`) measures embed energy and
   suggests a layout for operator confirm. Per-browser
   Main↔SAP and 5.1 stereo-fold vs discrete surround (`localStorage`) — never

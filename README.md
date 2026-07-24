@@ -930,6 +930,15 @@ Services/Settings).
   `AUDIO_LAYOUT` (`stereo`|`51`|`stereo_sap`|`51_sap`) sets embeds: SAP is
   always SDI 7+8; 5.1 is embeds 1–6 (deinterleave of first six from an
   8ch DeckLink open — not a bare audioconvert 8→6, which not-negotiates).
+  Every >2ch layout carries explicit channel positions through the
+  deinterleave/interleave remix (per-branch mono `channel-mask`, then a
+  positioned capsfilter into opusenc): decklinkaudiosrc outputs
+  unpositioned channels (`channel-mask=0`), and unpositioned multichannel
+  makes opusenc emit mapping family 255 — which has **no RTP payloader**,
+  so rtspclientsink fails at startup with `Could not create payloader`.
+  Positioned input encodes family 1, payloaded as MULTIOPUS (the
+  libwebrtc convention MediaMTX forwards to WHEP). SAP pairs ride as
+  rear (stereo_sap) or side (51_sap) positions — transport labels only.
   Legacy `AUDIO_CHANNELS` 2/4/6/8 still maps.
   Chromium is the best path for multi-channel WebRTC Opus; stereo is universal.
 - **Ops pages (Services / Settings)** call `nexvue-ops.php`, which uses

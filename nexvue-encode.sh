@@ -305,36 +305,72 @@ if [ "${ENABLE_AUDIO}" = "true" ]; then
   PIPELINE+=" ! audioconvert ! audioresample quality=${AUDIO_RESAMPLE_QUALITY}"
   # Discrete Opus only (no Dolby). Remix embeds to the transport layout:
   # stereo_sap pulls SDI 1–2 + 7–8; 51 keeps 1–6; 51_sap keeps 1–8.
-  # first6 MUST deinterleave (not audioconvert 8→6): bare channel-count
-  # reduction has no mix matrix and fails not-negotiated on opusenc, which
-  # surfaces on decklinkaudiosrc and kills the pipeline during Signal lost
-  # before lock returns — stereo (2ch, no remix) survives the same window.
+  # Two traps here, both fatal on real hardware:
+  #   1. first6 MUST deinterleave (not audioconvert 8→6): bare channel-count
+  #      reduction has no mix matrix and fails not-negotiated on opusenc,
+  #      which surfaces on decklinkaudiosrc and kills the pipeline during
+  #      Signal lost before lock returns — stereo (2ch, no remix) survives.
+  #   2. Every >2ch layout MUST reach opusenc with POSITIONED channels.
+  #      decklinkaudiosrc emits channel-mask=0 (unpositioned); opusenc then
+  #      encodes channel-mapping-family=255, and NO RTP payloader exists for
+  #      family 255 — rtspclientsink dies with "Could not create payloader".
+  #      Positioned input yields family 1, which rtpopuspay carries as
+  #      MULTIOPUS (the libwebrtc/Chrome multichannel Opus convention that
+  #      MediaMTX forwards to WHEP). GStreamer 1.24's audioconvert cannot
+  #      relabel an unpositioned N-channel stream (the reorder knob is
+  #      1.26+), but it CAN position a mono stream — so every >2ch layout
+  #      goes through deinterleave/interleave with a per-branch mono
+  #      channel-mask, the pattern documented on the interleave element.
+  #      Position labels are transport plumbing only: SAP pairs ride as
+  #      RL/RR (stereo_sap) or SL/SR (51_sap); the player addresses
+  #      channels by index, not by label.
+  remix_branch() { # $1=deinterleave pad (SDI embed, 0-based)  $2=interleave sink  $3=mono position bitmask
+    PIPELINE+=" adl.src_$1 ! queue max-size-buffers=8 leaky=downstream"
+    PIPELINE+=" ! audioconvert ! audio/x-raw,channels=1,channel-mask=(bitmask)$3"
+    PIPELINE+=" ! ali.sink_$2"
+  }
   case "${AUDIO_REMIX}" in
     stereo_sap)
       PIPELINE+=" ! audio/x-raw,rate=48000,channels=${DECKLINK_AUDIO_CHANNELS}"
       PIPELINE+=" ! deinterleave name=adl"
       PIPELINE+=" interleave name=ali"
-      PIPELINE+=" adl.src_0 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_0"
-      PIPELINE+=" adl.src_1 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_1"
-      PIPELINE+=" adl.src_6 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_2"
-      PIPELINE+=" adl.src_7 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_3"
+      remix_branch 0 0 0x1   # embed 1 -> FL
+      remix_branch 1 1 0x2   # embed 2 -> FR
+      remix_branch 6 2 0x10  # embed 7 (SAP L) -> RL
+      remix_branch 7 3 0x20  # embed 8 (SAP R) -> RR
       PIPELINE+=" ali. ! audioconvert"
-      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS}"
+      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS},channel-mask=(bitmask)0x33"
       ;;
     first6)
       PIPELINE+=" ! audio/x-raw,rate=48000,channels=${DECKLINK_AUDIO_CHANNELS}"
       PIPELINE+=" ! deinterleave name=adl"
       PIPELINE+=" interleave name=ali"
-      PIPELINE+=" adl.src_0 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_0"
-      PIPELINE+=" adl.src_1 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_1"
-      PIPELINE+=" adl.src_2 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_2"
-      PIPELINE+=" adl.src_3 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_3"
-      PIPELINE+=" adl.src_4 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_4"
-      PIPELINE+=" adl.src_5 ! queue max-size-buffers=8 leaky=downstream ! ali.sink_5"
+      remix_branch 0 0 0x1   # embed 1 -> FL
+      remix_branch 1 1 0x2   # embed 2 -> FR
+      remix_branch 2 2 0x4   # embed 3 -> FC
+      remix_branch 3 3 0x8   # embed 4 -> LFE
+      remix_branch 4 4 0x10  # embed 5 -> RL (Ls)
+      remix_branch 5 5 0x20  # embed 6 -> RR (Rs)
       PIPELINE+=" ali. ! audioconvert"
-      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS}"
+      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS},channel-mask=(bitmask)0x3f"
       ;;
-    none8|none)
+    none8)
+      PIPELINE+=" ! audio/x-raw,rate=48000,channels=${DECKLINK_AUDIO_CHANNELS}"
+      PIPELINE+=" ! deinterleave name=adl"
+      PIPELINE+=" interleave name=ali"
+      remix_branch 0 0 0x1    # embed 1 -> FL
+      remix_branch 1 1 0x2    # embed 2 -> FR
+      remix_branch 2 2 0x4    # embed 3 -> FC
+      remix_branch 3 3 0x8    # embed 4 -> LFE
+      remix_branch 4 4 0x10   # embed 5 -> RL (Ls)
+      remix_branch 5 5 0x20   # embed 6 -> RR (Rs)
+      remix_branch 6 6 0x400  # embed 7 (SAP L) -> SL
+      remix_branch 7 7 0x800  # embed 8 (SAP R) -> SR
+      PIPELINE+=" ali. ! audioconvert"
+      PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS},channel-mask=(bitmask)0xc3f"
+      ;;
+    none)
+      # Stereo: 2ch defaults to FL/FR; opusenc emits family 0 (plain Opus).
       PIPELINE+=" ! audioconvert"
       PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS}"
       ;;
