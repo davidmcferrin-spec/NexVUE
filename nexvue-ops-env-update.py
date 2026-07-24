@@ -280,8 +280,13 @@ def sanitize_value(key: str, value: str) -> str:
             )
         return value
     if key in ("LO_WIDTH", "LO_HEIGHT"):
+        # Settings UI uses "auto" for follow-preset (stored as blank).
+        if value == "" or value.lower() == "auto":
+            return ""
         return _require_even_positive(key, value)
     if key == "LO_BITRATE_KBPS":
+        if value == "" or value.lower() == "auto":
+            return ""
         return _require_int(key, value, lo=100, hi=20000)
     if key == "LO_FPS":
         # Normalize legacy bare rates that used to become framerate=(int)N and
@@ -297,7 +302,7 @@ def sanitize_value(key: str, value: str) -> str:
         value = aliases.get(value, value)
         if value not in LO_FPS_ALLOWED:
             raise ValueError(
-                "LO_FPS must be blank (default 29.97), 60000/1001, 30000/1001, or 15000/1001"
+                "LO_FPS must be 60000/1001, 30000/1001, or 15000/1001"
             )
         return value
     if key == "LO_TARGET_USAGE":
@@ -322,9 +327,16 @@ def sanitize_value(key: str, value: str) -> str:
         if key == "DECKLINK_RETRY_S" and f <= 0:
             raise ValueError(f"{key}: must be > 0")
         return value
-    # Everything else (EXTRA_ENC_ARGS, …): alphanumeric-ish; reject shell
-    # metacharacters. Also reject '!' — EXTRA_ENC_ARGS is interpolated
-    # UNQUOTED into the gst-launch pipeline in nexvue-encode.sh.
+    if key == "EXTRA_ENC_ARGS":
+        # Settings UI uses "none" for no extra properties (stored as blank).
+        if value == "" or value.lower() == "none":
+            return ""
+        if re.search(r"[`$;&|<>!\\\"']", value):
+            raise ValueError(f"{key}: disallowed characters in value")
+        return value
+    # Everything else: alphanumeric-ish; reject shell metacharacters.
+    # Also reject '!' — EXTRA_ENC_ARGS is interpolated UNQUOTED into the
+    # gst-launch pipeline in nexvue-encode.sh (handled above).
     if re.search(r"[`$;&|<>!\\\"']", value):
         raise ValueError(f"{key}: disallowed characters in value")
     return value

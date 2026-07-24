@@ -621,7 +621,7 @@
       // VU takes the MediaStream for meters + optional solo; element stays muted.
       if (vu && ev.streams[0]) {
         const layout = audioLayoutByPath[currentBase] || "51_sap";
-        const embeds = audioEmbedsByPath[currentBase];
+        const embeds = audioEmbedsByPath[currentBase] || [1, 2, 3, 4, 5, 6, 7, 8];
         vu.setStream(ev.streams[0], layout, embeds);
         // Default audible unless user previously chose Mute (this browser).
         vu.setListen(!NexVueVu.getMutedPref());
@@ -706,7 +706,13 @@
     }
   }
 
-  function connectChannel(base, btn) {
+  function applyVuForBase(base) {
+    if (!vu || !base) return;
+    vu.setLayout(audioLayoutByPath[base] || "51_sap");
+    vu.setEmbeds(audioEmbedsByPath[base] || [1, 2, 3, 4, 5, 6, 7, 8]);
+  }
+
+  async function connectChannel(base, btn) {
     teardown();
     currentBase = base;
     btn.classList.add("active");
@@ -715,10 +721,10 @@
     if (qualityMode === "auto") rendition = "hi";
     if (rendition === "lo" && !loAvailable) rendition = "hi";
     captionClient.setChannel(base);
-    if (vu) {
-      vu.setLayout(audioLayoutByPath[base] || "51_sap");
-      if (audioEmbedsByPath[base]) vu.setEmbeds(audioEmbedsByPath[base]);
-    }
+    // Re-fetch Settings layout/embeds so a save in another tab is honored
+    // without requiring a full Player reload.
+    await loadChannelMeta();
+    applyVuForBase(base);
     NexVueVu.resume();
     openSession(pathFor(rendition));
   }
@@ -1031,11 +1037,11 @@
     }
   }
 
-  async function loadChannelButtons() {
+  async function loadChannelMeta() {
     let aliases = {};
     let devices = {};
     try {
-      const res = await fetch("nexvue-ops.php?action=aliases");
+      const res = await fetch("nexvue-ops.php?action=aliases", { cache: "no-store" });
       const data = await res.json();
       if (data && data.ok && data.aliases) aliases = data.aliases;
       if (data && data.ok && data.devices) devices = data.devices;
@@ -1051,17 +1057,23 @@
       if (data && data.ok && data.audio_embeds) {
         audioEmbedsByPath = data.audio_embeds;
       }
-      if (currentBase && vu) {
-        vu.setLayout(audioLayoutByPath[currentBase] || "51_sap");
-        vu.setEmbeds(audioEmbedsByPath[currentBase] || "1-8");
-      }
+      if (currentBase) applyVuForBase(currentBase);
     } catch { /* ops API optional for bring-up */ }
+    return { aliases, devices };
+  }
+
+  async function loadChannelButtons() {
+    const { aliases, devices } = await loadChannelMeta();
     renderChannelButtons(aliases, devices);
   }
 
   renderChannelButtons({}, {});
   pollInputStatus();
   loadChannelButtons().then(() => pollInputStatus());
+  // Settings may change in another tab — refresh role/embeds when we regain focus.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") loadChannelMeta();
+  });
   $("disconnect").addEventListener("click", () => {
     teardown();
     setState("idle");

@@ -312,8 +312,9 @@ Then from a LAN machine:
   **Factory defaults…**). Audio-on and LO-on reveal their dependent fields.
   Encode always publishes all 8 embeds when audio is on. Hover a field label
   ~2s for an explainer. Path stays `chN`. Save asks before restarting encoders.
-  **Factory defaults…** blanks every editable key (alias cleared, LO off,
-  audio/player role to built-in defaults); `DEVICE_NUMBER` / `CHANNEL_PATH` /
+  **Factory defaults…** writes concrete built-in defaults for every setting
+  (alias cleared, LO off, audio on with 5.1+SAP role and all embeds, etc. —
+  no blank/unset values in the form); `DEVICE_NUMBER` / `CHANNEL_PATH` /
   `RTSP_URL` are identity and never touched. Takes effect on the encoder
   restart offered after.
   Every page has a **Light/Dark** toggle (`localStorage.nexvue-theme`,

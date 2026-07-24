@@ -102,6 +102,16 @@ class TestApplyPatch(unittest.TestCase):
         out = mod.apply_patch(SAMPLE, {"AUDIO_EMBEDS": "1,2,7,8"})
         self.assertIn("AUDIO_EMBEDS=1,2,7,8", out)
 
+    def test_auto_none_sentinels(self):
+        self.assertEqual(mod.sanitize_value("LO_WIDTH", "auto"), "")
+        self.assertEqual(mod.sanitize_value("LO_HEIGHT", "AUTO"), "")
+        self.assertEqual(mod.sanitize_value("LO_BITRATE_KBPS", "auto"), "")
+        self.assertEqual(mod.sanitize_value("EXTRA_ENC_ARGS", "none"), "")
+        self.assertEqual(mod.sanitize_value("EXTRA_ENC_ARGS", "NONE"), "")
+        self.assertEqual(mod.sanitize_value("LO_WIDTH", "1280"), "1280")
+        self.assertEqual(mod.sanitize_value("LO_BITRATE_KBPS", "800"), "800")
+        self.assertEqual(mod.sanitize_value("EXTRA_ENC_ARGS", "cpb-size=2000"), "cpb-size=2000")
+
     def test_rejects_shell_metachar(self):
         with self.assertRaises(ValueError):
             mod.apply_patch(SAMPLE, {"EXTRA_ENC_ARGS": "x;rm"})

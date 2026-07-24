@@ -405,7 +405,7 @@
   <div class="modal-body" id="edit-body"></div>
   <div class="modal-footer">
     <span class="msg" id="edit-msg" aria-live="polite"></span>
-    <button type="button" class="danger" id="edit-defaults" title="Blank every editable setting so the encoder falls back to built-in defaults (alias cleared, LO off, 8ch Opus @ 384 kbps, all embeds offered). DEVICE_NUMBER / CHANNEL_PATH are kept.">Factory defaults…</button>
+    <button type="button" class="danger" id="edit-defaults" title="Write built-in defaults for every setting (alias cleared, LO off, 8ch Opus @ 384 kbps, all embeds, 5.1+SAP role). DEVICE_NUMBER / CHANNEL_PATH are kept.">Factory defaults…</button>
     <button type="button" id="edit-cancel">Cancel</button>
     <button type="button" class="primary" id="save-one">Save channel</button>
   </div>
@@ -553,21 +553,45 @@
 
   // UI surface only — unused / supervisor-era keys stay writable via hand-edited
   // .env and factory-default wipe, but are not shown in the editor.
+  // Concrete defaults match nexvue-encode.sh; the form never shows blank/unset.
+  const FIELD_DEFAULTS = {
+    CHANNEL_ALIAS: "",
+    BITRATE_KBPS: "5000",
+    GOP_FRAMES: "60",
+    DEINT_FIELDS: "all",
+    VIDEO_ENCODER: "vah264enc",
+    DECKLINK_BUFFER_FRAMES: "2",
+    ENABLE_AUDIO: "true",
+    AUDIO_LAYOUT: "51_sap",
+    AUDIO_EMBEDS: "1,2,3,4,5,6,7,8",
+    AUDIO_FRAME_MS: "10",
+    AUDIO_BITRATE_BPS: "384000",
+    LO_ENABLE: "false",
+    LO_PRESET: "720p",
+    LO_FPS: "30000/1001",
+    // auto/none are UI sentinels → stored blank (follow preset / no extras).
+    LO_BITRATE_KBPS: "auto",
+    LO_WIDTH: "auto",
+    LO_HEIGHT: "auto",
+    EXTRA_ENC_ARGS: "none",
+  };
+
   const FIELD_META = {
     CHANNEL_ALIAS: {
       label: "Display name",
       type: "text",
-      tip: "Friendly label in Player, Multiview, and Settings. Does not change the MediaMTX path (still ch0, ch1, …). Spaces are fine. Blank = UIs show the path only.",
+      tip: "Friendly label in Player, Multiview, and Settings. Does not change the MediaMTX path (still ch0, ch1, …). Spaces are fine. Empty = UIs show the path only.",
+      placeholder: "(none — show path)",
     },
     BITRATE_KBPS: {
       label: "HI bitrate (kbps)",
       type: "text",
-      tip: "Primary H.264 CBR bitrate in kbps. Typical: 4000–6000 for 1080p59.94; 2500–3000 for 29.97p. Blank = 5000.",
+      tip: "Primary H.264 CBR bitrate in kbps. Typical: 4000–6000 for 1080p59.94; 2500–3000 for 29.97p. Default 5000.",
     },
     GOP_FRAMES: {
       label: "Keyframe interval (frames)",
       type: "text",
-      tip: "GOP length. Affects viewer join / channel-switch time only — not steady-state latency. 30 = faster switching; 60 is the usual trade-off. Blank = 60.",
+      tip: "GOP length. Affects viewer join / channel-switch time only — not steady-state latency. 30 = faster switching; 60 is the usual trade-off. Default 60.",
     },
     DEINT_FIELDS: {
       label: "Interlace output",
@@ -577,7 +601,7 @@
         all: "All fields → 1080p59.94",
         top: "Top field → 1080p29.97",
       },
-      tip: "From a 1080i59.94 source: all = full-motion 59.94p (program / director). top = 29.97p at about half encode cost (multiview / prompter). Blank = all.",
+      tip: "From a 1080i59.94 source: all = full-motion 59.94p (program / director). top = 29.97p at about half encode cost (multiview / prompter). Default: all fields.",
     },
     VIDEO_ENCODER: {
       label: "Video encoder",
@@ -587,20 +611,20 @@
         vah264enc: "Intel Quick Sync (vah264enc)",
         x264enc: "CPU fallback (x264enc)",
       },
-      tip: "vah264enc = production (VA-API / Quick Sync). x264enc = bring-up / debug only — much higher CPU. Blank = vah264enc.",
+      tip: "vah264enc = production (VA-API / Quick Sync). x264enc = bring-up / debug only — much higher CPU. Default: vah264enc.",
     },
     DECKLINK_BUFFER_FRAMES: {
       label: "DeckLink buffer (frames)",
       type: "select",
       options: ["1", "2", "3", "4"],
-      tip: "Capture queue depth. Keep small for latency — 2 is recommended. Blank = 2.",
+      tip: "Capture queue depth. Keep small for latency — 2 is recommended. Default 2.",
     },
     ENABLE_AUDIO: {
       label: "Publish audio",
       type: "select",
       options: ["true", "false"],
       optionLabels: { true: "On (Opus 8ch)", false: "Off (video only)" },
-      tip: "Include Opus in the stream. Off removes the browser A/V-sync buffer (~40–60 ms lower latency) — useful for prompter / pure-video walls. Blank = on.",
+      tip: "Include Opus in the stream. Off removes the browser A/V-sync buffer (~40–60 ms lower latency) — useful for prompter / pure-video walls. Default: On.",
     },
     AUDIO_LAYOUT: {
       label: "Player audio role",
@@ -612,13 +636,13 @@
         stereo_sap: "Stereo + SAP (1–2 + 7–8)",
         "51_sap": "5.1 + SAP (1–6 + 7–8)",
       },
-      tip: "Player / Multiview role only — does not change encode. Encode always publishes discrete 8ch Opus. Use Detect audio… to suggest a role from live embeds. Blank = 5.1 + SAP.",
+      tip: "Player / Multiview role only — does not change encode. Encode always publishes discrete 8ch Opus. Use Detect audio… to suggest a role from live embeds. Default: 5.1 + SAP.",
       depends: { ENABLE_AUDIO: true },
     },
     AUDIO_EMBEDS: {
       label: "Show embeds in VU / listen",
       type: "embeds",
-      tip: "Which SDI embeds (1–8) appear in Player / Multiview VU and listen controls. Encode always publishes all 8 — unchecking only hides them in the browser. Blank = all eight.",
+      tip: "Which SDI embeds (1–8) appear in Player / Multiview VU and listen controls. Encode always publishes all 8 — unchecking only hides them in the browser. Default: all eight.",
       depends: { ENABLE_AUDIO: true },
       span: 2,
     },
@@ -626,13 +650,13 @@
       label: "Opus frame size (ms)",
       type: "select",
       options: ["2", "5", "10", "20", "40", "60"],
-      tip: "Opus packet duration. 10 ms is the low-latency default. Blank = 10.",
+      tip: "Opus packet duration. 10 ms is the low-latency default.",
       depends: { ENABLE_AUDIO: true },
     },
     AUDIO_BITRATE_BPS: {
       label: "Opus bitrate (bps)",
       type: "text",
-      tip: "Bits per second for the 8ch Opus track. Default 384000 (384 kbps). Max 512000 (WebRTC packet-size cliff). Blank = 384000.",
+      tip: "Bits per second for the 8ch Opus track. Default 384000 (384 kbps). Max 512000 (WebRTC packet-size cliff).",
       depends: { ENABLE_AUDIO: true },
     },
     LO_ENABLE: {
@@ -640,13 +664,13 @@
       type: "select",
       options: ["true", "false"],
       optionLabels: { true: "On (request pool slot)", false: "Off" },
-      tip: "Second lower-bitrate encode as <path>lo for player auto-switch under loss. Station pool MAX_LO_RENDITIONS (default 6): Settings rejects a 7th enable. Blank = off.",
+      tip: "Second lower-bitrate encode as <path>lo for player auto-switch under loss. Station pool MAX_LO_RENDITIONS (default 6): Settings rejects a 7th enable. Default: Off.",
     },
     LO_PRESET: {
       label: "LO resolution",
       type: "select",
       options: ["720p", "540p", "480p", "360p", "240p", "180p"],
-      tip: "LO height ladder with safe default bitrates. Prefer this over custom width/height under Advanced. Blank = 720p when LO is on.",
+      tip: "LO height ladder with safe default bitrates. Prefer this over custom width/height under Advanced. Default: 720p.",
       depends: { LO_ENABLE: true },
     },
     LO_FPS: {
@@ -654,35 +678,39 @@
       type: "select",
       options: ["30000/1001", "60000/1001", "15000/1001"],
       optionLabels: {
-        "30000/1001": "29.97 (default)",
+        "30000/1001": "29.97",
         "60000/1001": "59.94 (match HI)",
         "15000/1001": "14.99 (lowest bandwidth)",
       },
-      tip: "LO output framerate (GStreamer fraction). Free-form values like 29.97 break the pipeline. Blank = 29.97.",
+      tip: "LO output framerate (GStreamer fraction). Free-form values like 29.97 break the pipeline. Default: 29.97.",
       depends: { LO_ENABLE: true },
     },
     LO_BITRATE_KBPS: {
-      label: "LO bitrate override (kbps)",
+      label: "LO bitrate (kbps)",
       type: "text",
-      tip: "Explicit LO CBR bitrate; overrides the preset default. Blank = use the preset bitrate for the selected resolution.",
+      tip: "LO CBR bitrate. Use auto to follow the selected LO resolution preset bitrate; or enter an explicit kbps override.",
+      placeholder: "auto",
       depends: { LO_ENABLE: true },
     },
     LO_WIDTH: {
       label: "LO width (px)",
       type: "text",
-      tip: "Advanced: explicit LO width (even pixels). Leave blank to use LO resolution preset.",
+      tip: "Advanced: explicit LO width (even pixels), or auto to follow LO resolution preset.",
+      placeholder: "auto",
       depends: { LO_ENABLE: true },
     },
     LO_HEIGHT: {
       label: "LO height (px)",
       type: "text",
-      tip: "Advanced: explicit LO height (even pixels). Leave blank to use LO resolution preset.",
+      tip: "Advanced: explicit LO height (even pixels), or auto to follow LO resolution preset.",
+      placeholder: "auto",
       depends: { LO_ENABLE: true },
     },
     EXTRA_ENC_ARGS: {
       label: "Extra encoder args",
       type: "text",
-      tip: "Extra GStreamer encoder properties appended to the encode element (e.g. cpb-size=…). Leave blank unless you need a specific property.",
+      tip: "Extra GStreamer encoder properties appended to the encode element (e.g. cpb-size=…). Use none unless you need a specific property.",
+      placeholder: "none",
     },
   };
 
@@ -721,7 +749,7 @@
     {
       id: "advanced",
       title: "Advanced",
-      blurb: "Leave blank unless you need a custom LO raster or a specific encoder property.",
+      blurb: "Use auto / none unless you need a custom LO raster or a specific encoder property.",
       keys: ["LO_WIDTH", "LO_HEIGHT", "EXTRA_ENC_ARGS"],
       advanced: true,
     },
@@ -735,6 +763,65 @@
       }
     }
     return out;
+  }
+
+  /** Coerce stored blank → concrete UI value (never show unset). */
+  function resolveFieldValue(key, raw) {
+    const v = raw == null ? "" : String(raw).trim();
+    if (key === "CHANNEL_ALIAS") return v;
+    if (key === "LO_WIDTH" || key === "LO_HEIGHT" || key === "LO_BITRATE_KBPS") {
+      return v === "" ? "auto" : v;
+    }
+    if (key === "EXTRA_ENC_ARGS") {
+      return v === "" ? "none" : v;
+    }
+    if (key === "AUDIO_EMBEDS") {
+      return parseEmbedsCsv(v).join(",");
+    }
+    if (v === "" && Object.prototype.hasOwnProperty.call(FIELD_DEFAULTS, key)) {
+      return FIELD_DEFAULTS[key];
+    }
+    return v;
+  }
+
+  /** Form value → value written to .env (auto/none → blank). */
+  function serializeFieldValue(key, value) {
+    const v = value == null ? "" : String(value).trim();
+    if (key === "LO_WIDTH" || key === "LO_HEIGHT" || key === "LO_BITRATE_KBPS") {
+      if (v === "" || v.toLowerCase() === "auto") return "";
+      return v;
+    }
+    if (key === "EXTRA_ENC_ARGS") {
+      if (v === "" || v.toLowerCase() === "none") return "";
+      return v;
+    }
+    if (key === "AUDIO_EMBEDS") {
+      return parseEmbedsCsv(v).join(",");
+    }
+    return v;
+  }
+
+  function resolveKeysForForm(keys) {
+    const out = {};
+    for (const key of uiKeyList()) {
+      out[key] = resolveFieldValue(key, keys[key]);
+    }
+    // Keep identity keys for the strip.
+    for (const rk of ["DEVICE_NUMBER", "CHANNEL_PATH", "RTSP_URL"]) {
+      out[rk] = keys[rk] || "";
+    }
+    return out;
+  }
+
+  function factoryDefaultsPatch() {
+    const patch = {};
+    // Wipe legacy keys no longer shown so hand-edits do not linger.
+    for (const key of editableKeys) {
+      patch[key] = Object.prototype.hasOwnProperty.call(FIELD_DEFAULTS, key)
+        ? serializeFieldValue(key, FIELD_DEFAULTS[key])
+        : "";
+    }
+    return patch;
   }
 
   async function api(action, body) {
@@ -828,17 +915,15 @@
     return out.length ? out.sort((a, b) => a - b) : [1, 2, 3, 4, 5, 6, 7, 8];
   }
 
-  function makeEmbedsControl(value, { blankUnset = false } = {}) {
+  function makeEmbedsControl(value) {
     const wrap = document.createElement("div");
     wrap.className = "embeds-picker";
     const hidden = document.createElement("input");
     hidden.type = "hidden";
     hidden.dataset.key = "AUDIO_EMBEDS";
-    const raw = value == null ? "" : String(value).trim();
-    // blankUnset + empty → keep value blank (server default = all 8) but show all checked.
-    const isBlankDefault = blankUnset && raw === "";
-    hidden.value = isBlankDefault ? "" : parseEmbedsCsv(raw).join(",");
-    const enabled = new Set(parseEmbedsCsv(isBlankDefault ? "1-8" : hidden.value));
+    const list = parseEmbedsCsv(value);
+    hidden.value = list.join(",");
+    const enabled = new Set(list);
     const hint = document.createElement("p");
     hint.className = "embeds-hint";
     hint.textContent = "Encode always publishes embeds 1–8. Uncheck to hide from Player / Multiview only.";
@@ -850,14 +935,15 @@
         if (cb.checked) on.push(parseInt(cb.dataset.embed, 10));
       });
       on.sort((a, b) => a - b);
-      // Empty selection → blank (all eight / default), matching sanitize.
-      hidden.value = on.length === 0 || on.length === 8 ? "" : on.join(",");
-      // Keep UI honest: clearing all re-checks all as "default all".
+      // Clearing all → restore all eight (concrete default, never blank).
       if (on.length === 0) {
         wrap.querySelectorAll('input[type="checkbox"][data-embed]').forEach(cb => {
           cb.checked = true;
         });
+        hidden.value = "1,2,3,4,5,6,7,8";
+        return;
       }
+      hidden.value = on.join(",");
     };
     for (let i = 1; i <= 8; i++) {
       const lab = document.createElement("label");
@@ -873,29 +959,23 @@
     return wrap;
   }
 
-  function makeControl(key, value, { blankUnset = false } = {}) {
+  function makeControl(key, value) {
     const meta = FIELD_META[key] || { label: key, type: "text" };
+    const resolved = resolveFieldValue(key, value);
     let control;
     if (meta.type === "embeds") {
-      return makeEmbedsControl(value, { blankUnset });
+      return makeEmbedsControl(resolved);
     }
     if (meta.type === "select") {
       control = document.createElement("select");
       control.dataset.key = key;
-      if (blankUnset) {
-        const blank = document.createElement("option");
-        blank.value = "";
-        blank.textContent = "(unset / default)";
-        control.appendChild(blank);
-      }
       const labels = meta.optionLabels || {};
-      const cur = value == null ? "" : String(value);
       let matched = false;
       for (const opt of meta.options) {
         const o = document.createElement("option");
         o.value = opt;
         o.textContent = labels[opt] || opt;
-        if (cur === opt) {
+        if (resolved === opt) {
           o.selected = true;
           matched = true;
         }
@@ -903,19 +983,24 @@
       }
       // Legacy value not in the curated list — keep it visible so Save does not
       // silently change it; server will reject on next intentional change.
-      if (cur && !matched) {
+      if (resolved && !matched) {
         const o = document.createElement("option");
-        o.value = cur;
-        o.textContent = `${cur} (unsupported — pick a listed value)`;
+        o.value = resolved;
+        o.textContent = `${resolved} (unsupported — pick a listed value)`;
         o.selected = true;
         control.appendChild(o);
+      }
+      // If somehow empty after resolve, force first option / default.
+      if (!resolved && control.options.length) {
+        const fallback = FIELD_DEFAULTS[key] || meta.options[0];
+        control.value = fallback;
       }
     } else {
       control = document.createElement("input");
       control.type = "text";
       control.dataset.key = key;
-      control.value = value == null ? "" : String(value);
-      control.placeholder = meta.label || key;
+      control.value = resolved;
+      control.placeholder = meta.placeholder || meta.label || key;
     }
     return control;
   }
@@ -1083,7 +1168,7 @@
       list;
   }
 
-  function appendSectionFields(grid, sectionKeys, values, { blankUnset, bulk }) {
+  function appendSectionFields(grid, sectionKeys, values, { bulk }) {
     for (const key of sectionKeys) {
       const meta = FIELD_META[key] || { label: key, type: "text" };
       if (bulk) {
@@ -1108,7 +1193,7 @@
         }
         labelRow.appendChild(cb);
         labelRow.appendChild(lab);
-        const control = makeControl(key, "", { blankUnset: false });
+        const control = makeControl(key, FIELD_DEFAULTS[key] ?? "");
         const markEnabled = () => {
           if (!cb.checked) {
             cb.checked = true;
@@ -1142,14 +1227,15 @@
         wireFieldTip(title);
       }
       field.appendChild(title);
-      field.appendChild(makeControl(key, values[key] || "", { blankUnset }));
+      field.appendChild(makeControl(key, values[key]));
       grid.appendChild(field);
     }
   }
 
   function buildEditSections(keys, keyList) {
+    const formKeys = resolveKeysForForm(keys);
     const frag = document.createDocumentFragment();
-    frag.appendChild(buildIdentityStrip(keys));
+    frag.appendChild(buildIdentityStrip(formKeys));
     for (const section of groupedKeys(keyList)) {
       const wrap = section.advanced
         ? document.createElement("details")
@@ -1172,7 +1258,7 @@
       }
       const grid = document.createElement("div");
       grid.className = "form-grid";
-      appendSectionFields(grid, section.keys, keys, { blankUnset: true, bulk: false });
+      appendSectionFields(grid, section.keys, formKeys, { bulk: false });
       wrap.appendChild(grid);
       if (section.probe) wrap.appendChild(buildAudioProbePanel());
       frag.appendChild(wrap);
@@ -1204,7 +1290,7 @@
       }
       const grid = document.createElement("div");
       grid.className = "form-grid";
-      appendSectionFields(grid, section.keys, {}, { blankUnset: false, bulk: true });
+      appendSectionFields(grid, section.keys, FIELD_DEFAULTS, { bulk: true });
       wrap.appendChild(grid);
       frag.appendChild(wrap);
     }
@@ -1265,7 +1351,7 @@
       const embHidden = editBody.querySelector('input[data-key="AUDIO_EMBEDS"]');
       if (embHidden) {
         const list = parseEmbedsCsv(embedsCsv || "1-8");
-        embHidden.value = list.length === 8 ? "" : list.join(",");
+        embHidden.value = list.join(",");
         const wrap = embHidden.closest(".embeds-picker");
         if (wrap) {
           const on = new Set(list);
@@ -1421,22 +1507,17 @@
 
   document.getElementById("edit-defaults").addEventListener("click", async () => {
     if (selectedId == null) return;
-    // Factory default = blank every editable key: the encoder falls back to
-    // its built-in defaults (blank semantics are the documented contract).
-    // DEVICE_NUMBER / CHANNEL_PATH / RTSP_URL are identity and never touched.
+    // Write concrete built-in defaults (not blank/unset). Identity keys untouched.
     if (!confirm(
       `Reset channel ${selectedId} to factory defaults?\n\n` +
-      "Clears display name, HI video to 5000 kbps / full-rate deinterlace, " +
-      "audio on (8ch Opus @ 384 kbps, all embeds, 5.1+SAP player role), " +
-      "LO off, and advanced knobs blank.\n" +
+      "Display name cleared; HI video 5000 kbps / 59.94p deinterlace; " +
+      "audio On (8ch Opus @ 384 kbps, all embeds, 5.1+SAP player role); " +
+      "LO Off; LO size/bitrate auto; extra encoder args none.\n" +
       "Device number and path are kept. Takes effect on encoder restart."
     )) {
       return;
     }
-    // Blank every server-editable key (including legacy keys no longer shown)
-    // so hand-edited leftovers do not stick around after a factory reset.
-    const patch = {};
-    for (const key of editableKeys) patch[key] = "";
+    const patch = factoryDefaultsPatch();
     try {
       const data = await api("channel_put", { id: selectedId, patch });
       stateEl.textContent = `channel ${selectedId} reset to factory defaults`;
@@ -1457,7 +1538,7 @@
     editBody.querySelectorAll("[data-key]").forEach(el => {
       const key = el.dataset.key;
       if (!allowed.has(key)) return;
-      patch[key] = el.value;
+      patch[key] = serializeFieldValue(key, el.value);
     });
     try {
       const data = await api("channel_put", { id: selectedId, patch });
@@ -1482,7 +1563,7 @@
       if (!cb || !cb.checked) return;
       const key = cb.dataset.key;
       const control = row.querySelector("[data-key='" + key + "']");
-      if (control) patch[key] = control.value;
+      if (control) patch[key] = serializeFieldValue(key, control.value);
     });
     if (!Object.keys(patch).length) {
       setMsg(bulkMsg, "Check at least one parameter to apply.", "err");

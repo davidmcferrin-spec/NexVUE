@@ -555,7 +555,7 @@
       volume: NexVueVu.getVolumePref(),
     });
 
-    select.addEventListener("change", () => {
+    select.addEventListener("change", async () => {
       const val = select.value;
       hidePaneKicked(pane);
       if (!val) {
@@ -570,9 +570,10 @@
       }
       pane.base = val;
       pane.captionClient.setChannel(val);
+      await loadChannelMeta();
       if (pane.vu) {
         pane.vu.setLayout(audioLayoutByPath[val] || "51_sap");
-        pane.vu.setEmbeds(audioEmbedsByPath[val] || "1-8");
+        pane.vu.setEmbeds(audioEmbedsByPath[val] || [1, 2, 3, 4, 5, 6, 7, 8]);
       }
       empty.classList.add("hidden");
       acquireWakeLock();
@@ -743,7 +744,7 @@
       pane.video.muted = true;
       if (pane.vu && ev.streams[0]) {
         const layout = audioLayoutByPath[pane.base] || "51_sap";
-        const embeds = audioEmbedsByPath[pane.base];
+        const embeds = audioEmbedsByPath[pane.base] || [1, 2, 3, 4, 5, 6, 7, 8];
         pane.vu.setStream(ev.streams[0], layout, embeds);
         pane.vu.setVolume(NexVueVu.getVolumePref(), { persist: false });
         pane.vu.setListen(!userMuted && audioPane === pane.index, { persist: false });
@@ -1194,9 +1195,9 @@
   })();
 
   // Friendly labels + AUDIO_LAYOUT / AUDIO_EMBEDS from ops API when available.
-  (async () => {
+  async function loadChannelMeta() {
     try {
-      const res = await fetch("nexvue-ops.php?action=aliases");
+      const res = await fetch("nexvue-ops.php?action=aliases", { cache: "no-store" });
       const data = await res.json();
       if (!data || !data.ok || !data.aliases) return;
       if (data.audio_layouts) {
@@ -1216,11 +1217,15 @@
         });
         if (p.base && p.vu) {
           p.vu.setLayout(audioLayoutByPath[p.base] || "51_sap");
-          p.vu.setEmbeds(audioEmbedsByPath[p.base] || "1-8");
+          p.vu.setEmbeds(audioEmbedsByPath[p.base] || [1, 2, 3, 4, 5, 6, 7, 8]);
         }
       });
     } catch { /* optional */ }
-  })();
+  }
+  loadChannelMeta();
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") loadChannelMeta();
+  });
 
   function sharePageUrl() {
     const path = location.pathname || "/multiview.html";

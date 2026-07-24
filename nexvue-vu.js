@@ -3,9 +3,10 @@
  *
  * Transport is always 8ch discrete Opus (SDI embeds 1–8 → indices 0–7):
  *   L R C LFE Ls Rs SAPL SAPR
- * AUDIO_LAYOUT is a role preset for Main/SAP/5.1 routing only.
+ * AUDIO_LAYOUT is a role preset for Main/SAP/5.1 routing only
+ * (stereo hides 5.1 playout; no-SAP hides SAP).
  * AUDIO_EMBEDS (Settings checkboxes) gates which meters/listen channels
- * the UI offers — encode still publishes all eight.
+ * the UI shows — encode still publishes all eight.
  *
  * Per-browser prefs (localStorage) never change encode or other viewers:
  *   nexvue-vu-on          1 | 0               (show/hide meter overlay)
@@ -272,6 +273,8 @@
   border-color: var(--acc, #56c4f5); font-weight: 600;
 }
 .nexvue-vu-toolbar button:disabled { opacity: .35; cursor: not-allowed; }
+.nexvue-vu-toolbar button[hidden],
+.nexvue-vu-ch[hidden] { display: none !important; }
 .nexvue-vu-meter-row {
   flex: 1; min-height: 0; display: flex; flex-direction: row;
   align-items: stretch; gap: 3px; justify-content: flex-end;
@@ -487,24 +490,27 @@
       const play = effectivePlayout();
       const sapEnabled = layout.hasSap && layout.sap &&
         layout.sap.every((i) => embedsOn.has(i));
+      // Role buttons: hide what Settings layout does not offer (not merely disable).
+      btnMain.hidden = false;
       btnMain.classList.toggle("active", prog === "main");
+      btnSap.hidden = !layout.hasSap;
       btnSap.classList.toggle("active", prog === "sap");
       btnSap.disabled = !sapEnabled;
-      btnStereo.classList.toggle("active", play === "stereo");
-      btnSurround.classList.toggle("active", play === "surround");
-      btnSurround.disabled = !layout.has51;
+      btnStereo.hidden = !layout.has51;
+      btnSurround.hidden = !layout.has51;
+      btnStereo.classList.toggle("active", layout.has51 && play === "stereo");
+      btnSurround.classList.toggle("active", layout.has51 && play === "surround");
       btnStereo.disabled = !layout.has51;
-      if (!layout.has51) {
-        btnStereo.classList.remove("active");
-        btnSurround.classList.remove("active");
-      }
+      btnSurround.disabled = !layout.has51;
       btnScale.classList.toggle("active", scaleOn);
       allBtn.classList.toggle("active", solo < 0);
       chBtns.forEach((btn, i) => {
         const embOn = embedsOn.has(i);
         const isSolo = solo === i;
+        // Settings AUDIO_EMBEDS: only show offered embeds in the meter strip.
+        btn.hidden = !embOn;
         btn.classList.toggle("solo", isSolo);
-        btn.classList.toggle("dimmed", !embOn || (solo >= 0 && !isSolo));
+        btn.classList.toggle("dimmed", solo >= 0 && !isSolo);
         btn.disabled = !embOn;
         btn.setAttribute("aria-pressed", isSolo ? "true" : "false");
         btn.title = embOn
@@ -836,11 +842,15 @@
     return {
       root,
       setStream(stream, layoutOrChannels, embeds) {
+        let layoutChanged = false;
         if (layoutOrChannels !== undefined && layoutOrChannels !== null) {
-          layout = layoutInfo(layoutOrChannels);
+          const next = layoutInfo(layoutOrChannels);
+          layoutChanged = next.id !== layout.id;
+          layout = next;
         }
         if (embeds !== undefined) {
           embedsOn = new Set(normalizeEmbeds(embeds));
+          if (solo >= 0 && !embedsOn.has(solo)) solo = setSoloPref(-1);
         }
         channelCount = 8;
         if (!stream) {
@@ -849,7 +859,13 @@
           updateRootVisibility();
           return;
         }
+        // Same MediaStream can arrive again after Settings change — rebuild
+        // when the role changed; embeds-only updates just re-paint/route.
         if (stream.id === connectedStreamId && analysers.length) {
+          if (layoutChanged) {
+            buildGraph(stream);
+            return;
+          }
           hasAudio = true;
           applyRouting();
           updateRootVisibility();
@@ -861,7 +877,6 @@
         embedsOn = new Set(normalizeEmbeds(raw));
         if (solo >= 0 && !embedsOn.has(solo)) solo = setSoloPref(-1);
         applyRouting();
-        if (!analysers.length) rebuildMeterDom();
       },
       setListen(on, listenOpts) {
         listen = !!on;
