@@ -945,7 +945,12 @@ Services/Settings).
   libwebrtc convention MediaMTX forwards to WHEP). SAP pairs ride as
   rear (stereo_sap) or side (51_sap) positions — transport labels only.
   Legacy `AUDIO_CHANNELS` 2/4/6/8 still maps.
-  Chromium is the best path for multi-channel WebRTC Opus; stereo is universal.
+  Player / Multiview munge the WHEP SDP offer to add `multiopus` payload
+  types (`nexvue-vu.js`, same algorithm as MediaMTX's own `reader.js`) —
+  Chrome does not advertise multichannel Opus in `createOffer()`, and
+  without that munge MediaMTX returns WHEP **400** (`codecs not supported
+  by client`) even when the path is online with Opus+H264. Use
+  Chrome/Edge for >2ch layouts; Firefox/Safari stay stereo-only.
 - **Ops pages (Services / Settings)** call `nexvue-ops.php`, which uses
   allowlisted sudo wrappers under `/usr/local/bin/nexvue-ops-*` (sudoers drop-in
   `/etc/sudoers.d/nexvue-ops`). Channel saves write env files only; restart is an

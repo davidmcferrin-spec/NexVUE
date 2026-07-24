@@ -871,6 +871,172 @@
     };
   }
 
+  // ---- WHEP multiopus offer munge ---------------------------------------------
+  // Chrome/Edge will not advertise multichannel Opus in createOffer(), but they
+  // will ACCEPT a munged offer that adds multiopus payload types — MediaMTX's
+  // own reader.js does exactly this. Without it, a path publishing >2ch Opus
+  // makes MediaMTX CreateAnswer fail with ErrSenderWithNoCodecs → WHEP 400
+  // "codecs not supported by client", even though the RTSP path is online.
+  // Fmtp strings MUST match mediamtx internal/protocols/webrtc/from_stream.go
+  // multichannelOpusSDP (pion matches MimeType + Channels + fmtp).
+  const MULTICHANNEL_OPUS_FMTP = {
+    3: "channel_mapping=0,2,1;num_streams=2;coupled_streams=1",
+    4: "channel_mapping=0,1,2,3;num_streams=2;coupled_streams=2",
+    5: "channel_mapping=0,4,1,2,3;num_streams=3;coupled_streams=2",
+    6: "channel_mapping=0,4,1,2,3,5;num_streams=4;coupled_streams=2",
+    7: "channel_mapping=0,4,1,2,3,5,6;num_streams=4;coupled_streams=4",
+    8: "channel_mapping=0,6,1,4,5,2,3,7;num_streams=5;coupled_streams=4",
+  };
+
+  function reservePayloadType(used) {
+    // Valid dynamic PTs: 30–63 and 96–127 (Chrome payload_type.h).
+    for (let i = 30; i <= 127; i++) {
+      if ((i <= 63 || i >= 96) && !used.has(String(i))) {
+        used.add(String(i));
+        return String(i);
+      }
+    }
+    throw new Error("unable to find a free RTP payload type");
+  }
+
+  function collectPayloadTypes(sdp) {
+    const used = new Set();
+    for (const section of sdp.split("m=").slice(1)) {
+      const header = section.split("\r\n")[0] || "";
+      for (const tok of header.split(" ").slice(3)) {
+        if (tok) used.add(tok);
+      }
+    }
+    return used;
+  }
+
+  /**
+   * Inject multiopus 3–8 recv codecs into a WHEP offer SDP (MediaMTX reader.js
+   * algorithm). Leaves stereo opus in place. No-op if multiopus already present.
+   */
+  function mungeWhepOfferSdp(sdp) {
+    if (typeof sdp !== "string" || !sdp) return sdp;
+    if (/multiopus\/48000\//i.test(sdp)) return sdp;
+    const sections = sdp.split("m=");
+    if (sections.length < 2) return sdp;
+    const used = collectPayloadTypes(sdp);
+    let edited = false;
+    for (let i = 1; i < sections.length; i++) {
+      if (!sections[i].startsWith("audio")) continue;
+      const lines = sections[i].split("\r\n");
+      // Insert before the trailing empty line that split leaves after \r\n.
+      let insertAt = lines.length;
+      while (insertAt > 0 && lines[insertAt - 1] === "") insertAt--;
+      for (let ch = 3; ch <= 8; ch++) {
+        const pt = reservePayloadType(used);
+        lines[0] += ` ${pt}`;
+        lines.splice(insertAt, 0, `a=rtpmap:${pt} multiopus/48000/${ch}`);
+        insertAt++;
+        lines.splice(insertAt, 0, `a=fmtp:${pt} ${MULTICHANNEL_OPUS_FMTP[ch]}`);
+        insertAt++;
+        lines.splice(insertAt, 0, `a=rtcp-fb:${pt} transport-cc`);
+        insertAt++;
+      }
+      sections[i] = lines.join("\r\n");
+      edited = true;
+      break;
+    }
+    return edited ? sections.join("m=") : sdp;
+  }
+
+  /**
+   * Probe whether this browser accepts a non-advertised multiopus offer
+   * (Chrome/Edge yes; Firefox/Safari no). Cached for the page lifetime.
+   */
+  let multiopusProbe = null;
+  function supportsMultiopus() {
+    if (multiopusProbe) return multiopusProbe;
+    multiopusProbe = new Promise((resolve) => {
+      if (typeof RTCPeerConnection === "undefined") {
+        resolve(false);
+        return;
+      }
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      let pt = "";
+      pc.addTransceiver("audio", { direction: "recvonly" });
+      pc.createOffer()
+        .then((offer) => {
+          if (/multiopus\/48000\//i.test(offer.sdp || "")) {
+            throw new Error("already present");
+          }
+          const used = collectPayloadTypes(offer.sdp);
+          pt = reservePayloadType(used);
+          const sections = offer.sdp.split("m=");
+          for (let i = 1; i < sections.length; i++) {
+            if (!sections[i].startsWith("audio")) continue;
+            const lines = sections[i].split("\r\n");
+            let insertAt = lines.length;
+            while (insertAt > 0 && lines[insertAt - 1] === "") insertAt--;
+            lines[0] += ` ${pt}`;
+            lines.splice(insertAt, 0, `a=rtpmap:${pt} multiopus/48000/6`);
+            lines.splice(
+              insertAt + 1,
+              0,
+              `a=fmtp:${pt} ${MULTICHANNEL_OPUS_FMTP[6]}`
+            );
+            sections[i] = lines.join("\r\n");
+            break;
+          }
+          offer.sdp = sections.join("m=");
+          return pc.setLocalDescription(offer);
+        })
+        .then(() =>
+          pc.setRemoteDescription({
+            type: "answer",
+            sdp:
+              "v=0\r\n" +
+              "o=- 0 0 IN IP4 0.0.0.0\r\n" +
+              "s=-\r\n" +
+              "t=0 0\r\n" +
+              "a=fingerprint:sha-256 " +
+              "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:" +
+              "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00\r\n" +
+              `m=audio 9 UDP/TLS/RTP/SAVPF ${pt}\r\n` +
+              "c=IN IP4 0.0.0.0\r\n" +
+              "a=ice-ufrag:nexvue\r\n" +
+              "a=ice-pwd:nexvuemultiopusprobe000000\r\n" +
+              "a=fingerprint:sha-256 " +
+              "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:" +
+              "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00\r\n" +
+              "a=setup:active\r\n" +
+              "a=sendonly\r\n" +
+              "a=rtcp-mux\r\n" +
+              `a=rtpmap:${pt} multiopus/48000/6\r\n` +
+              `a=fmtp:${pt} ${MULTICHANNEL_OPUS_FMTP[6]}\r\n`,
+          })
+        )
+        .then(() => resolve(true))
+        .catch(() => resolve(false))
+        .finally(() => {
+          try {
+            pc.close();
+          } catch (e) {
+            /* ignore */
+          }
+        });
+    });
+    return multiopusProbe;
+  }
+
+  /**
+   * Prepare a WHEP offer: add multiopus when the browser supports it.
+   * Returns { sdp, multiopus }.
+   */
+  async function prepareWhepOffer(offer) {
+    const base = offer && offer.sdp ? offer.sdp : "";
+    const ok = await supportsMultiopus();
+    if (!ok) {
+      return { sdp: base, multiopus: false };
+    }
+    const munged = mungeWhepOfferSdp(base);
+    return { sdp: munged, multiopus: munged !== base };
+  }
+
   global.NexVueVu = {
     MAX_CH,
     LAYOUTS,
@@ -878,8 +1044,12 @@
     PREF_SCALE,
     PREF_MUTED,
     PREF_VOLUME,
+    MULTICHANNEL_OPUS_FMTP,
     normalizeLayout,
     layoutInfo,
+    mungeWhepOfferSdp,
+    supportsMultiopus,
+    prepareWhepOffer,
     getVisiblePref,
     setVisiblePref,
     getScalePref,

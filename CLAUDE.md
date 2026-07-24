@@ -211,6 +211,10 @@ specifically because this box can't get additional ports opened.
  channel-masks on the deinterleave/interleave remix, yielding family 1 /
  MULTIOPUS; SAP pairs ride as RL/RR (stereo_sap) or SL/SR (51_sap) —
  transport labels only, players address channels by index.
+ Player / Multiview WHEP offers are SDP-munged (`nexvue-vu.js`
+ `mungeWhepOfferSdp`) to add multiopus 3–8 with MediaMTX's fmtp table —
+ Chrome will not advertise multiopus itself, and MediaMTX then answers
+ 400 "codecs not supported by client" for any >2ch path.
  Settings **Detect audio…**
   (`audio_probe` → `decklink-audio-probe`) measures embed energy and
   suggests a layout for operator confirm. Per-browser

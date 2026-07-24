@@ -648,7 +648,9 @@
 
     try {
       const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+      // Chrome won't advertise multiopus; MediaMTX rejects >2ch Opus without it.
+      const prepared = await NexVueVu.prepareWhepOffer(offer);
+      await pc.setLocalDescription({ type: "offer", sdp: prepared.sdp });
       await new Promise(resolve => {
         if (pc.iceGatheringState === "complete") return resolve();
         const check = () => {
@@ -666,9 +668,25 @@
         headers: { "Content-Type": "application/sdp" },
         body: pc.localDescription.sdp
       });
-      if (!res.ok) throw new Error(`WHEP endpoint returned ${res.status}`);
+      const body = await res.text();
+      if (!res.ok) {
+        let detail = "";
+        try {
+          const j = JSON.parse(body);
+          if (j && j.error) detail = j.error;
+        } catch (e) {
+          detail = (body || "").slice(0, 160);
+        }
+        throw new Error(
+          `WHEP endpoint returned ${res.status}` +
+          (detail ? ` — ${detail}` : "") +
+          (!prepared.multiopus
+            ? " (this browser may not support multichannel Opus; use Chrome/Edge)"
+            : "")
+        );
+      }
       currentSessionId = parseWhepSessionId(res);
-      await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
+      await pc.setRemoteDescription({ type: "answer", sdp: body });
 
       statsTimer = setInterval(pollRtcStats, 1000);
       apiTimer = setInterval(pollApiStats, 2000);
