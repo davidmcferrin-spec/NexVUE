@@ -342,6 +342,10 @@
   let rendition = "lo";  // "hi" | "lo" — LO default for multi-session load
   let audioPane = -1;    // index of listening pane, or -1
   let audioLayoutByPath = {};
+  // Declared before VU/volume helpers — applyVolumeAll() runs at init and
+  // must not hit the const TDZ (would abort the whole script before panes
+  // are created, leaving the dual/quad grid empty).
+  const panes = [];
   let captionsOn = NexVueCaptions.getPref();
   const ccBtn = $("cc");
   const vuBtn = $("vu");
@@ -488,7 +492,6 @@
   }
 
   // ---- Per-pane session -------------------------------------------------------
-  const panes = [];
 
   function createPane(index) {
     const el = document.createElement("div");
