@@ -734,12 +734,11 @@
     if (qualityMode === "auto") rendition = "hi";
     if (rendition === "lo" && !loAvailable) rendition = "hi";
     captionClient.setChannel(base);
-    // Re-fetch Settings layout/embeds so a save in another tab is honored
-    // without requiring a full Player reload.
-    await loadChannelMeta();
-    applyVuForBase(base);
     NexVueVu.resume();
+    // Start WHEP immediately — do not wait on aliases/meta (was blocking tune-in).
     openSession(pathFor(rendition));
+    // Refresh layout/embeds in the background; ontrack also applies current map.
+    loadChannelMeta().then(() => applyVuForBase(base)).catch(() => {});
   }
 
   function switchRendition(newRend, reason) {

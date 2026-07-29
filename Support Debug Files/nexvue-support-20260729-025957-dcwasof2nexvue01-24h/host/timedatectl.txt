@@ -1,0 +1,7 @@
+               Local time: Tue 2026-07-28 22:59:57 EDT
+           Universal time: Wed 2026-07-29 02:59:57 UTC
+                 RTC time: Wed 2026-07-29 02:59:57
+                Time zone: America/New_York (EDT, -0400)
+System clock synchronized: yes
+              NTP service: active
+          RTC in local TZ: no

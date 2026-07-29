@@ -1,0 +1,22 @@
+  UNIT                              LOAD   ACTIVE   SUB     DESCRIPTION
+  mediamtx.service                  loaded active   running MediaMTX media server (NexVUE)
+  nexvue-decklink-configure.service loaded active   exited  NexVUE DeckLink half-duplex connector mapping (capture)
+  nexvue-encode@0.service           loaded active   running NexVUE encoder channel 0 (DeckLink -> MediaMTX)
+  nexvue-encode@1.service           loaded active   running NexVUE encoder channel 1 (DeckLink -> MediaMTX)
+  nexvue-encode@2.service           loaded active   running NexVUE encoder channel 2 (DeckLink -> MediaMTX)
+  nexvue-encode@3.service           loaded active   running NexVUE encoder channel 3 (DeckLink -> MediaMTX)
+  nexvue-encode@4.service           loaded active   running NexVUE encoder channel 4 (DeckLink -> MediaMTX)
+  nexvue-encode@5.service           loaded active   running NexVUE encoder channel 5 (DeckLink -> MediaMTX)
+  nexvue-encode@6.service           loaded active   running NexVUE encoder channel 6 (DeckLink -> MediaMTX)
+  nexvue-encode@7.service           loaded active   running NexVUE encoder channel 7 (DeckLink -> MediaMTX)
+  nexvue-encode@8.service           loaded inactive dead    NexVUE encoder channel 8 (DeckLink -> MediaMTX)
+  nexvue-encode@9.service           loaded inactive dead    NexVUE encoder channel 9 (DeckLink -> MediaMTX)
+  nexvue-metrics.service            loaded active   running NexVUE usage metrics collector (no network listener)
+  nexvue-status.service             loaded active   running NexVUE input status daemon
+
+Legend: LOAD   → Reflects whether the unit definition was properly loaded.
+        ACTIVE → The high-level unit activation state, i.e. generalization of SUB.
+        SUB    → The low-level unit activation state, values depend on unit type.
+
+14 loaded units listed.
+To show all installed unit files use 'systemctl list-unit-files'.

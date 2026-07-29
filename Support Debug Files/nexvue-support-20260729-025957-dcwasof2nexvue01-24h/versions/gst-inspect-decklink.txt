@@ -1,0 +1,2747 @@
+Factory Details:
+  Rank                     none (0)
+  Long-name                Decklink Video Source
+  Klass                    Video/Source/Hardware
+  Description              Decklink Source
+  Author                   David Schleef <ds@entropywave.com>, Sebastian Dröge <sebastian@centricular.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/decklink/decklinkvideosrc.html
+
+Plugin Details:
+  Name                     decklink
+  Description              Blackmagic Decklink plugin
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdecklink.so
+  Version                  1.24.2
+  License                  LGPL
+  Source module            gst-plugins-bad
+  Documentation            https://gstreamer.freedesktop.org/documentation/decklink/
+  Source release date      2024-04-09
+  Binary package           GStreamer Bad Plug-ins
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-bad1.0
+
+GObject
+ +----GInitiallyUnowned
+       +----GstObject
+             +----GstElement
+                   +----GstBaseSrc
+                         +----GstPushSrc
+                               +----GstDecklinkVideoSrc
+
+Pad Templates:
+  SRC template: 'src'
+    Availability: Always
+    Capabilities:
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: bottom-field-first
+                 format: UYVY
+            colorimetry: bt601
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: bottom-field-first
+                 format: v210
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: bottom-field-first
+                 format: ARGB
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: bottom-field-first
+                 format: BGRA
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: bottom-field-first
+                 format: r210
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: interleaved
+              framerate: 24000/1001
+            field-order: bottom-field-first
+                 format: UYVY
+            colorimetry: bt601
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: interleaved
+              framerate: 24000/1001
+            field-order: bottom-field-first
+                 format: v210
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: interleaved
+              framerate: 24000/1001
+            field-order: bottom-field-first
+                 format: ARGB
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: interleaved
+              framerate: 24000/1001
+            field-order: bottom-field-first
+                 format: BGRA
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: interleaved
+              framerate: 24000/1001
+            field-order: bottom-field-first
+                 format: r210
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 12/11
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: UYVY
+            colorimetry: bt601
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 12/11
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: v210
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 12/11
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: ARGB
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 12/11
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: BGRA
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 12/11
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: r210
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: UYVY
+            colorimetry: bt601
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: v210
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 10/11
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: r210
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 12/11
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: UYVY
+            colorimetry: bt601
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 12/11
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: v210
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 12/11
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: ARGB
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 12/11
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: BGRA
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 12/11
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: r210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: v210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: r210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: v210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: ARGB
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: BGRA
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: r210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: v210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: ARGB
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: BGRA
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: r210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: v210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: r210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: v210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: ARGB
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: BGRA
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: r210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: v210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: ARGB
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: BGRA
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: r210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: top-field-first
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: top-field-first
+                 format: v210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: top-field-first
+                 format: ARGB
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: top-field-first
+                 format: BGRA
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: top-field-first
+                 format: r210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 30/1
+            field-order: top-field-first
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 30/1
+            field-order: top-field-first
+                 format: v210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 30/1
+            field-order: top-field-first
+                 format: ARGB
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 30/1
+            field-order: top-field-first
+                 format: BGRA
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: interleaved
+              framerate: 30/1
+            field-order: top-field-first
+                 format: r210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: v210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: ARGB
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: BGRA
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: r210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: v210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: r210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: v210
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: ARGB
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: BGRA
+      video/x-raw
+                  width: 1920
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: r210
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: v210
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: ARGB
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: BGRA
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: r210
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: v210
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: r210
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: v210
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: ARGB
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: BGRA
+      video/x-raw
+                  width: 1280
+                 height: 720
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: r210
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: v210
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: r210
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: v210
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: ARGB
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: BGRA
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: r210
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: v210
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: ARGB
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: BGRA
+      video/x-raw
+                  width: 2048
+                 height: 1556
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: r210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: v210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: r210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: v210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: ARGB
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: BGRA
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: r210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: v210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: ARGB
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: BGRA
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: r210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: v210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: r210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: v210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: ARGB
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: BGRA
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: r210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: v210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: ARGB
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: BGRA
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: r210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: v210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: r210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: UYVY
+            colorimetry: bt709
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: v210
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: ARGB
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: BGRA
+      video/x-raw
+                  width: 2048
+                 height: 1080
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: r210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: v210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: r210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: v210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: ARGB
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: BGRA
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: r210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: v210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: ARGB
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: BGRA
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: r210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: v210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: r210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: v210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: ARGB
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: BGRA
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: r210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: v210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: ARGB
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: BGRA
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: r210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: v210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: r210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: v210
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: ARGB
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: BGRA
+      video/x-raw
+                  width: 3840
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: r210
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: bottom-field-first
+                 format: UYVY
+            colorimetry: bt601
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: bottom-field-first
+                 format: v210
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: bottom-field-first
+                 format: ARGB
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: bottom-field-first
+                 format: BGRA
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: interleaved
+              framerate: 30000/1001
+            field-order: bottom-field-first
+                 format: r210
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: interleaved
+              framerate: 24000/1001
+            field-order: bottom-field-first
+                 format: UYVY
+            colorimetry: bt601
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: interleaved
+              framerate: 24000/1001
+            field-order: bottom-field-first
+                 format: v210
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: interleaved
+              framerate: 24000/1001
+            field-order: bottom-field-first
+                 format: ARGB
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: interleaved
+              framerate: 24000/1001
+            field-order: bottom-field-first
+                 format: BGRA
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: interleaved
+              framerate: 24000/1001
+            field-order: bottom-field-first
+                 format: r210
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 16/11
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: UYVY
+            colorimetry: bt601
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 16/11
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: v210
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 16/11
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: ARGB
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 16/11
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: BGRA
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 16/11
+         interlace-mode: interleaved
+              framerate: 25/1
+            field-order: top-field-first
+                 format: r210
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: UYVY
+            colorimetry: bt601
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: v210
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 720
+                 height: 486
+        pixel-aspect-ratio: 40/33
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: r210
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 16/11
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: UYVY
+            colorimetry: bt601
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 16/11
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: v210
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 16/11
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: ARGB
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 16/11
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: BGRA
+      video/x-raw
+                  width: 720
+                 height: 576
+        pixel-aspect-ratio: 16/11
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: r210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: v210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: r210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: v210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: ARGB
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: BGRA
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: r210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: v210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: ARGB
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: BGRA
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: r210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: v210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: r210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: v210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: ARGB
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: BGRA
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: r210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: v210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: ARGB
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: BGRA
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: r210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: v210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: r210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: v210
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: ARGB
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: BGRA
+      video/x-raw
+                  width: 4096
+                 height: 2160
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: r210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: v210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: r210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: v210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: ARGB
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: BGRA
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: r210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: v210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: ARGB
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: BGRA
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: r210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: v210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: r210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: v210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: ARGB
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: BGRA
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: r210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: v210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: ARGB
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: BGRA
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: r210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: v210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: r210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: v210
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: ARGB
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: BGRA
+      video/x-raw
+                  width: 7680
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: r210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: v210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24000/1001
+                 format: r210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: v210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: ARGB
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: BGRA
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 24/1
+                 format: r210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: v210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: ARGB
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: BGRA
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 25/1
+                 format: r210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: v210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30000/1001
+                 format: r210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: v210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: ARGB
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: BGRA
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 30/1
+                 format: r210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: v210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: ARGB
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: BGRA
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 50/1
+                 format: r210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: v210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: ARGB
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: BGRA
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60000/1001
+                 format: r210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: UYVY
+            colorimetry: bt2020
+            chroma-site: mpeg2
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: v210
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: ARGB
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: BGRA
+      video/x-raw
+                  width: 8192
+                 height: 4320
+        pixel-aspect-ratio: 1/1
+         interlace-mode: progressive
+              framerate: 60/1
+                 format: r210
+
+Element has no clocking capabilities.
+Element has no URI handling capabilities.
+
+Pads:
+  SRC: 'src'
+    Pad Template: 'src'
+
+Element Properties:
+
+  automatic-eos       : Automatically EOS when the segment is done
+                        flags: readable, writable
+                        Boolean. Default: true
+  
+  blocksize           : Size in bytes to read per buffer (-1 = default)
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 4294967295 Default: 4096 
+  
+  buffer-size         : Size of internal buffer in number of video frames
+                        flags: readable, writable
+                        Unsigned Integer. Range: 1 - 2147483647 Default: 5 
+  
+  connection          : Video input connection to use
+                        flags: readable, writable
+                        Enum "GstDecklinkConnection" Default: 0, "auto"
+                           (0): auto             - Auto
+                           (1): sdi              - SDI
+                           (2): hdmi             - HDMI
+                           (3): optical-sdi      - Optical SDI
+                           (4): component        - Component
+                           (5): composite        - Composite
+                           (6): svideo           - S-Video
+  
+  device-number       : Output device instance to use
+                        flags: readable, writable
+                        Integer. Range: 0 - 2147483647 Default: 0 
+  
+  do-timestamp        : Apply current stream time to buffers
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  drop-no-signal-frames: Drop frames that are marked as having no input signal
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  hw-serial-number    : The serial number (hardware ID) of the Decklink card
+                        flags: readable
+                        String. Default: null
+  
+  mode                : Video Mode to use for playback
+                        flags: readable, writable
+                        Enum "GstDecklinkModes" Default: 0, "auto"
+                           (0): auto             - Automatic detection
+                           (1): ntsc             - NTSC SD 60i
+                           (2): ntsc2398         - NTSC SD 60i (24 fps)
+                           (3): pal              - PAL SD 50i
+                           (4): ntsc-p           - NTSC SD 60p
+                           (5): pal-p            - PAL SD 50p
+                           (6): 1080p2398        - HD1080 23.98p
+                           (7): 1080p24          - HD1080 24p
+                           (8): 1080p25          - HD1080 25p
+                           (9): 1080p2997        - HD1080 29.97p
+                           (10): 1080p30          - HD1080 30p
+                           (11): 1080i50          - HD1080 50i
+                           (12): 1080i5994        - HD1080 59.94i
+                           (13): 1080i60          - HD1080 60i
+                           (14): 1080p50          - HD1080 50p
+                           (15): 1080p5994        - HD1080 59.94p
+                           (16): 1080p60          - HD1080 60p
+                           (17): 720p50           - HD720 50p
+                           (18): 720p5994         - HD720 59.94p
+                           (19): 720p60           - HD720 60p
+                           (20): 1556p2398        - 2k 23.98p
+                           (21): 1556p24          - 2k 24p
+                           (22): 1556p25          - 2k 25p
+                           (23): 2kdcip2398       - 2k dci 23.98p
+                           (24): 2kdcip24         - 2k dci 24p
+                           (25): 2kdcip25         - 2k dci 25p
+                           (26): 2kdcip2997       - 2k dci 29.97p
+                           (27): 2kdcip30         - 2k dci 30p
+                           (28): 2kdcip50         - 2k dci 50p
+                           (29): 2kdcip5994       - 2k dci 59.94p
+                           (30): 2kdcip60         - 2k dci 60p
+                           (31): 2160p2398        - 4k 23.98p
+                           (32): 2160p24          - 4k 24p
+                           (33): 2160p25          - 4k 25p
+                           (34): 2160p2997        - 4k 29.97p
+                           (35): 2160p30          - 4k 30p
+                           (36): 2160p50          - 4k 50p
+                           (37): 2160p5994        - 4k 59.94p
+                           (38): 2160p60          - 4k 60p
+                           (39): ntsc-widescreen  - NTSC SD 60i Widescreen
+                           (40): ntsc2398-widescreen - NTSC SD 60i Widescreen (24 fps)
+                           (41): pal-widescreen   - PAL SD 50i Widescreen
+                           (42): ntsc-p-widescreen - NTSC SD 60p Widescreen
+                           (43): pal-p-widescreen - PAL SD 50p Widescreen
+                           (44): 4kdcip2398       - 4k dci 23.98p
+                           (45): 4kdcip24         - 4k dci 24p
+                           (46): 4kdcip25         - 4k dci 25p
+                           (47): 4kdcip2997       - 4k dci 29.97p
+                           (48): 4kdcip30         - 4k dci 30p
+                           (49): 4kdcip50         - 4k dci 50p
+                           (50): 4kdcip5994       - 4k dci 59.94p
+                           (51): 4kdcip60         - 4k dci 60p
+                           (52): 8kp2398          - 8k 23.98p
+                           (53): 8kp24            - 8k 24p
+                           (54): 8kp25            - 8k 25p
+                           (55): 8kp2997          - 8k 29.97p
+                           (56): 8kp30            - 8k 30p
+                           (57): 8kp50            - 8k 50p
+                           (58): 8kp5994          - 8k 59.94p
+                           (59): 8kp60            - 8k 60p
+                           (60): 8kdcip2398       - 8k dci 23.98p
+                           (61): 8kdcip24         - 8k dci 24p
+                           (62): 8kdcip25         - 8k dci 25p
+                           (63): 8kdcip2997       - 8k dci 29.97p
+                           (64): 8kdcip30         - 8k dci 30p
+                           (65): 8kdcip50         - 8k dci 50p
+                           (66): 8kdcip5994       - 8k dci 59.94p
+                           (67): 8kdcip60         - 8k dci 60p
+  
+  name                : The name of the object
+                        flags: readable, writable
+                        String. Default: "decklinkvideosrc0"
+  
+  num-buffers         : Number of buffers to output before sending EOS (-1 = unlimited)
+                        flags: readable, writable
+                        Integer. Range: -1 - 2147483647 Default: -1 
+  
+  output-afd-bar      : Extract and output AFD/Bar as GstMeta (if present)
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  output-cc           : Extract and output CC as GstMeta (if present)
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  output-stream-time  : Output stream time directly instead of translating to pipeline clock
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  parent              : The parent of the object
+                        flags: readable, writable
+                        Object of type "GstObject"
+  
+  persistent-id       : Output device instance to use. Higher priority than "device-number".
+                        flags: readable, writable
+                        Integer64. Range: -1 - 9223372036854775807 Default: -1 
+  
+  profile             : Certain DeckLink devices such as the DeckLink 8K Pro, the DeckLink Quad 2 and the DeckLink Duo 2 support multiple profiles to configure the capture and playback behavior of its sub-devices.For the DeckLink Duo 2 and DeckLink Quad 2, a profile is shared between any 2 sub-devices that utilize the same connectors. For the DeckLink 8K Pro, a profile is shared between all 4 sub-devices. Any sub-devices that share a profile are considered to be part of the same profile group.DeckLink Duo 2 support configuration of the duplex mode of individual sub-devices.
+                        flags: readable, writable
+                        Enum "GstDecklinkProfileId" Default: 0, "default"
+                           (0): default          - Default, don't change profile
+                           (1): one-sub-device-full - One sub-device, Full-Duplex
+                           (2): one-sub-device-half - One sub-device, Half-Duplex
+                           (3): two-sub-devices-full - Two sub-devices, Full-Duplex
+                           (4): two-sub-devices-half - Two sub-devices, Half-Duplex
+                           (5): four-sub-devices-half - Four sub-devices, Half-Duplex
+  
+  signal              : True if there is a valid input signal available
+                        flags: readable
+                        Boolean. Default: false
+  
+  skip-first-time     : Skip that much time of initial frames after starting
+                        flags: readable, writable
+                        Unsigned Integer64. Range: 0 - 18446744073709551615 Default: 0 
+  
+  timecode-format     : Timecode format type to use for input
+                        flags: readable, writable
+                        Enum "GstDecklinkTimecodeFormat" Default: 3, "rp188any"
+                           (0): rp188vitc1       - bmdTimecodeRP188VITC1
+                           (1): rp188vitc2       - bmdTimecodeRP188VITC2
+                           (2): rp188ltc         - bmdTimecodeRP188LTC
+                           (3): rp188any         - bmdTimecodeRP188Any
+                           (4): vitc             - bmdTimecodeVITC
+                           (5): vitcfield2       - bmdTimecodeVITCField2
+                           (6): serial           - bmdTimecodeSerial
+  
+  typefind            : Run typefind before negotiating (deprecated, non-functional)
+                        flags: readable, writable, deprecated
+                        Boolean. Default: false
+  
+  video-format        : Video format type to use for input (Only use auto for mode=auto)
+                        flags: readable, writable
+                        Enum "GstDecklinkVideoFormat" Default: 0, "auto"
+                           (0): auto             - Auto
+                           (1): 8bit-yuv         - bmdFormat8BitYUV
+                           (2): 10bit-yuv        - bmdFormat10BitYUV
+                           (3): 8bit-argb        - bmdFormat8BitARGB
+                           (4): 8bit-bgra        - bmdFormat8BitBGRA
+                           (5): 10bit-rgb        - bmdFormat10BitRGB

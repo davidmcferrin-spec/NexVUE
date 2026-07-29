@@ -1,0 +1,312 @@
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 systemd[1]: Starting mediamtx.service - MediaMTX media server (NexVUE)...
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 systemd[1]: Started mediamtx.service - MediaMTX media server (NexVUE).
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:31 WAR parameter 'authJWTInHTTPQuery' is deprecated and will be removed in a future release
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:31 WAR parameter 'apiAllowOrigin' is deprecated and has been replaced with 'apiAllowOrigins'
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:31 INF MediaMTX v1.19.2, linux, amd64
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:31 INF configuration loaded from /etc/nexvue/mediamtx.yml
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:31 INF [RTSP] started with listeners on 127.0.0.1:8554 (TCP/RTSP)
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:31 INF [WebRTC] started with listeners on :8889 (TCP/HTTPS), :8189 (UDP/ICE), :8189 (TCP/ICE)
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:31 WAR [MoQ] certificate auto.key not found, generating it from scratch
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:31 WAR [MoQ] failed to save TLS key to auto.key: open auto.key: read-only file system
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:31 WAR [MoQ] failed to save TLS cert to auto.crt: open auto.crt: read-only file system
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:31 INF [MoQ] started with listeners on :8892 (TCP/HTTP2), :8892 (UDP/HTTP3)
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:31 INF [API] started with listener on :9997 (TCP/HTTPS)
+2026-07-28T22:31:40-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:40 INF [RTSP] [conn 127.0.0.1:38128] opened
+2026-07-28T22:31:40-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:40 INF [RTSP] [session ba42e6e4] created by 127.0.0.1:38128
+2026-07-28T22:31:41-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:41 INF [RTSP] [conn 127.0.0.1:38136] opened
+2026-07-28T22:31:41-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:41 INF [RTSP] [conn 127.0.0.1:38138] opened
+2026-07-28T22:31:41-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:41 INF [RTSP] [session 68d4f9fd] created by 127.0.0.1:38138
+2026-07-28T22:31:41-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:41 INF [RTSP] [session 001f58e6] created by 127.0.0.1:38136
+2026-07-28T22:31:42-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:42 INF [RTSP] [conn 127.0.0.1:38160] opened
+2026-07-28T22:31:42-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:42 INF [RTSP] [conn 127.0.0.1:38152] opened
+2026-07-28T22:31:42-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:42 INF [path ch0] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:42-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:42 INF [RTSP] [session ba42e6e4] is publishing to path 'ch0'
+2026-07-28T22:31:42-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:42 INF [RTSP] [session 734d4974] created by 127.0.0.1:38152
+2026-07-28T22:31:42-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:42 INF [RTSP] [session d91d7379] created by 127.0.0.1:38160
+2026-07-28T22:31:43-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:43 INF [RTSP] [conn 127.0.0.1:38174] opened
+2026-07-28T22:31:43-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:43 INF [path ch1] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:43-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:43 INF [RTSP] [session 68d4f9fd] is publishing to path 'ch1'
+2026-07-28T22:31:43-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:43 INF [RTSP] [session a089c217] created by 127.0.0.1:38174
+2026-07-28T22:31:43-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:43 INF [path ch1lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:43-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:43 INF [RTSP] [session 001f58e6] is publishing to path 'ch1lo'
+2026-07-28T22:31:44-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:44 INF [RTSP] [conn 127.0.0.1:38188] opened
+2026-07-28T22:31:44-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:44 INF [RTSP] [conn 127.0.0.1:38192] opened
+2026-07-28T22:31:44-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:44 INF [path ch2] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:44-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:44 INF [RTSP] [session d91d7379] is publishing to path 'ch2'
+2026-07-28T22:31:44-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:44 INF [path ch2lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:44-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:44 INF [RTSP] [session 734d4974] is publishing to path 'ch2lo'
+2026-07-28T22:31:44-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:44 INF [RTSP] [session 056a01c2] created by 127.0.0.1:38188
+2026-07-28T22:31:44-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:44 INF [RTSP] [session d58fe1fc] created by 127.0.0.1:38192
+2026-07-28T22:31:45-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:45 INF [RTSP] [conn 127.0.0.1:38206] opened
+2026-07-28T22:31:45-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:45 INF [RTSP] [conn 127.0.0.1:38202] opened
+2026-07-28T22:31:45-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:45 INF [path ch3] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:45-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:45 INF [RTSP] [session a089c217] is publishing to path 'ch3'
+2026-07-28T22:31:45-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:45 INF [RTSP] [session 884275e4] created by 127.0.0.1:38206
+2026-07-28T22:31:45-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:45 INF [RTSP] [session e82160cc] created by 127.0.0.1:38202
+2026-07-28T22:31:46-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:46 INF [RTSP] [conn 127.0.0.1:50652] opened
+2026-07-28T22:31:46-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:46 INF [RTSP] [conn 127.0.0.1:50664] opened
+2026-07-28T22:31:46-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:46 INF [path ch4lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:46-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:46 INF [RTSP] [session 056a01c2] is publishing to path 'ch4lo'
+2026-07-28T22:31:46-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:46 INF [path ch4] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:46-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:46 INF [RTSP] [session d58fe1fc] is publishing to path 'ch4'
+2026-07-28T22:31:46-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:46 INF [RTSP] [session ffaf80cd] created by 127.0.0.1:50664
+2026-07-28T22:31:46-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:46 INF [RTSP] [session c285d877] created by 127.0.0.1:50652
+2026-07-28T22:31:47-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:47 INF [RTSP] [conn 127.0.0.1:50666] opened
+2026-07-28T22:31:47-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:47 INF [RTSP] [conn 127.0.0.1:50676] opened
+2026-07-28T22:31:47-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:47 INF [path ch5] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:47-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:47 INF [RTSP] [session 884275e4] is publishing to path 'ch5'
+2026-07-28T22:31:47-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:47 INF [path ch5lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:47-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:47 INF [RTSP] [session e82160cc] is publishing to path 'ch5lo'
+2026-07-28T22:31:47-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:47 INF [RTSP] [session 5b8aeff4] created by 127.0.0.1:50666
+2026-07-28T22:31:47-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:47 INF [RTSP] [session 5559ba80] created by 127.0.0.1:50676
+2026-07-28T22:31:48-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:48 INF [path ch6lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:48-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:48 INF [RTSP] [session c285d877] is publishing to path 'ch6lo'
+2026-07-28T22:31:48-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:48 INF [path ch6] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:48-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:48 INF [RTSP] [session ffaf80cd] is publishing to path 'ch6'
+2026-07-28T22:31:49-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:49 INF [path ch7lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:49-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:49 INF [RTSP] [session 5b8aeff4] is publishing to path 'ch7lo'
+2026-07-28T22:31:49-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:49 INF [path ch7] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:31:49-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:31:49 INF [RTSP] [session 5559ba80] is publishing to path 'ch7'
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:38128] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session ba42e6e4] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session d58fe1fc] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:38188] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:38192] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session 056a01c2] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:38202] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session e82160cc] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:38206] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session 884275e4] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:38174] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session 5559ba80] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:50676] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session a089c217] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:50652] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session c285d877] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:50664] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session ffaf80cd] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:50666] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session 5b8aeff4] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:38152] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:38160] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session d91d7379] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session 734d4974] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:38138] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session 68d4f9fd] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [conn 127.0.0.1:38136] closed: EOF
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] [session 001f58e6] destroyed: not in use
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 systemd[1]: Stopping mediamtx.service - MediaMTX media server (NexVUE)...
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF shutting down gracefully
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [API] closing
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [MoQ] closing
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [WebRTC] closing
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF [RTSP] closing
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 mediamtx[2368579]: 2026/07/28 22:34:39 INF waiting for running hooks
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 systemd[1]: mediamtx.service: Deactivated successfully.
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 systemd[1]: Stopped mediamtx.service - MediaMTX media server (NexVUE).
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 systemd[1]: mediamtx.service: Consumed 19.013s CPU time.
+-- Boot 7dc65741f33b4e2ba2f12ad984e68e0d --
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 systemd[1]: Starting mediamtx.service - MediaMTX media server (NexVUE)...
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 systemd[1]: Started mediamtx.service - MediaMTX media server (NexVUE).
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:00 WAR parameter 'authJWTInHTTPQuery' is deprecated and will be removed in a future release
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:00 WAR parameter 'apiAllowOrigin' is deprecated and has been replaced with 'apiAllowOrigins'
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:00 INF MediaMTX v1.19.2, linux, amd64
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:00 INF configuration loaded from /etc/nexvue/mediamtx.yml
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:00 INF [RTSP] started with listeners on 127.0.0.1:8554 (TCP/RTSP)
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:00 INF [WebRTC] started with listeners on :8889 (TCP/HTTPS), :8189 (UDP/ICE), :8189 (TCP/ICE)
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:00 WAR [MoQ] certificate auto.key not found, generating it from scratch
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:00 WAR [MoQ] failed to save TLS key to auto.key: open auto.key: read-only file system
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:00 WAR [MoQ] failed to save TLS cert to auto.crt: open auto.crt: read-only file system
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:00 INF [MoQ] started with listeners on :8892 (TCP/HTTP2), :8892 (UDP/HTTP3)
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:00 INF [API] started with listener on :9997 (TCP/HTTPS)
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38058] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38106] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38090] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38130] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38060] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38118] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38080] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38132] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38134] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38140] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38156] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38158] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38194] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [conn 127.0.0.1:38180] opened
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session ea27aa6b] created by 127.0.0.1:38132
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session e795b460] created by 127.0.0.1:38080
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session f3745b61] created by 127.0.0.1:38090
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session 46227013] created by 127.0.0.1:38194
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session 2520da65] created by 127.0.0.1:38134
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session 4902e6e8] created by 127.0.0.1:38058
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session 7e121d57] created by 127.0.0.1:38140
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session e5e5a824] created by 127.0.0.1:38060
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session bb0f2a65] created by 127.0.0.1:38180
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session 87f54202] created by 127.0.0.1:38130
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session fef43e88] created by 127.0.0.1:38158
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session 4abe0e5b] created by 127.0.0.1:38156
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session 03f5596a] created by 127.0.0.1:38118
+2026-07-28T22:35:01-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:01 INF [RTSP] [session 1651c48c] created by 127.0.0.1:38106
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch0] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch6lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch6] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session f3745b61] is publishing to path 'ch6'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session ea27aa6b] is publishing to path 'ch0'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session e795b460] is publishing to path 'ch6lo'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch5lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch4lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session 2520da65] is publishing to path 'ch4lo'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session 46227013] is publishing to path 'ch5lo'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch2] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session 4902e6e8] is publishing to path 'ch2'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch4] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session 7e121d57] is publishing to path 'ch4'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch2lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session e5e5a824] is publishing to path 'ch2lo'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch5] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session bb0f2a65] is publishing to path 'ch5'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch7] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch7lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session fef43e88] is publishing to path 'ch7lo'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session 4abe0e5b] is publishing to path 'ch7'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch3] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session 87f54202] is publishing to path 'ch3'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch1] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session 03f5596a] is publishing to path 'ch1'
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [path ch1lo] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:35:03-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:35:03 INF [RTSP] [session 1651c48c] is publishing to path 'ch1lo'
+2026-07-28T22:36:57-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:36:57 INF [RTSP] [conn 127.0.0.1:38132] closed: EOF
+2026-07-28T22:36:57-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:36:57 INF [RTSP] [session ea27aa6b] destroyed: not in use
+2026-07-28T22:36:58-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:36:58 INF [RTSP] [conn 127.0.0.1:55238] opened
+2026-07-28T22:36:58-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:36:58 INF [RTSP] [session 2ca7a952] created by 127.0.0.1:55238
+2026-07-28T22:37:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:00 INF [path ch0] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:37:00-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:00 INF [RTSP] [session 2ca7a952] is publishing to path 'ch0'
+2026-07-28T22:37:02-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:02 INF [RTSP] [conn 127.0.0.1:38118] closed: EOF
+2026-07-28T22:37:02-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:02 INF [RTSP] [conn 127.0.0.1:38106] closed: EOF
+2026-07-28T22:37:02-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:02 INF [RTSP] [session 03f5596a] destroyed: not in use
+2026-07-28T22:37:02-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:02 INF [RTSP] [session 1651c48c] destroyed: not in use
+2026-07-28T22:37:02-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:02 INF [RTSP] [conn 127.0.0.1:55242] opened
+2026-07-28T22:37:02-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:02 INF [RTSP] [session d1f1fc7b] created by 127.0.0.1:55242
+2026-07-28T22:37:04-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:04 INF [path ch1] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:37:04-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:04 INF [RTSP] [session d1f1fc7b] is publishing to path 'ch1'
+2026-07-28T22:37:06-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:06 INF [RTSP] [conn 127.0.0.1:38058] closed: EOF
+2026-07-28T22:37:06-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:06 INF [RTSP] [conn 127.0.0.1:38060] closed: EOF
+2026-07-28T22:37:06-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:06 INF [RTSP] [session 4902e6e8] destroyed: not in use
+2026-07-28T22:37:06-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:06 INF [RTSP] [session e5e5a824] destroyed: not in use
+2026-07-28T22:37:07-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:07 INF [RTSP] [conn 127.0.0.1:39718] opened
+2026-07-28T22:37:07-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:07 INF [RTSP] [session 51454292] created by 127.0.0.1:39718
+2026-07-28T22:37:09-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:09 INF [path ch2] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:37:09-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:09 INF [RTSP] [session 51454292] is publishing to path 'ch2'
+2026-07-28T22:37:11-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:11 INF [RTSP] [conn 127.0.0.1:38130] closed: EOF
+2026-07-28T22:37:11-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:11 INF [RTSP] [session 87f54202] destroyed: not in use
+2026-07-28T22:37:11-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:11 INF [RTSP] [conn 127.0.0.1:39728] opened
+2026-07-28T22:37:11-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:11 INF [RTSP] [session 25f505f5] created by 127.0.0.1:39728
+2026-07-28T22:37:13-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:13 INF [path ch3] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:37:13-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:13 INF [RTSP] [session 25f505f5] is publishing to path 'ch3'
+2026-07-28T22:37:16-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:16 INF [RTSP] [conn 127.0.0.1:38140] closed: EOF
+2026-07-28T22:37:16-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:16 INF [RTSP] [conn 127.0.0.1:38134] closed: EOF
+2026-07-28T22:37:16-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:16 INF [RTSP] [session 7e121d57] destroyed: not in use
+2026-07-28T22:37:16-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:16 INF [RTSP] [session 2520da65] destroyed: not in use
+2026-07-28T22:37:16-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:16 INF [RTSP] [conn 127.0.0.1:39740] opened
+2026-07-28T22:37:16-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:16 INF [RTSP] [session 415ed7e3] created by 127.0.0.1:39740
+2026-07-28T22:37:18-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:18 INF [path ch4] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:37:18-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:18 INF [RTSP] [session 415ed7e3] is publishing to path 'ch4'
+2026-07-28T22:37:20-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:20 INF [RTSP] [conn 127.0.0.1:38180] closed: EOF
+2026-07-28T22:37:20-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:20 INF [RTSP] [conn 127.0.0.1:38194] closed: EOF
+2026-07-28T22:37:20-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:20 INF [RTSP] [session bb0f2a65] destroyed: not in use
+2026-07-28T22:37:20-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:20 INF [RTSP] [session 46227013] destroyed: not in use
+2026-07-28T22:37:20-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:20 INF [RTSP] [conn 127.0.0.1:40504] opened
+2026-07-28T22:37:20-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:20 INF [RTSP] [session 3109a332] created by 127.0.0.1:40504
+2026-07-28T22:37:22-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:22 INF [path ch5] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:37:22-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:22 INF [RTSP] [session 3109a332] is publishing to path 'ch5'
+2026-07-28T22:37:24-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:24 INF [RTSP] [conn 127.0.0.1:38080] closed: EOF
+2026-07-28T22:37:24-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:24 INF [RTSP] [conn 127.0.0.1:38090] closed: EOF
+2026-07-28T22:37:24-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:24 INF [RTSP] [session e795b460] destroyed: not in use
+2026-07-28T22:37:24-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:24 INF [RTSP] [session f3745b61] destroyed: not in use
+2026-07-28T22:37:24-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:24 INF [RTSP] [conn 127.0.0.1:40516] opened
+2026-07-28T22:37:25-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:25 INF [RTSP] [session e7e07a82] created by 127.0.0.1:40516
+2026-07-28T22:37:27-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:27 INF [path ch6] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:37:27-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:27 INF [RTSP] [session e7e07a82] is publishing to path 'ch6'
+2026-07-28T22:37:28-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:28 INF [RTSP] [conn 127.0.0.1:38158] closed: EOF
+2026-07-28T22:37:28-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:28 INF [RTSP] [session fef43e88] destroyed: not in use
+2026-07-28T22:37:28-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:28 INF [RTSP] [conn 127.0.0.1:38156] closed: EOF
+2026-07-28T22:37:28-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:28 INF [RTSP] [session 4abe0e5b] destroyed: not in use
+2026-07-28T22:37:29-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:29 INF [RTSP] [conn 127.0.0.1:55058] opened
+2026-07-28T22:37:29-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:29 INF [RTSP] [session 1a7bbaa4] created by 127.0.0.1:55058
+2026-07-28T22:37:31-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:31 INF [path ch7] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:37:31-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:37:31 INF [RTSP] [session 1a7bbaa4] is publishing to path 'ch7'
+2026-07-28T22:38:54-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:38:54 INF [RTSP] [conn 127.0.0.1:55238] closed: EOF
+2026-07-28T22:38:54-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:38:54 INF [RTSP] [session 2ca7a952] destroyed: not in use
+2026-07-28T22:39:02-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:02 INF [RTSP] [conn 127.0.0.1:55242] closed: EOF
+2026-07-28T22:39:02-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:02 INF [RTSP] [session d1f1fc7b] destroyed: not in use
+2026-07-28T22:39:10-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:10 INF [RTSP] [conn 127.0.0.1:39718] closed: EOF
+2026-07-28T22:39:10-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:10 INF [RTSP] [session 51454292] destroyed: not in use
+2026-07-28T22:39:19-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:19 INF [RTSP] [conn 127.0.0.1:39728] closed: EOF
+2026-07-28T22:39:19-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:19 INF [RTSP] [session 25f505f5] destroyed: not in use
+2026-07-28T22:39:24-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:24 INF [RTSP] [conn 127.0.0.1:39740] closed: EOF
+2026-07-28T22:39:24-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:24 INF [RTSP] [session 415ed7e3] destroyed: not in use
+2026-07-28T22:39:31-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:31 INF [RTSP] [conn 127.0.0.1:40504] closed: EOF
+2026-07-28T22:39:31-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:31 INF [RTSP] [session 3109a332] destroyed: not in use
+2026-07-28T22:39:42-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:42 INF [RTSP] [conn 127.0.0.1:40516] closed: EOF
+2026-07-28T22:39:42-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:42 INF [RTSP] [session e7e07a82] destroyed: not in use
+2026-07-28T22:39:49-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:49 INF [RTSP] [conn 127.0.0.1:55058] closed: EOF
+2026-07-28T22:39:49-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:39:49 INF [RTSP] [session 1a7bbaa4] destroyed: not in use
+2026-07-28T22:40:27-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:40:27 INF [RTSP] [conn 127.0.0.1:38200] opened
+2026-07-28T22:40:27-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:40:27 INF [RTSP] [session e8830d33] created by 127.0.0.1:38200
+2026-07-28T22:40:29-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:40:29 INF [path ch1] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:40:29-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:40:29 INF [RTSP] [session e8830d33] is publishing to path 'ch1'
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 systemd[1]: Stopping mediamtx.service - MediaMTX media server (NexVUE)...
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:43:05 INF shutting down gracefully
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:43:05 INF [API] closing
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:43:05 INF [MoQ] closing
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:43:05 INF [WebRTC] closing
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:43:05 INF [RTSP] closing
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:43:05 INF [RTSP] [conn 127.0.0.1:38200] closed: terminated
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:43:05 INF [RTSP] [session e8830d33] destroyed: terminated
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[2085]: 2026/07/28 22:43:05 INF waiting for running hooks
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 systemd[1]: mediamtx.service: Deactivated successfully.
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 systemd[1]: Stopped mediamtx.service - MediaMTX media server (NexVUE).
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 systemd[1]: mediamtx.service: Consumed 23.853s CPU time.
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 systemd[1]: Starting mediamtx.service - MediaMTX media server (NexVUE)...
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 systemd[1]: Started mediamtx.service - MediaMTX media server (NexVUE).
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:05 WAR parameter 'authJWTInHTTPQuery' is deprecated and will be removed in a future release
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:05 WAR parameter 'apiAllowOrigin' is deprecated and has been replaced with 'apiAllowOrigins'
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:05 INF MediaMTX v1.19.2, linux, amd64
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:05 INF configuration loaded from /etc/nexvue/mediamtx.yml
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:05 INF [RTSP] started with listeners on 127.0.0.1:8554 (TCP/RTSP)
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:05 INF [WebRTC] started with listeners on :8889 (TCP/HTTPS), :8189 (UDP/ICE), :8189 (TCP/ICE)
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:05 WAR [MoQ] certificate auto.key not found, generating it from scratch
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:05 WAR [MoQ] failed to save TLS key to auto.key: open auto.key: read-only file system
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:05 WAR [MoQ] failed to save TLS cert to auto.crt: open auto.crt: read-only file system
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:05 INF [MoQ] started with listeners on :8892 (TCP/HTTP2), :8892 (UDP/HTTP3)
+2026-07-28T22:43:05-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:05 INF [API] started with listener on :9997 (TCP/HTTPS)
+2026-07-28T22:43:09-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:09 INF [RTSP] [conn 127.0.0.1:43744] opened
+2026-07-28T22:43:09-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:09 INF [RTSP] [session 37a5c4b5] created by 127.0.0.1:43744
+2026-07-28T22:43:11-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:11 INF [path ch1] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:43:11-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:43:11 INF [RTSP] [session 37a5c4b5] is publishing to path 'ch1'
+2026-07-28T22:51:42-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:42 INF [RTSP] [conn 127.0.0.1:50326] opened
+2026-07-28T22:51:44-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:44 INF [RTSP] [conn 127.0.0.1:50328] opened
+2026-07-28T22:51:44-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:44 INF [RTSP] [session 95966d2c] created by 127.0.0.1:50328
+2026-07-28T22:51:46-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:46 INF [path ch2] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:51:46-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:46 INF [RTSP] [session 95966d2c] is publishing to path 'ch2'
+2026-07-28T22:51:47-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:47 INF [RTSP] [conn 127.0.0.1:55398] opened
+2026-07-28T22:51:47-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:47 INF [RTSP] [session c15df5a8] created by 127.0.0.1:55398
+2026-07-28T22:51:49-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:49 INF [path ch3] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:51:49-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:49 INF [RTSP] [session c15df5a8] is publishing to path 'ch3'
+2026-07-28T22:51:50-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:50 INF [RTSP] [conn 127.0.0.1:55402] opened
+2026-07-28T22:51:50-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:50 INF [RTSP] [session 405f8158] created by 127.0.0.1:55402
+2026-07-28T22:51:52-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:52 INF [path ch4] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:51:52-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:52 INF [RTSP] [session 405f8158] is publishing to path 'ch4'
+2026-07-28T22:51:53-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:53 INF [RTSP] [conn 127.0.0.1:55412] opened
+2026-07-28T22:51:53-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:53 INF [RTSP] [session 7fe4ccdd] created by 127.0.0.1:55412
+2026-07-28T22:51:55-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:55 INF [path ch5] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:51:55-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:55 INF [RTSP] [session 7fe4ccdd] is publishing to path 'ch5'
+2026-07-28T22:51:55-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:55 INF [RTSP] [conn 127.0.0.1:55414] opened
+2026-07-28T22:51:55-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:55 INF [RTSP] [session 168bd81e] created by 127.0.0.1:55414
+2026-07-28T22:51:57-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:57 INF [path ch6] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:51:57-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:57 INF [RTSP] [session 168bd81e] is publishing to path 'ch6'
+2026-07-28T22:51:57-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:57 INF [RTSP] [conn 127.0.0.1:46966] opened
+2026-07-28T22:51:57-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:57 INF [RTSP] [session 141eca47] created by 127.0.0.1:46966
+2026-07-28T22:51:59-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:59 INF [path ch7] stream is available and online, 2 tracks (Opus, H264)
+2026-07-28T22:51:59-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:59 INF [RTSP] [session 141eca47] is publishing to path 'ch7'
+2026-07-28T22:52:42-04:00 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:52:42 INF [RTSP] [conn 127.0.0.1:50326] closed: read tcp 127.0.0.1:8554->127.0.0.1:50326: i/o timeout

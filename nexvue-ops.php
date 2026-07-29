@@ -692,33 +692,84 @@ function ops_require_auth(string $action): void {
     if (auth_bypass_enabled()) {
         return;
     }
-    try {
-        auth_migrate();
-    } catch (Throwable $e) {
-        fail(500, 'auth store unavailable');
-    }
     $any = ['aliases', 'kick_check'];
+    $hot = in_array($action, $any, true);
+    // Player hot paths: skip migrate (session cache) so status/WHEP stay snappy.
+    if (!$hot) {
+        try {
+            auth_migrate();
+        } catch (Throwable $e) {
+            fail(500, 'auth store unavailable');
+        }
+    }
     $adminOnly = [
         'services', 'journal', 'journal_clear', 'set_enabled', 'set_running',
         'support_bundle', 'update_status', 'update_repo',
     ];
     try {
-        if (in_array($action, $any, true)) {
+        if ($hot) {
             auth_require_any();
+            auth_session_release();
             return;
         }
         if (in_array($action, $adminOnly, true)) {
             auth_require_roles(['admin']);
+            auth_session_release();
             return;
         }
         auth_require_roles(['admin', 'operator']);
+        auth_session_release();
     } catch (RuntimeException $e) {
+        auth_session_release();
         $msg = $e->getMessage();
         if ($msg === 'unauthorized') {
             fail(401, 'unauthorized');
         }
         fail(403, 'forbidden');
     }
+}
+
+/**
+ * Parse a channel .env into a KEY=>value map (no sudo). Returns null if unreadable.
+ * @return array<string,string>|null
+ */
+function read_channel_env_map(int $id): ?array {
+    $path = CHANNELS_DIR . "/{$id}.env";
+    if (!is_readable($path)) {
+        return null;
+    }
+    $raw = @file_get_contents($path);
+    if (!is_string($raw)) {
+        return null;
+    }
+    $keys = [];
+    foreach (preg_split("/\r\n|\n|\r/", $raw) ?: [] as $line) {
+        $line = trim($line);
+        if ($line === '' || str_starts_with($line, '#')) {
+            continue;
+        }
+        if (!str_contains($line, '=')) {
+            continue;
+        }
+        [$k, $v] = explode('=', $line, 2);
+        $k = trim($k);
+        if ($k === '' || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $k)) {
+            continue;
+        }
+        $v = trim($v);
+        if (
+            (str_starts_with($v, '"') && str_ends_with($v, '"'))
+            || (str_starts_with($v, "'") && str_ends_with($v, "'"))
+        ) {
+            $v = substr($v, 1, -1);
+        }
+        // Strip unquoted trailing comment.
+        if (!str_contains($v, '"') && !str_contains($v, "'") && str_contains($v, '#')) {
+            $v = trim(explode('#', $v, 2)[0]);
+        }
+        $keys[$k] = $v;
+    }
+    return $keys;
 }
 
 $body = read_json_body();
@@ -1060,15 +1111,22 @@ if ($action === 'aliases') {
     $audioLayouts = [];
     $audioEmbeds = [];
     foreach (list_channel_ids() as $id) {
-        $r = sudo_run(['/usr/local/bin/nexvue-ops-env-read.sh', (string)$id]);
-        if ($r['code'] !== 0) {
-            continue;
+        // Prefer direct read (no sudo). setup.sh makes channel .env world-readable.
+        $keys = read_channel_env_map($id);
+        if ($keys === null) {
+            $r = sudo_run(['/usr/local/bin/nexvue-ops-env-read.sh', (string)$id]);
+            if ($r['code'] !== 0) {
+                continue;
+            }
+            $data = json_decode($r['stdout'], true);
+            if (!is_array($data) || empty($data['ok'])) {
+                continue;
+            }
+            $keys = $data['keys'] ?? [];
+            if (!is_array($keys)) {
+                continue;
+            }
         }
-        $data = json_decode($r['stdout'], true);
-        if (!is_array($data) || empty($data['ok'])) {
-            continue;
-        }
-        $keys = $data['keys'] ?? [];
         $path = $keys['CHANNEL_PATH'] ?? ("ch{$id}");
         $alias = $keys['CHANNEL_ALIAS'] ?? '';
         $label = $alias !== '' ? $alias : $path;

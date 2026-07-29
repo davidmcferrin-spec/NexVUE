@@ -63,17 +63,19 @@ if (PHP_SAPI === 'cli' && getenv('NEXVUE_AUTH_HTTP') === false) {
     return;
 }
 
-try {
-    auth_migrate();
-    auth_ensure_keys();
-} catch (Throwable $e) {
-    auth_api_fail(500, 'auth store unavailable');
-}
-
 $body = auth_api_body();
 $action = auth_api_action($body);
 if ($action === '') {
     auth_api_fail(400, 'missing action');
+}
+
+// Hot paths (me / whep_jwt / logout): skip migrate — session cache + existing DB.
+try {
+    if (!in_array($action, ['me', 'whep_jwt', 'logout'], true)) {
+        auth_migrate();
+    }
+} catch (Throwable $e) {
+    auth_api_fail(500, 'auth store unavailable');
 }
 
 try {
@@ -186,6 +188,9 @@ try {
         $sub = ($me['auth'] ?? '') === 'share'
             ? ('share:' . ($me['share_id'] ?? 'unknown'))
             : ('user:' . ($me['username'] ?? 'unknown'));
+        // Unlock session before openssl JWT work so status polls are not blocked.
+        auth_session_release();
+        auth_ensure_keys();
         $jwt = auth_mint_viewer_jwt($sub, [$base]);
         auth_api_ok([
             'jwt' => $jwt,

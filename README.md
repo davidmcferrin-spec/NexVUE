@@ -194,6 +194,8 @@ API ports are loopback-bound (Phase 3).
   (`nexvue-ops.php`, `nexvue-metrics.php`, …) and WHEP JWTs enforce the real
   access control. Player/Multiview channel pickers list ch0–ch7 for any
   logged-in user; only share links (`?t=`) filter to granted channels.
+  After login, hot paths release the PHP session lock immediately (captions
+  SSE must not block status/WHEP) and aliases read channel `.env` without sudo.
 - **Roles:** `admin` (Users, Services, Settings, Metrics, watch), `operator`
   (Settings, Metrics, watch), `viewer` (Player/Multiview only).
 - **Share links:** Users page — named, one or more channels, absolute expiry

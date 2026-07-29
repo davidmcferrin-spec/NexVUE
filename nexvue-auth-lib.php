@@ -477,6 +477,20 @@ function auth_session_start(): void {
     session_start();
 }
 
+/**
+ * Release the session lock so concurrent Player polls (status / WHEP JWT /
+ * captions SSE) do not serialize on the same PHP session file.
+ * Call after read-only auth checks on hot endpoints.
+ */
+function auth_session_release(): void {
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+}
+
+/** How long to trust session-cached identity without re-hitting SQLite. */
+const NEXVUE_AUTH_SESSION_CACHE_S = 60;
+
 function auth_session_clear(): void {
     auth_session_start();
     $_SESSION = [];
@@ -918,47 +932,164 @@ function auth_reset_consume(string $raw, string $newPassword): void {
 }
 
 function auth_current_user(): ?array {
+    static $memo = null;
+    static $memoSet = false;
+    if ($memoSet) {
+        return $memo;
+    }
     auth_session_start();
     $uid = $_SESSION['user_id'] ?? null;
     if (!is_string($uid) || $uid === '') {
+        $memoSet = true;
+        $memo = null;
         return null;
+    }
+    $cacheAt = (int)($_SESSION['user_cache_at'] ?? 0);
+    $role = $_SESSION['role'] ?? null;
+    // Hot path (status/captions/WHEP): trust session snapshot briefly — avoids
+    // SQLite on every 2s poll. Revalidate from DB when the cache ages out.
+    if (is_string($role) && $role !== ''
+        && $cacheAt >= (time() - NEXVUE_AUTH_SESSION_CACHE_S)) {
+        $memo = [
+            'id' => $uid,
+            'username' => (string)($_SESSION['username'] ?? ''),
+            'role' => $role,
+            'password_hash' => '',
+            'email' => null,
+            'must_change_password' => !empty($_SESSION['must_change_password']) ? 1 : 0,
+            'disabled_at' => null,
+            'created_at' => '',
+            'updated_at' => '',
+            'synced_at' => null,
+        ];
+        $memoSet = true;
+        return $memo;
     }
     $row = auth_user_find_by_id($uid);
     if ($row === null || !empty($row['disabled_at'])) {
+        unset(
+            $_SESSION['user_id'],
+            $_SESSION['role'],
+            $_SESSION['username'],
+            $_SESSION['must_change_password'],
+            $_SESSION['user_cache_at']
+        );
+        $memoSet = true;
+        $memo = null;
         return null;
     }
+    $_SESSION['role'] = $row['role'];
+    $_SESSION['username'] = $row['username'];
+    $_SESSION['must_change_password'] = ((int)$row['must_change_password']) === 1;
+    $_SESSION['user_cache_at'] = time();
+    $memo = $row;
+    $memoSet = true;
     return $row;
 }
 
 function auth_current_share(): ?array {
+    static $memo = null;
+    static $memoSet = false;
+    if ($memoSet) {
+        return $memo;
+    }
     auth_session_start();
     $sid = $_SESSION['share_id'] ?? null;
     if (!is_string($sid) || $sid === '') {
+        $memoSet = true;
+        $memo = null;
         return null;
+    }
+    $expiresAt = (string)($_SESSION['share_expires_at'] ?? '');
+    if ($expiresAt !== '') {
+        $t = strtotime($expiresAt);
+        if ($t !== false && $t <= time()) {
+            unset(
+                $_SESSION['share_id'],
+                $_SESSION['share_channels'],
+                $_SESSION['share_expires_at'],
+                $_SESSION['share_name'],
+                $_SESSION['share_cache_at']
+            );
+            $memoSet = true;
+            $memo = null;
+            return null;
+        }
+    }
+    $cacheAt = (int)($_SESSION['share_cache_at'] ?? 0);
+    $channels = $_SESSION['share_channels'] ?? null;
+    if (is_array($channels) && $cacheAt >= (time() - NEXVUE_AUTH_SESSION_CACHE_S)) {
+        $memo = [
+            'id' => $sid,
+            'name' => (string)($_SESSION['share_name'] ?? ''),
+            'channels' => json_encode($channels, JSON_UNESCAPED_SLASHES),
+            'expires_at' => $expiresAt !== '' ? $expiresAt : gmdate('Y-m-d\TH:i:s\Z', time() + 3600),
+            'revoked_at' => null,
+            'token_hash' => '',
+            'created_by' => null,
+            'created_at' => '',
+            'updated_at' => '',
+            'synced_at' => null,
+        ];
+        $memoSet = true;
+        return $memo;
     }
     $row = auth_share_find_by_id($sid);
     if (!auth_share_is_valid($row)) {
-        unset($_SESSION['share_id'], $_SESSION['share_channels']);
+        unset(
+            $_SESSION['share_id'],
+            $_SESSION['share_channels'],
+            $_SESSION['share_expires_at'],
+            $_SESSION['share_name'],
+            $_SESSION['share_cache_at']
+        );
+        $memoSet = true;
+        $memo = null;
         return null;
     }
+    $ch = json_decode((string)$row['channels'], true);
+    $_SESSION['share_channels'] = is_array($ch) ? $ch : [];
+    $_SESSION['share_expires_at'] = $row['expires_at'];
+    $_SESSION['share_name'] = $row['name'];
+    $_SESSION['share_cache_at'] = time();
+    $memo = $row;
+    $memoSet = true;
     return $row;
 }
 
 function auth_login_user(array $row): void {
     auth_session_start();
     session_regenerate_id(true);
-    unset($_SESSION['share_id'], $_SESSION['share_channels']);
+    unset(
+        $_SESSION['share_id'],
+        $_SESSION['share_channels'],
+        $_SESSION['share_expires_at'],
+        $_SESSION['share_name'],
+        $_SESSION['share_cache_at']
+    );
     $_SESSION['user_id'] = $row['id'];
     $_SESSION['role'] = $row['role'];
+    $_SESSION['username'] = $row['username'];
+    $_SESSION['must_change_password'] = ((int)$row['must_change_password']) === 1;
+    $_SESSION['user_cache_at'] = time();
 }
 
 function auth_login_share(array $row): void {
     auth_session_start();
     session_regenerate_id(true);
-    unset($_SESSION['user_id'], $_SESSION['role']);
+    unset(
+        $_SESSION['user_id'],
+        $_SESSION['role'],
+        $_SESSION['username'],
+        $_SESSION['must_change_password'],
+        $_SESSION['user_cache_at']
+    );
     $_SESSION['share_id'] = $row['id'];
     $channels = json_decode((string)$row['channels'], true);
     $_SESSION['share_channels'] = is_array($channels) ? $channels : [];
+    $_SESSION['share_expires_at'] = $row['expires_at'];
+    $_SESSION['share_name'] = $row['name'];
+    $_SESSION['share_cache_at'] = time();
 }
 
 function auth_role_at_least(?array $user, array $allowed): bool {

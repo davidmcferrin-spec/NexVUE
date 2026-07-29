@@ -1,0 +1,183 @@
+Factory Details:
+  Rank                     none (0)
+  Long-name                VA-API H.264 Encoder in Intel(R) Gen Graphics
+  Klass                    Codec/Encoder/Video/Hardware
+  Description              VA-API based H.264 video encoder
+  Author                   He Junyan <junyan.he@intel.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/va/vah264enc.html
+
+Plugin Details:
+  Name                     va
+  Description              VA-API codecs plugin
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstva.so
+  Version                  1.24.2
+  License                  LGPL
+  Source module            gst-plugins-bad
+  Documentation            https://gstreamer.freedesktop.org/documentation/va/
+  Source release date      2024-04-09
+  Binary package           GStreamer Bad Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-bad1.0
+
+GObject
+ +----GInitiallyUnowned
+       +----GstObject
+             +----GstElement
+                   +----GstVideoEncoder
+                         +----GstVaBaseEnc
+                               +----GstVaH264Enc
+
+Implemented Interfaces:
+  GstPreset
+
+Pad Templates:
+  SINK template: 'sink'
+    Availability: Always
+    Capabilities:
+      video/x-raw(memory:VAMemory)
+                  width: [ 32, 4096 ]
+                 height: [ 32, 4096 ]
+                 format: NV12
+      video/x-raw(memory:DMABuf)
+                  width: [ 32, 4096 ]
+                 height: [ 32, 4096 ]
+                 format: DMA_DRM
+             drm-format: NV12:0x0100000000000009
+      video/x-raw
+                  width: [ 32, 4096 ]
+                 height: [ 32, 4096 ]
+                 format: NV12
+  
+  SRC template: 'src'
+    Availability: Always
+    Capabilities:
+      video/x-h264
+                profile: { (string)main, (string)high, (string)constrained-baseline }
+                  width: [ 1, 4096 ]
+                 height: [ 1, 4096 ]
+              alignment: au
+          stream-format: byte-stream
+
+Element has no clocking capabilities.
+Element has no URI handling capabilities.
+
+Pads:
+  SINK: 'sink'
+    Pad Template: 'sink'
+  SRC: 'src'
+    Pad Template: 'src'
+
+Element Properties:
+
+  aud                 : Insert AU (Access Unit) delimeter for each frame
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  b-frames            : Number of B frames between I and P reference frames
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 31 Default: 0 
+  
+  b-pyramid           : Enable the b-pyramid reference structure in the GOP
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  bitrate             : The desired bitrate expressed in kbps (0: auto-calculate)
+                        flags: readable, writable, changeable in NULL, READY, PAUSED or PLAYING state
+                        Unsigned Integer. Range: 0 - 2048000 Default: 0 
+  
+  cabac               : Enable CABAC entropy coding mode
+                        flags: readable, writable
+                        Boolean. Default: true
+  
+  cc-insert           : Insert CEA-708 Closed Captions
+                        flags: readable, writable
+                        Boolean. Default: true
+  
+  cpb-size            : The desired max CPB size in Kb (0: auto-calculate)
+                        flags: readable, writable, changeable in NULL, READY, PAUSED or PLAYING state
+                        Unsigned Integer. Range: 0 - 2048000 Default: 0 
+  
+  dct8x8              : Enable adaptive use of 8x8 transforms in I-frames
+                        flags: readable, writable
+                        Boolean. Default: true
+  
+  device-path         : DRM device path
+                        flags: readable
+                        String. Default: "/dev/dri/renderD128"
+  
+  i-frames            : Force the number of I frames insertion within one GOP, not including the first IDR frame
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 1023 Default: 0 
+  
+  key-int-max         : The maximal distance between two keyframes. It decides the size of GOP (0: auto-calculate)
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 1024 Default: 0 
+  
+  max-qp              : Maximum quantizer value for each frame
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 51 Default: 51 
+  
+  mbbrc               : Macroblock level Bitrate Control. Not available in CQP mode
+                        flags: readable, writable
+                        Enum "GstVaFeature" Default: 2, "auto"
+                           (0): disabled         - GST_VA_FEATURE_DISABLED
+                           (1): enabled          - GST_VA_FEATURE_ENABLED
+                           (2): auto             - GST_VA_FEATURE_AUTO
+  
+  min-force-key-unit-interval: Minimum interval between force-keyunit requests in nanoseconds
+                        flags: readable, writable
+                        Unsigned Integer64. Range: 0 - 18446744073709551615 Default: 0 
+  
+  min-qp              : Minimum quantizer value for each frame
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 51 Default: 1 
+  
+  name                : The name of the object
+                        flags: readable, writable
+                        String. Default: "vah264enc0"
+  
+  num-slices          : Number of slices per frame
+                        flags: readable, writable
+                        Unsigned Integer. Range: 1 - 200 Default: 1 
+  
+  parent              : The parent of the object
+                        flags: readable, writable
+                        Object of type "GstObject"
+  
+  qos                 : Handle Quality-of-Service events from downstream
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  qpb                 : The quantizer value for B frame. Available only in CQP mode
+                        flags: readable, writable, changeable in NULL, READY, PAUSED or PLAYING state
+                        Unsigned Integer. Range: 0 - 51 Default: 26 
+  
+  qpi                 : The quantizer value for I frame. In CQP mode, it specifies the QP of I frame, in other mode, it specifies the init QP of all frames
+                        flags: readable, writable, changeable in NULL, READY, PAUSED or PLAYING state
+                        Unsigned Integer. Range: 0 - 51 Default: 26 
+  
+  qpp                 : The quantizer value for P frame. Available only in CQP mode
+                        flags: readable, writable, changeable in NULL, READY, PAUSED or PLAYING state
+                        Unsigned Integer. Range: 0 - 51 Default: 26 
+  
+  rate-control        : The desired rate control mode for the encoder
+                        flags: readable, writable, conditionally available, changeable in NULL, READY, PAUSED or PLAYING state
+                        Enum "GstVaEncoderRateControl_H264_renderD128" Default: 2, "cbr"
+                           (2): cbr              - Constant Bitrate
+                           (4): vbr              - Variable Bitrate
+                           (16): cqp              - Constant Quantizer
+  
+  ref-frames          : Number of reference frames, including both the forward and the backward
+                        flags: readable, writable
+                        Unsigned Integer. Range: 0 - 16 Default: 3 
+  
+  target-percentage   : The percentage for 'target bitrate'/'maximum bitrate' (Only in VBR)
+                        flags: readable, writable, changeable in NULL, READY, PAUSED or PLAYING state
+                        Unsigned Integer. Range: 50 - 100 Default: 66 
+  
+  target-usage        : The target usage to control and balance the encoding speed/quality
+                        flags: readable, writable, changeable in NULL, READY, PAUSED or PLAYING state
+                        Unsigned Integer. Range: 1 - 7 Default: 4 
+  
+  trellis             : Enable the trellis quantization method
+                        flags: readable, writable
+                        Boolean. Default: false

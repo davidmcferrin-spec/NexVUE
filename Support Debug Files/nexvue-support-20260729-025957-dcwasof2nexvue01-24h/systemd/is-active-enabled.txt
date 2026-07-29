@@ -1,0 +1,13 @@
+mediamtx	active	enabled
+nexvue-status	active	enabled
+nexvue-metrics	active	enabled
+nexvue-encode@0	active	enabled
+nexvue-encode@1	active	enabled
+nexvue-encode@2	active	enabled
+nexvue-encode@3	active	enabled
+nexvue-encode@4	active	enabled
+nexvue-encode@5	active	enabled
+nexvue-encode@6	active	enabled
+nexvue-encode@7	active	enabled
+nexvue-encode@8	inactive	disabled
+nexvue-encode@9	inactive	disabled

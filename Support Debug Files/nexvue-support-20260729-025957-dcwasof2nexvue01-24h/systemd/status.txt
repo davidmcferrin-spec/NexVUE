@@ -1,0 +1,265 @@
+===== mediamtx (exit 0) =====
+● mediamtx.service - MediaMTX media server (NexVUE)
+     Loaded: loaded (/etc/systemd/system/mediamtx.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-28 22:43:05 EDT; 16min ago
+   Main PID: 15504 (mediamtx)
+      Tasks: 19 (limit: 18227)
+     Memory: 32.8M (peak: 35.0M)
+        CPU: 36.270s
+     CGroup: /system.slice/mediamtx.service
+             └─15504 /usr/local/bin/mediamtx /etc/nexvue/mediamtx.yml
+
+Jul 28 22:51:55 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:55 INF [RTSP] [session 7fe4ccdd] is publishing to path 'ch5'
+Jul 28 22:51:55 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:55 INF [RTSP] [conn 127.0.0.1:55414] opened
+Jul 28 22:51:55 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:55 INF [RTSP] [session 168bd81e] created by 127.0.0.1:55414
+Jul 28 22:51:57 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:57 INF [path ch6] stream is available and online, 2 tracks (Opus, H264)
+Jul 28 22:51:57 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:57 INF [RTSP] [session 168bd81e] is publishing to path 'ch6'
+Jul 28 22:51:57 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:57 INF [RTSP] [conn 127.0.0.1:46966] opened
+Jul 28 22:51:57 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:57 INF [RTSP] [session 141eca47] created by 127.0.0.1:46966
+Jul 28 22:51:59 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:59 INF [path ch7] stream is available and online, 2 tracks (Opus, H264)
+Jul 28 22:51:59 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:51:59 INF [RTSP] [session 141eca47] is publishing to path 'ch7'
+Jul 28 22:52:42 dcwasof2nexvue01 mediamtx[15504]: 2026/07/28 22:52:42 INF [RTSP] [conn 127.0.0.1:50326] closed: read tcp 127.0.0.1:8554->127.0.0.1:50326: i/o timeout
+
+===== nexvue-status (exit 0) =====
+● nexvue-status.service - NexVUE input status daemon
+     Loaded: loaded (/etc/systemd/system/nexvue-status.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-28 22:43:04 EDT; 16min ago
+   Main PID: 14863 (python3)
+      Tasks: 2 (limit: 18227)
+     Memory: 12.0M (peak: 70.2M)
+        CPU: 17.168s
+     CGroup: /system.slice/nexvue-status.service
+             └─14863 /usr/bin/python3 /usr/local/bin/nexvue-status-server.py
+
+Jul 28 22:43:04 dcwasof2nexvue01 systemd[1]: Starting nexvue-status.service - NexVUE input status daemon...
+Jul 28 22:43:04 dcwasof2nexvue01 systemd[1]: Started nexvue-status.service - NexVUE input status daemon.
+Jul 28 22:43:04 dcwasof2nexvue01 python3[14863]: [nexvue-status] serving http on 0.0.0.0:9998, polling /usr/local/bin/decklink-status every 5.0s (log level INFO)
+Jul 28 22:48:12 dcwasof2nexvue01 python3[14863]: [nexvue-status] poll summary: 26 total, 0 failed, 0 consecutive fail, last ok 0s ago, last duration 6.94s, uptime 308s
+Jul 28 22:53:18 dcwasof2nexvue01 python3[14863]: [nexvue-status] poll summary: 58 total, 0 failed, 0 consecutive fail, last ok 0s ago, last duration 1.27s, uptime 614s
+Jul 28 22:58:18 dcwasof2nexvue01 python3[14863]: [nexvue-status] poll summary: 106 total, 0 failed, 0 consecutive fail, last ok 0s ago, last duration 1.24s, uptime 914s
+
+===== nexvue-metrics (exit 0) =====
+● nexvue-metrics.service - NexVUE usage metrics collector (no network listener)
+     Loaded: loaded (/etc/systemd/system/nexvue-metrics.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-28 22:43:03 EDT; 16min ago
+   Main PID: 14775 (python3)
+      Tasks: 4 (limit: 18227)
+     Memory: 18.8M (peak: 20.8M)
+        CPU: 747ms
+     CGroup: /system.slice/nexvue-metrics.service
+             ├─14775 /usr/bin/python3 /usr/local/bin/nexvue-metrics-server.py
+             └─14820 intel_gpu_top -J -s 1000 -o -
+
+Jul 28 22:43:03 dcwasof2nexvue01 systemd[1]: Starting nexvue-metrics.service - NexVUE usage metrics collector (no network listener)...
+Jul 28 22:43:03 dcwasof2nexvue01 systemd[1]: Started nexvue-metrics.service - NexVUE usage metrics collector (no network listener).
+Jul 28 22:43:03 dcwasof2nexvue01 python3[14775]: [nexvue-metrics] database ready at /var/lib/nexvue/metrics.db
+Jul 28 22:43:03 dcwasof2nexvue01 python3[14775]: [nexvue-metrics] collector running, polling every 15.0s, db=/var/lib/nexvue/metrics.db (no HTTP server — reads happen via PHP querying this SQLite file directly)
+Jul 28 22:43:04 dcwasof2nexvue01 python3[14775]: [nexvue-metrics] pruned samples older than 1782700983 (30 day retention)
+
+===== nexvue-encode@0 (exit 0) =====
+● nexvue-encode@0.service - NexVUE encoder channel 0 (DeckLink -> MediaMTX)
+     Loaded: loaded (/etc/systemd/system/nexvue-encode@.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-28 22:51:41 EDT; 8min ago
+   Main PID: 25337 (bash)
+      Tasks: 35 (limit: 18227)
+     Memory: 29.5M (peak: 58.6M)
+        CPU: 636ms
+     CGroup: /system.slice/system-nexvue\x2dencode.slice/nexvue-encode@0.service
+             ├─25337 bash /usr/local/bin/nexvue-encode.sh
+             ├─25464 python3 /usr/local/bin/nexvue-captions-decode.py --channel ch0 --fifo /run/nexvue/captions/ch0.ccraw --state-dir /run/nexvue/captions
+             └─25466 gst-launch-1.0 -e rtspclientsink name=sink "location=rtsp://127.0.0.1:8554/ch0?jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Ikk4TXU0UzdHbW9BIn0.eyJpYXQiOjE3ODUyOTAxNzAsImV4cCI6MjEwMDY1MDE3MCwiaXNzIjoibmV4dnVlLWVkZ2UiLCJzdWIiOiJuZXh2dWUtZW5jb2RlIiwibWVkaWFtdHhfcGVybWlzc2lvbnMiOlt7ImFjdGlvbiI6InB1Ymxpc2giLCJwYXRoIjoiIn0seyJhY3Rpb24iOiJhcGkifV19.dGbo3znxmuXcs3_azRaYNG80pB1vp-oq7x4cflOpM5QYkUzd8QIhtnHFL9y1IZRQ9Yrm_eop48Fb8PuJU8CS3nhVThA02zuUiLwqFsWDJupZg5IUsTOdymybYfqvifwH8QZj66_uFC83Abjt6JCJhKBSMLqpKWNdAPDUl3elTsQ9UGzLUc0ScesumgW11t_cp6cxGWwVb96bnfGv8lt3GnawjEwchpEGMQjkJRKsgM4L_xpqDzwseUjti8CSDsUZWuIku-Qct7UOnd7PX1e5OhXLclURiq_8VXssuw22t2UxgZzHLL7D0-7XwJ4bVobLrG3unzbiNepAGrAvtyNn1w" protocols=tcp decklinkvideosrc device-number=0 mode=auto buffer-size=2 drop-no-signal-frames=false output-cc=true "!" queue max-size-buffers=4 leaky=downstream "!" ccextractor name=cc cc. "!" queue max-size-buffers=4 leaky=downstream "!" watchdog timeout=3000 "!" deinterlace fields=all method=greedyh "!" videorate "!" videoscale "!" videoconvert "!" video/x-raw,format=NV12,width=1920,height=1080,framerate=60000/1001,pixel-aspect-ratio=1/1 "!" vah264enc rate-control=cbr bitrate=5000 key-int-max=60 b-frames=0 target-usage=7 "!" h264parse config-interval=-1 "!" sink. decklinkaudiosrc device-number=0 channels=8 "!" queue max-size-buffers=100 leaky=downstream "!" audiorate "!" audioconvert "!" audioresample quality=9 "!" audio/x-raw,rate=48000,channels=8 "!" deinterleave name=adl interleave name=ali adl.src_0 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x1" "!" ali.sink_0 adl.src_1 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x2" "!" ali.sink_1 adl.src_2 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x4" "!" ali.sink_2 adl.src_3 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x8" "!" ali.sink_3 adl.src_4 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x10" "!" ali.sink_4 adl.src_5 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x20" "!" ali.sink_5 adl.src_6 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x400" "!" ali.sink_6 adl.src_7 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x800" "!" ali.sink_7 ali. "!" audioconvert "!" "audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f" "!" opusenc bitrate=384000 frame-size=10 "!" sink. cc.caption "!" queue max-size-buffers=8 leaky=downstream "!" ccconverter "!" closedcaption/x-cea-608,format=raw "!" filesink location=/run/nexvue/captions/ch0.ccraw buffer-mode=unbuffered sync=false append=false
+
+Jul 28 22:51:42 dcwasof2nexvue01 bash[25466]: ../libs/gst/base/gstbasesrc.c(3177): gst_base_src_loop (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0:
+Jul 28 22:51:42 dcwasof2nexvue01 bash[25466]: streaming stopped, reason not-negotiated (-4)
+Jul 28 22:51:42 dcwasof2nexvue01 bash[25466]: Execution ended after 0:00:00.000197393
+Jul 28 22:51:42 dcwasof2nexvue01 bash[25466]: Setting pipeline to NULL ...
+Jul 28 22:51:42 dcwasof2nexvue01 bash[25466]: ERROR: from element /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: GStreamer encountered a general stream error.
+Jul 28 22:51:42 dcwasof2nexvue01 bash[25466]: Additional debug info:
+Jul 28 22:51:42 dcwasof2nexvue01 bash[25466]: ../sys/decklink/gstdecklinkvideosrc.cpp(1746): gst_decklink_video_src_change_state (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0:
+Jul 28 22:51:42 dcwasof2nexvue01 bash[25466]: Failed to stop streams: 0xffffffff80000009
+Jul 28 22:51:42 dcwasof2nexvue01 bash[25466]: Freeing pipeline ...
+Jul 28 22:51:42 dcwasof2nexvue01 gst-launch-1.0[25466]: 
+                                                        Trying to dispose element pipeline0, but it is in PAUSED instead of the NULL state.
+                                                        You need to explicitly set elements to the NULL state before
+                                                        dropping the final reference, to allow them to clean up.
+                                                        This problem may also be caused by a refcounting bug in the
+                                                        application or some element.
+
+===== nexvue-encode@1 (exit 0) =====
+● nexvue-encode@1.service - NexVUE encoder channel 1 (DeckLink -> MediaMTX)
+     Loaded: loaded (/etc/systemd/system/nexvue-encode@.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-28 22:43:08 EDT; 16min ago
+   Main PID: 17704 (bash)
+      Tasks: 57 (limit: 18227)
+     Memory: 537.4M (peak: 544.1M)
+        CPU: 6min 34.044s
+     CGroup: /system.slice/system-nexvue\x2dencode.slice/nexvue-encode@1.service
+             ├─17704 bash /usr/local/bin/nexvue-encode.sh
+             ├─17964 python3 /usr/local/bin/nexvue-captions-decode.py --channel ch1 --fifo /run/nexvue/captions/ch1.ccraw --state-dir /run/nexvue/captions
+             └─17966 gst-launch-1.0 -e rtspclientsink name=sink "location=rtsp://127.0.0.1:8554/ch1?jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Ikk4TXU0UzdHbW9BIn0.eyJpYXQiOjE3ODUyOTAxNzAsImV4cCI6MjEwMDY1MDE3MCwiaXNzIjoibmV4dnVlLWVkZ2UiLCJzdWIiOiJuZXh2dWUtZW5jb2RlIiwibWVkaWFtdHhfcGVybWlzc2lvbnMiOlt7ImFjdGlvbiI6InB1Ymxpc2giLCJwYXRoIjoiIn0seyJhY3Rpb24iOiJhcGkifV19.dGbo3znxmuXcs3_azRaYNG80pB1vp-oq7x4cflOpM5QYkUzd8QIhtnHFL9y1IZRQ9Yrm_eop48Fb8PuJU8CS3nhVThA02zuUiLwqFsWDJupZg5IUsTOdymybYfqvifwH8QZj66_uFC83Abjt6JCJhKBSMLqpKWNdAPDUl3elTsQ9UGzLUc0ScesumgW11t_cp6cxGWwVb96bnfGv8lt3GnawjEwchpEGMQjkJRKsgM4L_xpqDzwseUjti8CSDsUZWuIku-Qct7UOnd7PX1e5OhXLclURiq_8VXssuw22t2UxgZzHLL7D0-7XwJ4bVobLrG3unzbiNepAGrAvtyNn1w" protocols=tcp decklinkvideosrc device-number=1 mode=auto buffer-size=2 drop-no-signal-frames=false output-cc=true "!" queue max-size-buffers=4 leaky=downstream "!" ccextractor name=cc cc. "!" queue max-size-buffers=4 leaky=downstream "!" watchdog timeout=3000 "!" deinterlace fields=all method=greedyh "!" videorate "!" videoscale "!" videoconvert "!" video/x-raw,format=NV12,width=1920,height=1080,framerate=60000/1001,pixel-aspect-ratio=1/1 "!" vah264enc rate-control=cbr bitrate=5000 key-int-max=60 b-frames=0 target-usage=7 "!" h264parse config-interval=-1 "!" sink. decklinkaudiosrc device-number=1 channels=8 "!" queue max-size-buffers=100 leaky=downstream "!" audiorate "!" audioconvert "!" audioresample quality=9 "!" audio/x-raw,rate=48000,channels=8 "!" deinterleave name=adl interleave name=ali adl.src_0 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x1" "!" ali.sink_0 adl.src_1 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x2" "!" ali.sink_1 adl.src_2 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x4" "!" ali.sink_2 adl.src_3 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x8" "!" ali.sink_3 adl.src_4 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x10" "!" ali.sink_4 adl.src_5 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x20" "!" ali.sink_5 adl.src_6 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x400" "!" ali.sink_6 adl.src_7 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x800" "!" ali.sink_7 ali. "!" audioconvert "!" "audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f" "!" opusenc bitrate=384000 frame-size=10 "!" sink. cc.caption "!" queue max-size-buffers=8 leaky=downstream "!" ccconverter "!" closedcaption/x-cea-608,format=raw "!" filesink location=/run/nexvue/captions/ch1.ccraw buffer-mode=unbuffered sync=false append=false
+
+Jul 28 22:43:11 dcwasof2nexvue01 bash[17966]: Redistribute latency...
+Jul 28 22:43:11 dcwasof2nexvue01 bash[17966]: INFO:
+Jul 28 22:43:11 dcwasof2nexvue01 bash[17966]: ../sys/decklink/gstdecklinkvideosrc.cpp(1300): gst_decklink_video_src_create (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0:
+Jul 28 22:43:11 dcwasof2nexvue01 bash[17966]: Input source detected
+Jul 28 22:43:11 dcwasof2nexvue01 bash[17966]: Redistribute latency...
+Jul 28 22:43:11 dcwasof2nexvue01 bash[17966]: WARNING: from element /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: Dropped 58 old frames from 0:00:00.124749920 to 0:00:02.062550455
+Jul 28 22:43:11 dcwasof2nexvue01 bash[17966]: Additional debug info:
+Jul 28 22:43:11 dcwasof2nexvue01 bash[17966]: ../sys/decklink/gstdecklinkvideosrc.cpp(925): gst_decklink_video_src_got_frame (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0
+Jul 28 22:43:13 dcwasof2nexvue01 bash[17966]: Redistribute latency...
+Jul 28 22:43:13 dcwasof2nexvue01 bash[17966]: Redistribute latency...
+
+===== nexvue-encode@2 (exit 0) =====
+● nexvue-encode@2.service - NexVUE encoder channel 2 (DeckLink -> MediaMTX)
+     Loaded: loaded (/etc/systemd/system/nexvue-encode@.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-28 22:51:44 EDT; 8min ago
+   Main PID: 25596 (bash)
+      Tasks: 57 (limit: 18227)
+     Memory: 536.7M (peak: 543.8M)
+        CPU: 3min 32.805s
+     CGroup: /system.slice/system-nexvue\x2dencode.slice/nexvue-encode@2.service
+             ├─25596 bash /usr/local/bin/nexvue-encode.sh
+             ├─25797 python3 /usr/local/bin/nexvue-captions-decode.py --channel ch2 --fifo /run/nexvue/captions/ch2.ccraw --state-dir /run/nexvue/captions
+             └─25799 gst-launch-1.0 -e rtspclientsink name=sink "location=rtsp://127.0.0.1:8554/ch2?jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Ikk4TXU0UzdHbW9BIn0.eyJpYXQiOjE3ODUyOTAxNzAsImV4cCI6MjEwMDY1MDE3MCwiaXNzIjoibmV4dnVlLWVkZ2UiLCJzdWIiOiJuZXh2dWUtZW5jb2RlIiwibWVkaWFtdHhfcGVybWlzc2lvbnMiOlt7ImFjdGlvbiI6InB1Ymxpc2giLCJwYXRoIjoiIn0seyJhY3Rpb24iOiJhcGkifV19.dGbo3znxmuXcs3_azRaYNG80pB1vp-oq7x4cflOpM5QYkUzd8QIhtnHFL9y1IZRQ9Yrm_eop48Fb8PuJU8CS3nhVThA02zuUiLwqFsWDJupZg5IUsTOdymybYfqvifwH8QZj66_uFC83Abjt6JCJhKBSMLqpKWNdAPDUl3elTsQ9UGzLUc0ScesumgW11t_cp6cxGWwVb96bnfGv8lt3GnawjEwchpEGMQjkJRKsgM4L_xpqDzwseUjti8CSDsUZWuIku-Qct7UOnd7PX1e5OhXLclURiq_8VXssuw22t2UxgZzHLL7D0-7XwJ4bVobLrG3unzbiNepAGrAvtyNn1w" protocols=tcp decklinkvideosrc device-number=2 mode=auto buffer-size=2 drop-no-signal-frames=false output-cc=true "!" queue max-size-buffers=4 leaky=downstream "!" ccextractor name=cc cc. "!" queue max-size-buffers=4 leaky=downstream "!" watchdog timeout=3000 "!" deinterlace fields=all method=greedyh "!" videorate "!" videoscale "!" videoconvert "!" video/x-raw,format=NV12,width=1920,height=1080,framerate=60000/1001,pixel-aspect-ratio=1/1 "!" vah264enc rate-control=cbr bitrate=5000 key-int-max=60 b-frames=0 target-usage=7 "!" h264parse config-interval=-1 "!" sink. decklinkaudiosrc device-number=2 channels=8 "!" queue max-size-buffers=100 leaky=downstream "!" audiorate "!" audioconvert "!" audioresample quality=9 "!" audio/x-raw,rate=48000,channels=8 "!" deinterleave name=adl interleave name=ali adl.src_0 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x1" "!" ali.sink_0 adl.src_1 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x2" "!" ali.sink_1 adl.src_2 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x4" "!" ali.sink_2 adl.src_3 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x8" "!" ali.sink_3 adl.src_4 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x10" "!" ali.sink_4 adl.src_5 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x20" "!" ali.sink_5 adl.src_6 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x400" "!" ali.sink_6 adl.src_7 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x800" "!" ali.sink_7 ali. "!" audioconvert "!" "audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f" "!" opusenc bitrate=384000 frame-size=10 "!" sink. cc.caption "!" queue max-size-buffers=8 leaky=downstream "!" ccconverter "!" closedcaption/x-cea-608,format=raw "!" filesink location=/run/nexvue/captions/ch2.ccraw buffer-mode=unbuffered sync=false append=false
+
+Jul 28 22:51:46 dcwasof2nexvue01 bash[25799]: Redistribute latency...
+Jul 28 22:51:46 dcwasof2nexvue01 bash[25799]: Redistribute latency...
+Jul 28 22:51:46 dcwasof2nexvue01 bash[25799]: WARNING: from element /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: Dropped 58 old frames from 0:00:00.142628751 to 0:00:02.080747329
+Jul 28 22:51:46 dcwasof2nexvue01 bash[25799]: Additional debug info:
+Jul 28 22:51:46 dcwasof2nexvue01 bash[25799]: ../sys/decklink/gstdecklinkvideosrc.cpp(925): gst_decklink_video_src_got_frame (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0
+Jul 28 22:51:47 dcwasof2nexvue01 bash[25799]: WARNING: from element /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: Dropped 25 old frames from 0:00:02.180847329 to 0:00:02.981598809
+Jul 28 22:51:47 dcwasof2nexvue01 bash[25799]: Additional debug info:
+Jul 28 22:51:47 dcwasof2nexvue01 bash[25799]: ../sys/decklink/gstdecklinkvideosrc.cpp(925): gst_decklink_video_src_got_frame (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0
+Jul 28 22:51:48 dcwasof2nexvue01 bash[25799]: Redistribute latency...
+Jul 28 22:51:49 dcwasof2nexvue01 bash[25799]: Redistribute latency...
+
+===== nexvue-encode@3 (exit 0) =====
+● nexvue-encode@3.service - NexVUE encoder channel 3 (DeckLink -> MediaMTX)
+     Loaded: loaded (/etc/systemd/system/nexvue-encode@.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-28 22:51:47 EDT; 8min ago
+   Main PID: 25945 (bash)
+      Tasks: 57 (limit: 18227)
+     Memory: 536.0M (peak: 543.7M)
+        CPU: 3min 33.364s
+     CGroup: /system.slice/system-nexvue\x2dencode.slice/nexvue-encode@3.service
+             ├─25945 bash /usr/local/bin/nexvue-encode.sh
+             ├─26067 python3 /usr/local/bin/nexvue-captions-decode.py --channel ch3 --fifo /run/nexvue/captions/ch3.ccraw --state-dir /run/nexvue/captions
+             └─26069 gst-launch-1.0 -e rtspclientsink name=sink "location=rtsp://127.0.0.1:8554/ch3?jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Ikk4TXU0UzdHbW9BIn0.eyJpYXQiOjE3ODUyOTAxNzAsImV4cCI6MjEwMDY1MDE3MCwiaXNzIjoibmV4dnVlLWVkZ2UiLCJzdWIiOiJuZXh2dWUtZW5jb2RlIiwibWVkaWFtdHhfcGVybWlzc2lvbnMiOlt7ImFjdGlvbiI6InB1Ymxpc2giLCJwYXRoIjoiIn0seyJhY3Rpb24iOiJhcGkifV19.dGbo3znxmuXcs3_azRaYNG80pB1vp-oq7x4cflOpM5QYkUzd8QIhtnHFL9y1IZRQ9Yrm_eop48Fb8PuJU8CS3nhVThA02zuUiLwqFsWDJupZg5IUsTOdymybYfqvifwH8QZj66_uFC83Abjt6JCJhKBSMLqpKWNdAPDUl3elTsQ9UGzLUc0ScesumgW11t_cp6cxGWwVb96bnfGv8lt3GnawjEwchpEGMQjkJRKsgM4L_xpqDzwseUjti8CSDsUZWuIku-Qct7UOnd7PX1e5OhXLclURiq_8VXssuw22t2UxgZzHLL7D0-7XwJ4bVobLrG3unzbiNepAGrAvtyNn1w" protocols=tcp decklinkvideosrc device-number=3 mode=auto buffer-size=2 drop-no-signal-frames=false output-cc=true "!" queue max-size-buffers=4 leaky=downstream "!" ccextractor name=cc cc. "!" queue max-size-buffers=4 leaky=downstream "!" watchdog timeout=3000 "!" deinterlace fields=all method=greedyh "!" videorate "!" videoscale "!" videoconvert "!" video/x-raw,format=NV12,width=1920,height=1080,framerate=60000/1001,pixel-aspect-ratio=1/1 "!" vah264enc rate-control=cbr bitrate=5000 key-int-max=60 b-frames=0 target-usage=7 "!" h264parse config-interval=-1 "!" sink. decklinkaudiosrc device-number=3 channels=8 "!" queue max-size-buffers=100 leaky=downstream "!" audiorate "!" audioconvert "!" audioresample quality=9 "!" audio/x-raw,rate=48000,channels=8 "!" deinterleave name=adl interleave name=ali adl.src_0 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x1" "!" ali.sink_0 adl.src_1 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x2" "!" ali.sink_1 adl.src_2 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x4" "!" ali.sink_2 adl.src_3 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x8" "!" ali.sink_3 adl.src_4 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x10" "!" ali.sink_4 adl.src_5 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x20" "!" ali.sink_5 adl.src_6 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x400" "!" ali.sink_6 adl.src_7 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x800" "!" ali.sink_7 ali. "!" audioconvert "!" "audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f" "!" opusenc bitrate=384000 frame-size=10 "!" sink. cc.caption "!" queue max-size-buffers=8 leaky=downstream "!" ccconverter "!" closedcaption/x-cea-608,format=raw "!" filesink location=/run/nexvue/captions/ch3.ccraw buffer-mode=unbuffered sync=false append=false
+
+Jul 28 22:51:49 dcwasof2nexvue01 bash[26069]: Redistribute latency...
+Jul 28 22:51:50 dcwasof2nexvue01 bash[26069]: INFO:
+Jul 28 22:51:50 dcwasof2nexvue01 bash[26069]: ../sys/decklink/gstdecklinkvideosrc.cpp(1300): gst_decklink_video_src_create (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0:
+Jul 28 22:51:50 dcwasof2nexvue01 bash[26069]: Input source detected
+Jul 28 22:51:50 dcwasof2nexvue01 bash[26069]: Redistribute latency...
+Jul 28 22:51:50 dcwasof2nexvue01 bash[26069]: WARNING: from element /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: Dropped 58 old frames from 0:00:00.146762753 to 0:00:02.103750586
+Jul 28 22:51:50 dcwasof2nexvue01 bash[26069]: Additional debug info:
+Jul 28 22:51:50 dcwasof2nexvue01 bash[26069]: ../sys/decklink/gstdecklinkvideosrc.cpp(925): gst_decklink_video_src_got_frame (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0
+Jul 28 22:51:51 dcwasof2nexvue01 bash[26069]: Redistribute latency...
+Jul 28 22:51:52 dcwasof2nexvue01 bash[26069]: Redistribute latency...
+
+===== nexvue-encode@4 (exit 0) =====
+● nexvue-encode@4.service - NexVUE encoder channel 4 (DeckLink -> MediaMTX)
+     Loaded: loaded (/etc/systemd/system/nexvue-encode@.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-28 22:51:49 EDT; 8min ago
+   Main PID: 26211 (bash)
+      Tasks: 57 (limit: 18227)
+     Memory: 546.0M (peak: 546.9M)
+        CPU: 3min 42.386s
+     CGroup: /system.slice/system-nexvue\x2dencode.slice/nexvue-encode@4.service
+             ├─26211 bash /usr/local/bin/nexvue-encode.sh
+             ├─26404 python3 /usr/local/bin/nexvue-captions-decode.py --channel ch4 --fifo /run/nexvue/captions/ch4.ccraw --state-dir /run/nexvue/captions
+             └─26406 gst-launch-1.0 -e rtspclientsink name=sink "location=rtsp://127.0.0.1:8554/ch4?jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Ikk4TXU0UzdHbW9BIn0.eyJpYXQiOjE3ODUyOTAxNzAsImV4cCI6MjEwMDY1MDE3MCwiaXNzIjoibmV4dnVlLWVkZ2UiLCJzdWIiOiJuZXh2dWUtZW5jb2RlIiwibWVkaWFtdHhfcGVybWlzc2lvbnMiOlt7ImFjdGlvbiI6InB1Ymxpc2giLCJwYXRoIjoiIn0seyJhY3Rpb24iOiJhcGkifV19.dGbo3znxmuXcs3_azRaYNG80pB1vp-oq7x4cflOpM5QYkUzd8QIhtnHFL9y1IZRQ9Yrm_eop48Fb8PuJU8CS3nhVThA02zuUiLwqFsWDJupZg5IUsTOdymybYfqvifwH8QZj66_uFC83Abjt6JCJhKBSMLqpKWNdAPDUl3elTsQ9UGzLUc0ScesumgW11t_cp6cxGWwVb96bnfGv8lt3GnawjEwchpEGMQjkJRKsgM4L_xpqDzwseUjti8CSDsUZWuIku-Qct7UOnd7PX1e5OhXLclURiq_8VXssuw22t2UxgZzHLL7D0-7XwJ4bVobLrG3unzbiNepAGrAvtyNn1w" protocols=tcp decklinkvideosrc device-number=4 mode=auto buffer-size=2 drop-no-signal-frames=false output-cc=true "!" queue max-size-buffers=4 leaky=downstream "!" ccextractor name=cc cc. "!" queue max-size-buffers=4 leaky=downstream "!" watchdog timeout=3000 "!" deinterlace fields=all method=greedyh "!" videorate "!" videoscale "!" videoconvert "!" video/x-raw,format=NV12,width=1920,height=1080,framerate=60000/1001,pixel-aspect-ratio=1/1 "!" vah264enc rate-control=cbr bitrate=5000 key-int-max=60 b-frames=0 target-usage=7 "!" h264parse config-interval=-1 "!" sink. decklinkaudiosrc device-number=4 channels=8 "!" queue max-size-buffers=100 leaky=downstream "!" audiorate "!" audioconvert "!" audioresample quality=9 "!" audio/x-raw,rate=48000,channels=8 "!" deinterleave name=adl interleave name=ali adl.src_0 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x1" "!" ali.sink_0 adl.src_1 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x2" "!" ali.sink_1 adl.src_2 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x4" "!" ali.sink_2 adl.src_3 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x8" "!" ali.sink_3 adl.src_4 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x10" "!" ali.sink_4 adl.src_5 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x20" "!" ali.sink_5 adl.src_6 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x400" "!" ali.sink_6 adl.src_7 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x800" "!" ali.sink_7 ali. "!" audioconvert "!" "audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f" "!" opusenc bitrate=384000 frame-size=10 "!" sink. cc.caption "!" queue max-size-buffers=8 leaky=downstream "!" ccconverter "!" closedcaption/x-cea-608,format=raw "!" filesink location=/run/nexvue/captions/ch4.ccraw buffer-mode=unbuffered sync=false append=false
+
+Jul 28 22:51:52 dcwasof2nexvue01 bash[26406]: Redistribute latency...
+Jul 28 22:51:52 dcwasof2nexvue01 bash[26406]: INFO:
+Jul 28 22:51:52 dcwasof2nexvue01 bash[26406]: ../sys/decklink/gstdecklinkvideosrc.cpp(1300): gst_decklink_video_src_create (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0:
+Jul 28 22:51:52 dcwasof2nexvue01 bash[26406]: Input source detected
+Jul 28 22:51:52 dcwasof2nexvue01 bash[26406]: Redistribute latency...
+Jul 28 22:51:52 dcwasof2nexvue01 bash[26406]: WARNING: from element /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: Dropped 111 old frames from 0:00:00.127707269 to 0:00:02.103265098
+Jul 28 22:51:52 dcwasof2nexvue01 bash[26406]: Additional debug info:
+Jul 28 22:51:52 dcwasof2nexvue01 bash[26406]: ../sys/decklink/gstdecklinkvideosrc.cpp(925): gst_decklink_video_src_got_frame (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0
+Jul 28 22:51:54 dcwasof2nexvue01 bash[26406]: Redistribute latency...
+Jul 28 22:51:54 dcwasof2nexvue01 bash[26406]: Redistribute latency...
+
+===== nexvue-encode@5 (exit 0) =====
+● nexvue-encode@5.service - NexVUE encoder channel 5 (DeckLink -> MediaMTX)
+     Loaded: loaded (/etc/systemd/system/nexvue-encode@.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-28 22:51:52 EDT; 8min ago
+   Main PID: 26474 (bash)
+      Tasks: 57 (limit: 18227)
+     Memory: 536.3M (peak: 543.7M)
+        CPU: 3min 32.074s
+     CGroup: /system.slice/system-nexvue\x2dencode.slice/nexvue-encode@5.service
+             ├─26474 bash /usr/local/bin/nexvue-encode.sh
+             ├─26662 python3 /usr/local/bin/nexvue-captions-decode.py --channel ch5 --fifo /run/nexvue/captions/ch5.ccraw --state-dir /run/nexvue/captions
+             └─26664 gst-launch-1.0 -e rtspclientsink name=sink "location=rtsp://127.0.0.1:8554/ch5?jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Ikk4TXU0UzdHbW9BIn0.eyJpYXQiOjE3ODUyOTAxNzAsImV4cCI6MjEwMDY1MDE3MCwiaXNzIjoibmV4dnVlLWVkZ2UiLCJzdWIiOiJuZXh2dWUtZW5jb2RlIiwibWVkaWFtdHhfcGVybWlzc2lvbnMiOlt7ImFjdGlvbiI6InB1Ymxpc2giLCJwYXRoIjoiIn0seyJhY3Rpb24iOiJhcGkifV19.dGbo3znxmuXcs3_azRaYNG80pB1vp-oq7x4cflOpM5QYkUzd8QIhtnHFL9y1IZRQ9Yrm_eop48Fb8PuJU8CS3nhVThA02zuUiLwqFsWDJupZg5IUsTOdymybYfqvifwH8QZj66_uFC83Abjt6JCJhKBSMLqpKWNdAPDUl3elTsQ9UGzLUc0ScesumgW11t_cp6cxGWwVb96bnfGv8lt3GnawjEwchpEGMQjkJRKsgM4L_xpqDzwseUjti8CSDsUZWuIku-Qct7UOnd7PX1e5OhXLclURiq_8VXssuw22t2UxgZzHLL7D0-7XwJ4bVobLrG3unzbiNepAGrAvtyNn1w" protocols=tcp decklinkvideosrc device-number=5 mode=auto buffer-size=2 drop-no-signal-frames=false output-cc=true "!" queue max-size-buffers=4 leaky=downstream "!" ccextractor name=cc cc. "!" queue max-size-buffers=4 leaky=downstream "!" watchdog timeout=3000 "!" deinterlace fields=all method=greedyh "!" videorate "!" videoscale "!" videoconvert "!" video/x-raw,format=NV12,width=1920,height=1080,framerate=60000/1001,pixel-aspect-ratio=1/1 "!" vah264enc rate-control=cbr bitrate=5000 key-int-max=60 b-frames=0 target-usage=7 "!" h264parse config-interval=-1 "!" sink. decklinkaudiosrc device-number=5 channels=8 "!" queue max-size-buffers=100 leaky=downstream "!" audiorate "!" audioconvert "!" audioresample quality=9 "!" audio/x-raw,rate=48000,channels=8 "!" deinterleave name=adl interleave name=ali adl.src_0 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x1" "!" ali.sink_0 adl.src_1 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x2" "!" ali.sink_1 adl.src_2 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x4" "!" ali.sink_2 adl.src_3 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x8" "!" ali.sink_3 adl.src_4 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x10" "!" ali.sink_4 adl.src_5 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x20" "!" ali.sink_5 adl.src_6 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x400" "!" ali.sink_6 adl.src_7 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x800" "!" ali.sink_7 ali. "!" audioconvert "!" "audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f" "!" opusenc bitrate=384000 frame-size=10 "!" sink. cc.caption "!" queue max-size-buffers=8 leaky=downstream "!" ccconverter "!" closedcaption/x-cea-608,format=raw "!" filesink location=/run/nexvue/captions/ch5.ccraw buffer-mode=unbuffered sync=false append=false
+
+Jul 28 22:51:55 dcwasof2nexvue01 bash[26664]: Redistribute latency...
+Jul 28 22:51:55 dcwasof2nexvue01 bash[26664]: INFO:
+Jul 28 22:51:55 dcwasof2nexvue01 bash[26664]: ../sys/decklink/gstdecklinkvideosrc.cpp(1300): gst_decklink_video_src_create (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0:
+Jul 28 22:51:55 dcwasof2nexvue01 bash[26664]: Input source detected
+Jul 28 22:51:55 dcwasof2nexvue01 bash[26664]: Redistribute latency...
+Jul 28 22:51:55 dcwasof2nexvue01 bash[26664]: WARNING: from element /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: Dropped 58 old frames from 0:00:00.138759564 to 0:00:02.072572937
+Jul 28 22:51:55 dcwasof2nexvue01 bash[26664]: Additional debug info:
+Jul 28 22:51:55 dcwasof2nexvue01 bash[26664]: ../sys/decklink/gstdecklinkvideosrc.cpp(925): gst_decklink_video_src_got_frame (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0
+Jul 28 22:51:56 dcwasof2nexvue01 bash[26664]: Redistribute latency...
+Jul 28 22:51:57 dcwasof2nexvue01 bash[26664]: Redistribute latency...
+
+===== nexvue-encode@6 (exit 0) =====
+● nexvue-encode@6.service - NexVUE encoder channel 6 (DeckLink -> MediaMTX)
+     Loaded: loaded (/etc/systemd/system/nexvue-encode@.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-28 22:51:54 EDT; 8min ago
+   Main PID: 26740 (bash)
+      Tasks: 57 (limit: 18227)
+     Memory: 536.5M (peak: 543.1M)
+        CPU: 3min 27.904s
+     CGroup: /system.slice/system-nexvue\x2dencode.slice/nexvue-encode@6.service
+             ├─26740 bash /usr/local/bin/nexvue-encode.sh
+             ├─26946 python3 /usr/local/bin/nexvue-captions-decode.py --channel ch6 --fifo /run/nexvue/captions/ch6.ccraw --state-dir /run/nexvue/captions
+             └─26948 gst-launch-1.0 -e rtspclientsink name=sink "location=rtsp://127.0.0.1:8554/ch6?jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Ikk4TXU0UzdHbW9BIn0.eyJpYXQiOjE3ODUyOTAxNzAsImV4cCI6MjEwMDY1MDE3MCwiaXNzIjoibmV4dnVlLWVkZ2UiLCJzdWIiOiJuZXh2dWUtZW5jb2RlIiwibWVkaWFtdHhfcGVybWlzc2lvbnMiOlt7ImFjdGlvbiI6InB1Ymxpc2giLCJwYXRoIjoiIn0seyJhY3Rpb24iOiJhcGkifV19.dGbo3znxmuXcs3_azRaYNG80pB1vp-oq7x4cflOpM5QYkUzd8QIhtnHFL9y1IZRQ9Yrm_eop48Fb8PuJU8CS3nhVThA02zuUiLwqFsWDJupZg5IUsTOdymybYfqvifwH8QZj66_uFC83Abjt6JCJhKBSMLqpKWNdAPDUl3elTsQ9UGzLUc0ScesumgW11t_cp6cxGWwVb96bnfGv8lt3GnawjEwchpEGMQjkJRKsgM4L_xpqDzwseUjti8CSDsUZWuIku-Qct7UOnd7PX1e5OhXLclURiq_8VXssuw22t2UxgZzHLL7D0-7XwJ4bVobLrG3unzbiNepAGrAvtyNn1w" protocols=tcp decklinkvideosrc device-number=6 mode=auto buffer-size=2 drop-no-signal-frames=false output-cc=true "!" queue max-size-buffers=4 leaky=downstream "!" ccextractor name=cc cc. "!" queue max-size-buffers=4 leaky=downstream "!" watchdog timeout=3000 "!" deinterlace fields=all method=greedyh "!" videorate "!" videoscale "!" videoconvert "!" video/x-raw,format=NV12,width=1920,height=1080,framerate=60000/1001,pixel-aspect-ratio=1/1 "!" vah264enc rate-control=cbr bitrate=5000 key-int-max=60 b-frames=0 target-usage=7 "!" h264parse config-interval=-1 "!" sink. decklinkaudiosrc device-number=6 channels=8 "!" queue max-size-buffers=100 leaky=downstream "!" audiorate "!" audioconvert "!" audioresample quality=9 "!" audio/x-raw,rate=48000,channels=8 "!" deinterleave name=adl interleave name=ali adl.src_0 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x1" "!" ali.sink_0 adl.src_1 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x2" "!" ali.sink_1 adl.src_2 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x4" "!" ali.sink_2 adl.src_3 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x8" "!" ali.sink_3 adl.src_4 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x10" "!" ali.sink_4 adl.src_5 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x20" "!" ali.sink_5 adl.src_6 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x400" "!" ali.sink_6 adl.src_7 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x800" "!" ali.sink_7 ali. "!" audioconvert "!" "audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f" "!" opusenc bitrate=384000 frame-size=10 "!" sink. cc.caption "!" queue max-size-buffers=8 leaky=downstream "!" ccconverter "!" closedcaption/x-cea-608,format=raw "!" filesink location=/run/nexvue/captions/ch6.ccraw buffer-mode=unbuffered sync=false append=false
+
+Jul 28 22:51:57 dcwasof2nexvue01 bash[26948]: Redistribute latency...
+Jul 28 22:51:57 dcwasof2nexvue01 bash[26948]: INFO:
+Jul 28 22:51:57 dcwasof2nexvue01 bash[26948]: ../sys/decklink/gstdecklinkvideosrc.cpp(1300): gst_decklink_video_src_create (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0:
+Jul 28 22:51:57 dcwasof2nexvue01 bash[26948]: Input source detected
+Jul 28 22:51:57 dcwasof2nexvue01 bash[26948]: Redistribute latency...
+Jul 28 22:51:57 dcwasof2nexvue01 bash[26948]: WARNING: from element /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: Dropped 58 old frames from 0:00:00.137407441 to 0:00:02.091079050
+Jul 28 22:51:57 dcwasof2nexvue01 bash[26948]: Additional debug info:
+Jul 28 22:51:57 dcwasof2nexvue01 bash[26948]: ../sys/decklink/gstdecklinkvideosrc.cpp(925): gst_decklink_video_src_got_frame (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0
+Jul 28 22:51:59 dcwasof2nexvue01 bash[26948]: Redistribute latency...
+Jul 28 22:52:00 dcwasof2nexvue01 bash[26948]: Redistribute latency...
+
+===== nexvue-encode@7 (exit 0) =====
+● nexvue-encode@7.service - NexVUE encoder channel 7 (DeckLink -> MediaMTX)
+     Loaded: loaded (/etc/systemd/system/nexvue-encode@.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-28 22:51:57 EDT; 8min ago
+   Main PID: 27082 (bash)
+      Tasks: 57 (limit: 18227)
+     Memory: 537.2M (peak: 544.0M)
+        CPU: 3min 27.099s
+     CGroup: /system.slice/system-nexvue\x2dencode.slice/nexvue-encode@7.service
+             ├─27082 bash /usr/local/bin/nexvue-encode.sh
+             ├─27208 python3 /usr/local/bin/nexvue-captions-decode.py --channel ch7 --fifo /run/nexvue/captions/ch7.ccraw --state-dir /run/nexvue/captions
+             └─27210 gst-launch-1.0 -e rtspclientsink name=sink "location=rtsp://127.0.0.1:8554/ch7?jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Ikk4TXU0UzdHbW9BIn0.eyJpYXQiOjE3ODUyOTAxNzAsImV4cCI6MjEwMDY1MDE3MCwiaXNzIjoibmV4dnVlLWVkZ2UiLCJzdWIiOiJuZXh2dWUtZW5jb2RlIiwibWVkaWFtdHhfcGVybWlzc2lvbnMiOlt7ImFjdGlvbiI6InB1Ymxpc2giLCJwYXRoIjoiIn0seyJhY3Rpb24iOiJhcGkifV19.dGbo3znxmuXcs3_azRaYNG80pB1vp-oq7x4cflOpM5QYkUzd8QIhtnHFL9y1IZRQ9Yrm_eop48Fb8PuJU8CS3nhVThA02zuUiLwqFsWDJupZg5IUsTOdymybYfqvifwH8QZj66_uFC83Abjt6JCJhKBSMLqpKWNdAPDUl3elTsQ9UGzLUc0ScesumgW11t_cp6cxGWwVb96bnfGv8lt3GnawjEwchpEGMQjkJRKsgM4L_xpqDzwseUjti8CSDsUZWuIku-Qct7UOnd7PX1e5OhXLclURiq_8VXssuw22t2UxgZzHLL7D0-7XwJ4bVobLrG3unzbiNepAGrAvtyNn1w" protocols=tcp decklinkvideosrc device-number=7 mode=auto buffer-size=2 drop-no-signal-frames=false output-cc=true "!" queue max-size-buffers=4 leaky=downstream "!" ccextractor name=cc cc. "!" queue max-size-buffers=4 leaky=downstream "!" watchdog timeout=3000 "!" deinterlace fields=all method=greedyh "!" videorate "!" videoscale "!" videoconvert "!" video/x-raw,format=NV12,width=1920,height=1080,framerate=60000/1001,pixel-aspect-ratio=1/1 "!" vah264enc rate-control=cbr bitrate=5000 key-int-max=60 b-frames=0 target-usage=7 "!" h264parse config-interval=-1 "!" sink. decklinkaudiosrc device-number=7 channels=8 "!" queue max-size-buffers=100 leaky=downstream "!" audiorate "!" audioconvert "!" audioresample quality=9 "!" audio/x-raw,rate=48000,channels=8 "!" deinterleave name=adl interleave name=ali adl.src_0 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x1" "!" ali.sink_0 adl.src_1 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x2" "!" ali.sink_1 adl.src_2 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x4" "!" ali.sink_2 adl.src_3 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x8" "!" ali.sink_3 adl.src_4 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x10" "!" ali.sink_4 adl.src_5 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x20" "!" ali.sink_5 adl.src_6 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x400" "!" ali.sink_6 adl.src_7 "!" queue max-size-buffers=8 leaky=downstream "!" audioconvert "!" "audio/x-raw,channels=1,channel-mask=(bitmask)0x800" "!" ali.sink_7 ali. "!" audioconvert "!" "audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f" "!" opusenc bitrate=384000 frame-size=10 "!" sink. cc.caption "!" queue max-size-buffers=8 leaky=downstream "!" ccconverter "!" closedcaption/x-cea-608,format=raw "!" filesink location=/run/nexvue/captions/ch7.ccraw buffer-mode=unbuffered sync=false append=false
+
+Jul 28 22:51:59 dcwasof2nexvue01 bash[27210]: Redistribute latency...
+Jul 28 22:51:59 dcwasof2nexvue01 bash[27210]: INFO:
+Jul 28 22:51:59 dcwasof2nexvue01 bash[27210]: ../sys/decklink/gstdecklinkvideosrc.cpp(1300): gst_decklink_video_src_create (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0:
+Jul 28 22:51:59 dcwasof2nexvue01 bash[27210]: Input source detected
+Jul 28 22:51:59 dcwasof2nexvue01 bash[27210]: Redistribute latency...
+Jul 28 22:51:59 dcwasof2nexvue01 bash[27210]: WARNING: from element /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: Dropped 58 old frames from 0:00:00.126323698 to 0:00:02.079986018
+Jul 28 22:51:59 dcwasof2nexvue01 bash[27210]: Additional debug info:
+Jul 28 22:51:59 dcwasof2nexvue01 bash[27210]: ../sys/decklink/gstdecklinkvideosrc.cpp(925): gst_decklink_video_src_got_frame (): /GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0
+Jul 28 22:52:01 dcwasof2nexvue01 bash[27210]: Redistribute latency...
+Jul 28 22:52:02 dcwasof2nexvue01 bash[27210]: Redistribute latency...
+
+===== nexvue-encode@8 (exit 3) =====
+○ nexvue-encode@8.service - NexVUE encoder channel 8 (DeckLink -> MediaMTX)
+     Loaded: loaded (/etc/systemd/system/nexvue-encode@.service; disabled; preset: enabled)
+     Active: inactive (dead)
+
+===== nexvue-encode@9 (exit 3) =====
+○ nexvue-encode@9.service - NexVUE encoder channel 9 (DeckLink -> MediaMTX)
+     Loaded: loaded (/etc/systemd/system/nexvue-encode@.service; disabled; preset: enabled)
+     Active: inactive (dead)
+

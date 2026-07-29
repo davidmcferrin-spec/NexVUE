@@ -1,0 +1,24 @@
+2026-07-28T22:31:33-04:00 dcwasof2nexvue01 systemd[1]: Starting nexvue-metrics.service - NexVUE usage metrics collector (no network listener)...
+2026-07-28T22:31:33-04:00 dcwasof2nexvue01 systemd[1]: Started nexvue-metrics.service - NexVUE usage metrics collector (no network listener).
+2026-07-28T22:31:33-04:00 dcwasof2nexvue01 python3[2368665]: [nexvue-metrics] database ready at /var/lib/nexvue/metrics.db
+2026-07-28T22:31:33-04:00 dcwasof2nexvue01 python3[2368665]: [nexvue-metrics] collector running, polling every 15.0s, db=/var/lib/nexvue/metrics.db (no HTTP server — reads happen via PHP querying this SQLite file directly)
+2026-07-28T22:31:33-04:00 dcwasof2nexvue01 python3[2368665]: [nexvue-metrics] pruned samples older than 1782700293 (30 day retention)
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 systemd[1]: Stopping nexvue-metrics.service - NexVUE usage metrics collector (no network listener)...
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 systemd[1]: nexvue-metrics.service: Deactivated successfully.
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 systemd[1]: Stopped nexvue-metrics.service - NexVUE usage metrics collector (no network listener).
+-- Boot 7dc65741f33b4e2ba2f12ad984e68e0d --
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 systemd[1]: Starting nexvue-metrics.service - NexVUE usage metrics collector (no network listener)...
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 systemd[1]: Started nexvue-metrics.service - NexVUE usage metrics collector (no network listener).
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 python3[2099]: [nexvue-metrics] database ready at /var/lib/nexvue/metrics.db
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 python3[2099]: [nexvue-metrics] collector running, polling every 15.0s, db=/var/lib/nexvue/metrics.db (no HTTP server — reads happen via PHP querying this SQLite file directly)
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 python3[2099]: [nexvue-metrics] MediaMTX API poll failed: <urlopen error [Errno 111] Connection refused>
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 python3[2099]: [nexvue-metrics] MediaMTX webrtcsessions poll failed: <urlopen error [Errno 111] Connection refused>
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 python3[2099]: [nexvue-metrics] pruned samples older than 1782700500 (30 day retention)
+2026-07-28T22:43:03-04:00 dcwasof2nexvue01 systemd[1]: Stopping nexvue-metrics.service - NexVUE usage metrics collector (no network listener)...
+2026-07-28T22:43:03-04:00 dcwasof2nexvue01 systemd[1]: nexvue-metrics.service: Deactivated successfully.
+2026-07-28T22:43:03-04:00 dcwasof2nexvue01 systemd[1]: Stopped nexvue-metrics.service - NexVUE usage metrics collector (no network listener).
+2026-07-28T22:43:03-04:00 dcwasof2nexvue01 systemd[1]: Starting nexvue-metrics.service - NexVUE usage metrics collector (no network listener)...
+2026-07-28T22:43:03-04:00 dcwasof2nexvue01 systemd[1]: Started nexvue-metrics.service - NexVUE usage metrics collector (no network listener).
+2026-07-28T22:43:03-04:00 dcwasof2nexvue01 python3[14775]: [nexvue-metrics] database ready at /var/lib/nexvue/metrics.db
+2026-07-28T22:43:03-04:00 dcwasof2nexvue01 python3[14775]: [nexvue-metrics] collector running, polling every 15.0s, db=/var/lib/nexvue/metrics.db (no HTTP server — reads happen via PHP querying this SQLite file directly)
+2026-07-28T22:43:04-04:00 dcwasof2nexvue01 python3[14775]: [nexvue-metrics] pruned samples older than 1782700983 (30 day retention)

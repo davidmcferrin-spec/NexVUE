@@ -62,13 +62,16 @@ try {
     if (!auth_bypass_enabled()) {
         auth_migrate();
         auth_require_roles(['admin', 'operator']);
+        auth_session_release();
     }
 } catch (RuntimeException $e) {
+    auth_session_release();
     $msg = $e->getMessage();
     http_response_code($msg === 'unauthorized' ? 401 : 403);
     echo json_encode(['error' => $msg === 'unauthorized' ? 'unauthorized' : 'forbidden']);
     exit;
 } catch (Throwable $e) {
+    auth_session_release();
     http_response_code(500);
     echo json_encode(['error' => 'auth store unavailable']);
     exit;

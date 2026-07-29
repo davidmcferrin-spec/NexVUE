@@ -1,0 +1,8 @@
+{
+  "path": "/var/lib/nexvue/metrics.db",
+  "host_samples": 63933,
+  "input_status": 514936,
+  "samples": 740781,
+  "totals": 65145,
+  "viewer_sessions": 522
+}

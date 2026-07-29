@@ -1,0 +1,9 @@
+{
+  "etc": "/etc/nexvue",
+  "data": "/var/lib/nexvue",
+  "run": "/run/nexvue",
+  "nexvue-encode.sh": "present",
+  "nexvue-support-bundle.py": "present",
+  "decklink-status": "present",
+  "decklink-audio-probe": "present"
+}

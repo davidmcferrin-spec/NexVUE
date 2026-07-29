@@ -1,0 +1,7 @@
+- URL userinfo (user:pass@) → ***:***@
+- password/passphrase/token field values → ***
+- SRT/RTSP URI credentials redacted in channel .env and mediamtx.yml
+- TLS private keys not included (fullchain presence marker only)
+- Caption FIFO raw streams and branding image bytes omitted
+- journals truncated per unit at 8388608 bytes if larger
+- metrics.db: schema + counts + host_samples window only (not full DB)

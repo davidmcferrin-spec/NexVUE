@@ -141,9 +141,11 @@ specifically because this box can't get additional ports opened.
   store, migrates legacy `/var/lib/nexvue/auth.db`, and smokes as www-data).
   MediaMTX JWKS is served on loopback `:9080` (`nexvue-jwks-loopback.conf`)
   so HTTPS redirects cannot break publish/WHEP JWT validation; setup patches
-  `mediamtx.yml` and restarts mediamtx + enabled encoders. Auth migrate/keys
-  are hot-path cheap (schema stamp + cached JWKS). HTML is soft-gated by
-  `nexvue-auth-gate.js`; APIs + WHEP JWT enforce access. Central catalog
+  `mediamtx.yml` and restarts mediamtx + enabled encoders. Auth hot path:
+  session snapshot cache + `session_write_close` after checks (captions SSE
+  must not hold the session lock), aliases read channel `.env` without sudo,
+  Player/Multiview start WHEP before waiting on aliases. HTML is soft-gated
+  by `nexvue-auth-gate.js`; APIs + WHEP JWT enforce access. Central catalog
   portal + Entra OIDC remain later. Real (non-self-signed) TLS for
   8889/9997/9998 still recommended before wider users.
 - **Phase 3: DMZ** — webrtcAdditionalHosts, bind MediaMTX API and status

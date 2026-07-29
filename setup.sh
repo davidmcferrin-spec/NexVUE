@@ -165,8 +165,12 @@ if ! id nexvue >/dev/null 2>&1; then
 else
   ok "user 'nexvue' exists"
 fi
-mkdir -p /etc/nexvue/channels
-ok "/etc/nexvue/channels ready"
+install -d -m 755 /etc/nexvue/channels
+# Player aliases reads these as www-data (no sudo) — keep world-readable.
+chmod 755 /etc/nexvue /etc/nexvue/channels 2>/dev/null || true
+chmod 644 /etc/nexvue/channels/*.env 2>/dev/null || true
+chmod 644 /etc/nexvue/nexvue.env 2>/dev/null || true
+ok "/etc/nexvue/channels ready (644 .env for www-data alias reads)"
 
 # Station-wide /etc/nexvue/nexvue.env (MAX_DEVICES etc.). Never overwrite a live
 # file. When absent, migrate a consistent legacy MAX_DEVICES from channel envs,

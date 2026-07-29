@@ -22,14 +22,18 @@ header('Cache-Control: no-store');
 
 try {
     if (!auth_bypass_enabled()) {
-        auth_migrate();
+        // Hot path (Player polls ~2s): session-cache auth, then release the
+        // session lock so captions SSE / WHEP JWT are not blocked.
         auth_require_any();
+        auth_session_release();
     }
 } catch (RuntimeException $e) {
+    auth_session_release();
     http_response_code($e->getMessage() === 'unauthorized' ? 401 : 403);
     echo json_encode(['error' => 'unauthorized']);
     exit;
 } catch (Throwable $e) {
+    auth_session_release();
     http_response_code(500);
     echo json_encode(['error' => 'auth store unavailable']);
     exit;

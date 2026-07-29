@@ -1,0 +1,77 @@
+# /etc/systemd/system/nexvue-encode@.service
+# /etc/systemd/system/nexvue-encode@.service
+#
+# Template unit: one instance per DeckLink channel.
+#   systemctl enable --now nexvue-encode@0 nexvue-encode@1 ...
+# Instance name %i selects /etc/nexvue/channels/%i.env
+#
+# ExecStart runs nexvue-encode.sh (gst-launch DeckLink → MediaMTX). The
+# Phase 1.5 supervisor/slate path was rolled back after field instability;
+# nexvue-supervisor.py remains in the tree for a future redesign only.
+# Encoders restart independently of each other and of MediaMTX; if MediaMTX
+# bounces, rtspclientsink fails, the unit exits, and systemd relaunches it.
+
+[Unit]
+Description=NexVUE encoder channel %i (DeckLink -> MediaMTX)
+After=network-online.target mediamtx.service nexvue-decklink-configure.service
+Wants=mediamtx.service nexvue-decklink-configure.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=nexvue
+Group=nexvue
+# video  -> DeckLink device nodes (Desktop Video driver)
+# render -> /dev/dri/renderD* for VA-API (Quick Sync) encoding
+SupplementaryGroups=video render
+
+# Some GStreamer elements probe a dconf/GLib settings cache under $HOME. The
+# nexvue user's home is /nonexistent (locked down), which spams the journal
+# with harmless "Read-only file system" dconf warnings. Point HOME and the
+# XDG cache at the unit's private tmp so those elements write to a throwaway
+# location instead of complaining. PrivateTmp=yes makes /tmp per-unit.
+Environment=HOME=/tmp
+Environment=XDG_CACHE_HOME=/tmp/.cache
+Environment=GST_REGISTRY=/tmp/.gstreamer-registry.bin
+
+# Channel config is SOURCED through a shell rather than read via
+# EnvironmentFile=, because systemd's native parser does NOT strip inline
+# "# comments" or surrounding whitespace — a line like "MAX_DEVICES=4  # note"
+# would pass the comment through as part of the value. Sourcing in bash gives
+# normal shell semantics (comments and whitespace handled correctly).
+# `set -a` exports every assignment so the script sees them as environment.
+#
+# Precedence: channel file first, then station-wide /etc/nexvue/nexvue.env so
+# global keys (e.g. MAX_DEVICES) override legacy per-channel copies. Missing
+# global file is fine — channel + script defaults still apply.
+# CHANNEL_ID=%i is set after sourcing for tooling consistency (encode.sh does
+# not require it).
+ExecStart=/usr/bin/bash -c 'set -a; f="/etc/nexvue/channels/%i.env"; [ -r "$f" ] || { echo "missing env file: $f" >&2; exit 71; }; . "$f"; g="/etc/nexvue/nexvue.env"; [ -r "$g" ] && . "$g"; CHANNEL_ID=%i; exec /usr/local/bin/nexvue-encode.sh'
+
+Restart=always
+RestartSec=3
+# Bound stop so a stuck Gst NULL (rtspclientsink TCP) cannot sit on the
+# default 90s TimeoutStopSec.
+TimeoutStopSec=12
+# If the pipeline crash-loops (e.g. driver fault), keep trying forever —
+# an unattended edge node must recover without hands. Rate-limited so the
+# journal stays readable.
+
+# Caption side channel state (CEA-608 decode → JSON for Apache/PHP).
+# Shared across encode@N — Preserve=yes so stopping one unit (or restart-all)
+# does not tear down /run/nexvue while siblings still write (EROFS storm).
+RuntimeDirectory=nexvue
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# Hardening — encoder needs devices and loopback network, nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/etc/nexvue
+# ProtectSystem=strict makes the tree RO; RuntimeDirectory is auto-added, but
+# keep an explicit path so captions JSON/FIFOs stay writable under /run/nexvue.
+ReadWritePaths=/run/nexvue
+
+[Install]
+WantedBy=multi-user.target

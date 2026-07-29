@@ -579,14 +579,16 @@
       }
       pane.base = val;
       pane.captionClient.setChannel(val);
-      await loadChannelMeta();
-      if (pane.vu) {
-        pane.vu.setLayout(audioLayoutByPath[val] || "51_sap");
-        pane.vu.setEmbeds(audioEmbedsByPath[val] || [1, 2, 3, 4, 5, 6, 7, 8]);
-      }
       empty.classList.add("hidden");
       acquireWakeLock();
+      // Tune immediately — aliases/meta refresh must not block WHEP.
       openPane(pane);
+      loadChannelMeta().then(() => {
+        if (pane.vu && pane.base === val) {
+          pane.vu.setLayout(audioLayoutByPath[val] || "51_sap");
+          pane.vu.setEmbeds(audioEmbedsByPath[val] || [1, 2, 3, 4, 5, 6, 7, 8]);
+        }
+      }).catch(() => {});
     });
     select.addEventListener("click", e => e.stopPropagation());
 

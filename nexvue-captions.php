@@ -114,15 +114,19 @@ if (PHP_SAPI === 'cli' && getenv('NEXVUE_CAPTIONS_HTTP') === false) {
 require_once __DIR__ . '/nexvue-auth-lib.php';
 try {
     if (!auth_bypass_enabled()) {
-        auth_migrate();
         auth_require_any();
+        // CRITICAL: release session before the long-lived SSE loop — holding
+        // the lock starves Player status polls and WHEP JWT minting.
+        auth_session_release();
     }
 } catch (RuntimeException $e) {
+    auth_session_release();
     http_response_code($e->getMessage() === 'unauthorized' ? 401 : 403);
     header('Content-Type: application/json');
     echo json_encode(['error' => 'unauthorized']);
     exit;
 } catch (Throwable $e) {
+    auth_session_release();
     http_response_code(500);
     header('Content-Type: application/json');
     echo json_encode(['error' => 'auth store unavailable']);

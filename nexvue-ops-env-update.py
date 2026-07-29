@@ -444,6 +444,11 @@ def cmd_write(n: int) -> int:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 1
     path.write_text(new_text, encoding="utf-8")
+    try:
+        # Player aliases reads as www-data without sudo.
+        path.chmod(0o644)
+    except OSError:
+        pass
     keys = parse_env_text(new_text)
     print(json.dumps({"ok": True, "id": n, "keys": keys}))
     return 0

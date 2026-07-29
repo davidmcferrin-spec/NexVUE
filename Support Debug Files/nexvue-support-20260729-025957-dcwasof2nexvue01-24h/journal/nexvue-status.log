@@ -1,0 +1,23 @@
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 systemd[1]: Starting nexvue-status.service - NexVUE input status daemon...
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 systemd[1]: Started nexvue-status.service - NexVUE input status daemon.
+2026-07-28T22:31:31-04:00 dcwasof2nexvue01 python3[2368576]: [nexvue-status] serving http on 0.0.0.0:9998, polling /usr/local/bin/decklink-status every 5.0s (log level INFO)
+2026-07-28T22:31:45-04:00 dcwasof2nexvue01 python3[2368576]: [nexvue-status] poll cycle took 13.5s, approaching the 15s timeout
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 systemd[1]: Stopping nexvue-status.service - NexVUE input status daemon...
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 systemd[1]: nexvue-status.service: Deactivated successfully.
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 systemd[1]: Stopped nexvue-status.service - NexVUE input status daemon.
+2026-07-28T22:34:39-04:00 dcwasof2nexvue01 systemd[1]: nexvue-status.service: Consumed 2.646s CPU time.
+-- Boot 7dc65741f33b4e2ba2f12ad984e68e0d --
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 systemd[1]: Starting nexvue-status.service - NexVUE input status daemon...
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 systemd[1]: Started nexvue-status.service - NexVUE input status daemon.
+2026-07-28T22:35:00-04:00 dcwasof2nexvue01 python3[2086]: [nexvue-status] serving http on 0.0.0.0:9998, polling /usr/local/bin/decklink-status every 5.0s (log level INFO)
+2026-07-28T22:40:12-04:00 dcwasof2nexvue01 python3[2086]: [nexvue-status] poll summary: 54 total, 0 failed, 0 consecutive fail, last ok 0s ago, last duration 7.88s, uptime 312s
+2026-07-28T22:43:04-04:00 dcwasof2nexvue01 systemd[1]: Stopping nexvue-status.service - NexVUE input status daemon...
+2026-07-28T22:43:04-04:00 dcwasof2nexvue01 systemd[1]: nexvue-status.service: Deactivated successfully.
+2026-07-28T22:43:04-04:00 dcwasof2nexvue01 systemd[1]: Stopped nexvue-status.service - NexVUE input status daemon.
+2026-07-28T22:43:04-04:00 dcwasof2nexvue01 systemd[1]: nexvue-status.service: Consumed 7.821s CPU time.
+2026-07-28T22:43:04-04:00 dcwasof2nexvue01 systemd[1]: Starting nexvue-status.service - NexVUE input status daemon...
+2026-07-28T22:43:04-04:00 dcwasof2nexvue01 systemd[1]: Started nexvue-status.service - NexVUE input status daemon.
+2026-07-28T22:43:04-04:00 dcwasof2nexvue01 python3[14863]: [nexvue-status] serving http on 0.0.0.0:9998, polling /usr/local/bin/decklink-status every 5.0s (log level INFO)
+2026-07-28T22:48:12-04:00 dcwasof2nexvue01 python3[14863]: [nexvue-status] poll summary: 26 total, 0 failed, 0 consecutive fail, last ok 0s ago, last duration 6.94s, uptime 308s
+2026-07-28T22:53:18-04:00 dcwasof2nexvue01 python3[14863]: [nexvue-status] poll summary: 58 total, 0 failed, 0 consecutive fail, last ok 0s ago, last duration 1.27s, uptime 614s
+2026-07-28T22:58:18-04:00 dcwasof2nexvue01 python3[14863]: [nexvue-status] poll summary: 106 total, 0 failed, 0 consecutive fail, last ok 0s ago, last duration 1.24s, uptime 914s
