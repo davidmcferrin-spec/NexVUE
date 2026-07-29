@@ -76,6 +76,8 @@ struct DeviceInfo {
 
 static void readAttrs(IDeckLink* deckLink, DeviceInfo& info)
 {
+    // SDK 11+: IDeckLinkAttributes was removed; profile/duplex/group live on
+    // IDeckLinkProfileAttributes (DeckLinkAPI.h in SDK 16).
     IDeckLinkProfileAttributes* pattrs = nullptr;
     if (deckLink->QueryInterface(IID_IDeckLinkProfileAttributes, (void**)&pattrs) == S_OK && pattrs) {
         int64_t v = 0;
@@ -87,21 +89,11 @@ static void readAttrs(IDeckLink* deckLink, DeviceInfo& info)
             info.duplex = v;
             info.duplexReadable = true;
         }
-        pattrs->Release();
-    }
-
-    IDeckLinkAttributes* attrs = nullptr;
-    if (deckLink->QueryInterface(IID_IDeckLinkAttributes, (void**)&attrs) == S_OK && attrs) {
-        int64_t v = 0;
-        if (!info.duplexReadable && attrs->GetInt(BMDDeckLinkDuplex, &v) == S_OK) {
-            info.duplex = v;
-            info.duplexReadable = true;
-        }
-        if (attrs->GetInt(BMDDeckLinkDeviceGroupID, &v) == S_OK) {
+        if (pattrs->GetInt(BMDDeckLinkDeviceGroupID, &v) == S_OK) {
             info.deviceGroupId = v;
             info.groupReadable = true;
         }
-        attrs->Release();
+        pattrs->Release();
     }
 
     IDeckLinkProfileManager* mgr = nullptr;

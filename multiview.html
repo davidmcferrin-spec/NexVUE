@@ -1207,7 +1207,10 @@
   // Friendly labels + AUDIO_LAYOUT / AUDIO_EMBEDS from ops API when available.
   async function loadChannelMeta() {
     try {
-      const res = await fetch("nexvue-ops.php?action=aliases", { cache: "no-store" });
+      const res = await fetch("nexvue-ops.php?action=aliases", {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
       const data = await res.json();
       if (!data || !data.ok || !data.aliases) return;
       if (data.audio_layouts) {

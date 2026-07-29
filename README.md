@@ -192,7 +192,8 @@ API ports are loopback-bound (Phase 3).
 - **Page gate:** static HTML is still served by Apache; `nexvue-auth-gate.js`
   redirects unauthenticated browsers to `/login.html`. APIs
   (`nexvue-ops.php`, `nexvue-metrics.php`, …) and WHEP JWTs enforce the real
-  access control.
+  access control. Player/Multiview channel pickers list ch0–ch7 for any
+  logged-in user; only share links (`?t=`) filter to granted channels.
 - **Roles:** `admin` (Users, Services, Settings, Metrics, watch), `operator`
   (Settings, Metrics, watch), `viewer` (Player/Multiview only).
 - **Share links:** Users page — named, one or more channels, absolute expiry

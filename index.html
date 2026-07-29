@@ -82,6 +82,8 @@
     display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     margin-bottom: 12px; flex-shrink: 0;
   }
+  /* Let channel buttons participate in .bar flex gap (not a nested inline box). */
+  #channels { display: contents; }
   input, button {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge);
     border-radius: 4px; padding: 7px 10px; font: inherit;
@@ -1051,7 +1053,9 @@
   // targets immediately; then refresh labels/devices from ops.
   function renderChannelButtons(aliases, devices) {
     const prevActive = currentBase;
-    $("channels").innerHTML = "";
+    const host = $("channels");
+    if (!host) return;
+    host.innerHTML = "";
     for (let i = 0; i < 8; i++) {
       const path = `ch${i}`;
       if (!NexVueAuth.channelAllowed(path, authUser)) continue;
@@ -1067,7 +1071,7 @@
       b.title = path === label ? path : `${label} (${path})`;
       if (prevActive === path) b.classList.add("active");
       b.addEventListener("click", () => connectChannel(path, b));
-      $("channels").appendChild(b);
+      host.appendChild(b);
     }
   }
 
@@ -1075,7 +1079,10 @@
     let aliases = {};
     let devices = {};
     try {
-      const res = await fetch("nexvue-ops.php?action=aliases", { cache: "no-store" });
+      const res = await fetch("nexvue-ops.php?action=aliases", {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
       const data = await res.json();
       if (data && data.ok && data.aliases) aliases = data.aliases;
       if (data && data.ok && data.devices) devices = data.devices;

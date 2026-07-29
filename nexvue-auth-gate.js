@@ -158,9 +158,22 @@
 
   function channelAllowed(path, user) {
     user = user || _user;
-    if (!user || !user.channels) return true;
-    var base = String(path || "").replace(/lo$/, "");
-    return user.channels.indexOf(base) >= 0 || user.channels.indexOf(path) >= 0;
+    if (!user) return true;
+    // Local users (admin/operator/viewer) always see every station channel.
+    // Only share-link sessions are channel-scoped. Do not treat a missing /
+    // empty / non-array `channels` on a user session as "deny all" — that
+    // blanked the Player/Multiview channel picker after login.
+    if (user.auth !== "share") return true;
+    var channels = user.channels;
+    if (!Array.isArray(channels) || channels.length === 0) return false;
+    var p = String(path || "").toLowerCase();
+    var base = /^ch[0-7]lo$/.test(p) ? p.slice(0, -2) : p;
+    for (var i = 0; i < channels.length; i++) {
+      var c = String(channels[i] || "").toLowerCase();
+      if (c === p || c === base) return true;
+      if (/^ch[0-7]lo$/.test(c) && c.slice(0, -2) === base) return true;
+    }
+    return false;
   }
 
   function currentUser() {

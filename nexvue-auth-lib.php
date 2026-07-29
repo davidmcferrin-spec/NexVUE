@@ -967,7 +967,11 @@ function auth_me_payload(): ?array {
             'role' => 'viewer',
             'share_id' => $share['id'],
             'name' => $share['name'],
-            'channels' => $channels,
+            // Force a JSON array (not object) so channelAllowed can iterate.
+            'channels' => array_values(array_filter(
+                $channels,
+                static fn($c): bool => is_string($c) && $c !== ''
+            )),
             'expires_at' => $share['expires_at'],
             'must_change_password' => false,
         ];
