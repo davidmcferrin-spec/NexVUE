@@ -229,7 +229,7 @@
 <body>
 <nav class="topnav" aria-label="NexVUE">
   <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
-  <img class="nav-logo" src="nexvue-logo.php" alt="" hidden>
+  <img class="nav-logo" alt="" hidden>
   <a href="/index.html" class="active">Player</a>
   <a href="/multiview.html">Multiview</a>
   <a href="/metrics.html" data-auth-role="admin,operator">Metrics</a>
@@ -961,8 +961,13 @@
   // transform is never overridden by the browser's fullscreen video styling.
   const wrap = document.querySelector(".videowrap");
   let mir = false, flp = false;
-  let rot = NexVueUI.getRotatePref();
+  const UI = window.NexVueUI || window.NexVUEUI;
+  if (!UI) {
+    console.error("nexvue-ui.js failed to load — rotate/theme helpers unavailable");
+  }
+  let rot = UI ? UI.getRotatePref() : 0;
   function paintRotateBtns() {
+    if (!$("rot-cw") || !$("rot-ccw")) return;
     $("rot-cw").classList.toggle("active", rot === 90 || rot === 180);
     $("rot-ccw").classList.toggle("active", rot === 270 || rot === 180);
     $("rot-cw").title =
@@ -971,7 +976,7 @@
       "Rotate 90° counter-clockwise (now " + rot + "° CW from upright). Portrait / tilted sources.";
   }
   function applyTransform() {
-    NexVueUI.applyVideoOrient(video, wrap, { rotate: rot, mirror: mir, flip: flp });
+    if (UI) UI.applyVideoOrient(video, wrap, { rotate: rot, mirror: mir, flip: flp });
     paintRotateBtns();
   }
   $("mirror").addEventListener("click", () => {
@@ -981,11 +986,11 @@
     flp = !flp; $("flip").classList.toggle("active", flp); applyTransform();
   });
   $("rot-cw").addEventListener("click", () => {
-    rot = NexVueUI.setRotatePref(rot + 90);
+    rot = UI ? UI.setRotatePref(rot + 90) : ((rot + 90) % 360);
     applyTransform();
   });
   $("rot-ccw").addEventListener("click", () => {
-    rot = NexVueUI.setRotatePref(rot - 90);
+    rot = UI ? UI.setRotatePref(rot - 90) : ((rot + 270) % 360);
     applyTransform();
   });
 

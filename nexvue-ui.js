@@ -187,10 +187,37 @@
       img.hidden = true;
       img.setAttribute("hidden", "");
     });
-    // Force a fresh check when Settings replaces the logo.
-    if (!img.getAttribute("src")) {
-      img.setAttribute("src", LOGO_SRC);
+    // Probe before setting <img src> so a missing logo (PHP 404 by design)
+    // does not spam the console. No logo → stay hidden.
+    img.removeAttribute("src");
+    img.hidden = true;
+    img.setAttribute("hidden", "");
+    var show = function () {
+      img.setAttribute("src", LOGO_SRC + "?t=" + String(Date.now()));
+    };
+    if (typeof global.fetch !== "function") {
+      show();
+      return;
     }
+    global
+      .fetch(LOGO_SRC, {
+        method: "HEAD",
+        credentials: "same-origin",
+        cache: "no-store",
+      })
+      .then(function (res) {
+        if (res.ok) {
+          show();
+          return;
+        }
+        // Some Apache configs reject HEAD on PHP — fall back once.
+        if (res.status === 405 || res.status === 501) {
+          show();
+        }
+      })
+      .catch(function () {
+        /* stay hidden */
+      });
   }
 
   /** Bust cache after upload/delete so all open tabs can refresh the img. */
@@ -283,7 +310,9 @@
     loadVersion();
   });
 
-  global.NexVUEUI = {
+  // Canonical name matches NexVueAuth / NexVueVu / NexVueCaptions. Keep
+  // NexVUEUI as a compat alias (older pages / cached HTML).
+  var api = {
     getTheme: getTheme,
     setTheme: setTheme,
     toggleTheme: toggleTheme,
@@ -296,4 +325,6 @@
     ROTATE_KEY: ROTATE_KEY,
     LOGO_SRC: LOGO_SRC,
   };
+  global.NexVueUI = api;
+  global.NexVUEUI = api;
 })(typeof window !== "undefined" ? window : globalThis);
