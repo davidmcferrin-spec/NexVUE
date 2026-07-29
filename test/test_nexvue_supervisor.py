@@ -47,6 +47,7 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(cfg.channel_path, "ch0")
         self.assertEqual(cfg.max_devices, 8)
         self.assertEqual(cfg.deint_fields, "all")
+        self.assertEqual(cfg.deint_method, "yadif")
         self.assertEqual(cfg.output_fps, "60000/1001")
         self.assertEqual(cfg.bitrate_kbps, 5000)
         self.assertEqual(cfg.gop_frames, 60)
@@ -58,7 +59,7 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(cfg.audio_resample_quality, 9)
         self.assertEqual(cfg.rtsp_url, "rtsp://127.0.0.1:8554/ch0")
         self.assertEqual(cfg.video_encoder, "vah264enc")
-        self.assertFalse(cfg.lo_enable)
+        self.assertTrue(cfg.lo_enable)
         self.assertTrue(cfg.captions_enable)
         # Phase 1.5 knobs — generous loss debounce, quick acquire, 3s retry.
         self.assertEqual(cfg.signal_loss_debounce_s, 15.0)

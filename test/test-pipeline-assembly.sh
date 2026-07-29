@@ -23,19 +23,20 @@ expect_usage_64() {
 	[ "$rc" -eq 64 ] || fail "$1 (expected exit 64, got $rc)"
 }
 
-# T1: default single-rendition pipeline
-out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 run_encode)
+# T1: single-rendition pipeline (LO explicitly off)
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false run_encode)
 grep -q "rtsp://127.0.0.1:8554/ch0" <<<"$out" || fail "T1 default RTSP url"
 grep -q "watchdog" <<<"$out" || fail "T1 watchdog present"
+grep -q "deinterlace fields=all method=yadif" <<<"$out" || fail "T1 default method=yadif"
 
 # T1b: publish JWT appended to RTSP URLs when NEXVUE_PUBLISH_JWT is set
-out_jwt=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 NEXVUE_PUBLISH_JWT=test.jwt.token run_encode)
+out_jwt=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false NEXVUE_PUBLISH_JWT=test.jwt.token run_encode)
 grep -q 'location=rtsp://127.0.0.1:8554/ch0?jwt=test.jwt.token' <<<"$out_jwt" \
   || fail "T1b HI RTSP must append ?jwt="
 out_jwt_lo=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true NEXVUE_PUBLISH_JWT=test.jwt.token run_encode)
 grep -q 'location=rtsp://127.0.0.1:8554/ch0lo?jwt=test.jwt.token' <<<"$out_jwt_lo" \
   || fail "T1b LO RTSP must append ?jwt="
-out_nw=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 WATCHDOG_MS=0 run_encode)
+out_nw=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false WATCHDOG_MS=0 run_encode)
 grep -q "watchdog" <<<"$out_nw" && fail "T1 WATCHDOG_MS=0 must omit watchdog"
 grep -q "width=1920,height=1080,framerate=60000/1001" <<<"$out" || fail "T1 normalization caps"
 grep -q "opusenc" <<<"$out" || fail "T1 audio present by default"
@@ -43,7 +44,7 @@ grep -q "audiorate" <<<"$out" || fail "T1 audiorate present (gapless timestamp f
 grep -q "tee" <<<"$out" && fail "T1 no tee when LO disabled"
 
 # T2: LO rendition adds tee, second sink, lo caps, audio tee
-out=$(DEVICE_NUMBER=3 CHANNEL_PATH=ch3 LO_ENABLE=true run_encode)
+out=$(DEVICE_NUMBER=3 CHANNEL_PATH=ch3 LO_ENABLE=true LO_PRESET=720p run_encode)
 grep -q "name=sinklo location=rtsp://127.0.0.1:8554/ch3lo" <<<"$out" || fail "T2 lo sink url"
 grep -q "tee name=vt" <<<"$out" || fail "T2 video tee"
 grep -q "width=1280,height=720,framerate=30000/1001" <<<"$out" || fail "T2 lo caps"
