@@ -142,6 +142,34 @@ echo json_encode([
         self.assertFalse(data["after"])
         self.assertTrue(data["has_token"])
 
+    def test_share_channels_preserve_order(self) -> None:
+        data = self._php(
+            """
+$ordered = auth_normalize_share_channels(['ch3', 'ch1', 'ch0'], 'player');
+echo json_encode(['ordered' => $ordered]);
+"""
+        )
+        self.assertEqual(data["ordered"], ["ch3", "ch1", "ch0"])
+
+    def test_multiview_share_max_four(self) -> None:
+        data = self._php(
+            """
+$ok = auth_normalize_share_channels(['ch0', 'ch1', 'ch2', 'ch3'], 'multiview');
+$err = null;
+try {
+  auth_normalize_share_channels(['ch0', 'ch1', 'ch2', 'ch3', 'ch4'], 'multiview');
+  $err = 'expected throw';
+} catch (InvalidArgumentException $e) {
+  $err = $e->getMessage();
+}
+$player = auth_normalize_share_channels(['ch0', 'ch1', 'ch2', 'ch3', 'ch4'], 'player');
+echo json_encode(['ok' => $ok, 'err' => $err, 'player' => $player]);
+"""
+        )
+        self.assertEqual(data["ok"], ["ch0", "ch1", "ch2", "ch3"])
+        self.assertIn("at most 4", data["err"].lower())
+        self.assertEqual(data["player"], ["ch0", "ch1", "ch2", "ch3", "ch4"])
+
     def test_jwt_permissions_paths(self) -> None:
         data = self._php(
             """

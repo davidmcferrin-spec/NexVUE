@@ -273,8 +273,11 @@ try {
         }
         $duration = isset($body['duration_s']) ? (int)$body['duration_s'] : null;
         $absolute = isset($body['expires_at']) ? (string)$body['expires_at'] : null;
+        $pageKey = (isset($body['page']) && is_string($body['page']) && $body['page'] === 'multiview')
+            ? 'multiview'
+            : 'player';
         try {
-            $normalized = auth_normalize_channels($channels);
+            $normalized = auth_normalize_share_channels($channels, $pageKey);
             if (!auth_user_allows_channels($actor, $normalized)) {
                 auth_api_fail(403, 'channel not allowed for your account');
             }
@@ -286,9 +289,7 @@ try {
         $pub = auth_share_row_public($created['row'], true, $created['token']);
         $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-        $page = isset($body['page']) && is_string($body['page']) && $body['page'] === 'multiview'
-            ? 'multiview.html'
-            : 'index.html';
+        $page = ($pageKey === 'multiview') ? 'multiview.html' : 'index.html';
         $pub['url'] = $scheme . '://' . $host . '/' . $page . '?t=' . rawurlencode($created['token']);
         auth_api_ok(['share' => $pub]);
     }

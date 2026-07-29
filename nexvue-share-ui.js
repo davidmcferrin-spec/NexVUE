@@ -112,7 +112,9 @@
       "<h3>Share link</h3>" +
       '<label for="nv-share-name">Name</label>' +
       '<input id="nv-share-name" maxlength="128" required>' +
-      "<label>Channels (one or more)</label>" +
+      '<label id="nv-share-ch-lab">' +
+      (page === "multiview" ? "Channels (up to 4)" : "Channels (one or more)") +
+      "</label>" +
       '<div class="nv-share-ch" id="nv-share-channels"></div>' +
       '<label for="nv-share-mode">Expiry</label>' +
       '<select id="nv-share-mode">' +
@@ -167,18 +169,56 @@
       chBox.appendChild(lab);
     });
 
+    var maxShareChannels = page === "multiview" ? 4 : 0; // 0 = no cap
+
+    function syncChannelMax() {
+      if (!maxShareChannels) {
+        chBox.querySelectorAll("input").forEach(function (inp) {
+          inp.disabled = false;
+        });
+        return;
+      }
+      var checked = chBox.querySelectorAll("input:checked");
+      var atMax = checked.length >= maxShareChannels;
+      chBox.querySelectorAll("input").forEach(function (inp) {
+        inp.disabled = atMax && !inp.checked;
+      });
+    }
+
+    chBox.addEventListener("change", function (ev) {
+      if (!maxShareChannels) return;
+      var t = ev.target;
+      if (!t || t.tagName !== "INPUT") return;
+      var checked = chBox.querySelectorAll("input:checked");
+      if (checked.length > maxShareChannels && t.checked) {
+        t.checked = false;
+      }
+      syncChannelMax();
+    });
+
     function setDefaults() {
       var defaults = (getDefaultChannels() || []).map(basePath);
+      var ordered = [];
       var set = {};
       defaults.forEach(function (c) {
+        if (!/^ch[0-7]$/.test(c) || set[c]) return;
         set[c] = true;
+        ordered.push(c);
       });
+      if (maxShareChannels && ordered.length > maxShareChannels) {
+        ordered = ordered.slice(0, maxShareChannels);
+        set = {};
+        ordered.forEach(function (c) {
+          set[c] = true;
+        });
+      }
       chBox.querySelectorAll("input").forEach(function (inp) {
         inp.checked = !!set[inp.value];
       });
       if (!chBox.querySelector("input:checked") && chBox.querySelector("input")) {
         chBox.querySelector("input").checked = true;
       }
+      syncChannelMax();
     }
 
     function loadList() {
@@ -248,13 +288,32 @@
       var once = dlg.querySelector("#nv-share-once");
       err.textContent = "";
       once.hidden = true;
-      var channels = Array.from(chBox.querySelectorAll("input:checked")).map(
-        function (c) {
-          return c.value;
-        }
-      );
+      // Prefer getDefaultChannels order (Multiview pane order) so auto-tune
+      // restores the same layout; then any extra checked boxes in DOM order.
+      var checkedSet = {};
+      chBox.querySelectorAll("input:checked").forEach(function (inp) {
+        checkedSet[inp.value] = true;
+      });
+      var channels = [];
+      var seen = {};
+      (getDefaultChannels() || []).map(basePath).forEach(function (c) {
+        if (!checkedSet[c] || seen[c]) return;
+        seen[c] = true;
+        channels.push(c);
+      });
+      chBox.querySelectorAll("input:checked").forEach(function (inp) {
+        var c = inp.value;
+        if (seen[c]) return;
+        seen[c] = true;
+        channels.push(c);
+      });
       if (!channels.length) {
         err.textContent = "select at least one channel";
+        return;
+      }
+      if (maxShareChannels && channels.length > maxShareChannels) {
+        err.textContent =
+          "multiview shares allow at most " + maxShareChannels + " channels";
         return;
       }
       var body = {

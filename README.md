@@ -207,10 +207,13 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   watch + create/revoke own shares from Player/Multiview Share), `viewer`
   (Player/Multiview only).
 - **Share links:** Users page (admin) or Player/Multiview **Share**
-  (`nexvue-share-ui.js`, admin/sharer). Named, one or more channels, absolute
-  expiry **or** duration (always required; no open-ended), revocable. Admin
-  sees all tokens + creator; sharer sees own. URL form
-  `/index.html?t=<token>` or `/multiview.html?t=<token>` (token shown once).
+  (`nexvue-share-ui.js`, admin/sharer). Named, one or more channels (Multiview
+  shares capped at **4**, matching dual/quad panes), absolute expiry **or**
+  duration (always required; no open-ended), revocable. Admin sees all tokens
+  + creator; sharer sees own. URL form `/index.html?t=<token>` or
+  `/multiview.html?t=<token>` (token shown once). Opening a Multiview share
+  **auto-tunes** panes from the token's channel list (Dual for 1–2, Quad for
+  3–4; order preserved from create).
 - **Player audio defaults (first visit):** volume 20%, muted, VU meters off
   (`nexvue-vu.js` localStorage). Existing prefs unchanged.
 - **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`
@@ -318,6 +321,8 @@ Then from a LAN machine:
   toggle; click a pane for audio (one unmuted at a time) and to focus the
   **Session metrics** bottom drawer on that pane. Same NexVUE brand → QR
   share. Global **CC** toggle matches the player preference key.
+  **⛶ Fullscreen** hides nav, control bar, session metrics, and per-pane
+  channel selectors for a near-frameless wall (Esc / button to exit).
 - **Usage metrics:** top nav → Metrics (`/metrics.html` + `nexvue-metrics.php`
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
@@ -1028,7 +1033,9 @@ expired; JWT auth is the lasting gate.
 - **Multiviewer defaults to LO** with a global HI/LO toggle (quad = up to four
   simultaneous WHEP sessions). Only one pane is unmuted at a time — click a
   pane to select audio. Switching Dual↔Quad tears down hidden panes so unused
-  sessions do not linger.
+  sessions do not linger. Multiview share links (`?t=`) are limited to four
+  channels and auto-tune panes on open; Fullscreen is near-frameless (chrome
+  + pane bars hidden).
 - **Mirror/flip/rotate persist through fullscreen.** Applied as an inline
   `transform` on the video (not a CSS class), and the dedicated "⛶
   Fullscreen" button fullscreens the wrapper `<div>`, not the `<video>`

@@ -9,6 +9,8 @@
   Defaults to LO (kinder when 2–4 sessions are open) with a global HI/LO
   toggle. Only one pane is audible at a time — click a pane to hear it.
   Per-channel VU meters + solo are browser-local (nexvue-vu.js).
+  Share links (?t=) cap at 4 channels and auto-tune panes on open.
+  Fullscreen hides chrome (nav/bar/pane selectors) for a near-frameless wall.
   Reuses the same WHEP + latency-hint pattern as index.html.
 -->
 <script src="nexvue-ui.js"></script>
@@ -216,14 +218,26 @@
   }
   #stat-tip.visible { display: block; }
 
-  body:fullscreen .stage, body:-webkit-full-screen .stage {
-    flex: 1; min-height: 0;
+  /* Near-frameless wall mode: hide all chrome so dual/quad fill the display. */
+  body:fullscreen, body:-webkit-full-screen {
+    padding: 0;
+    background: #000;
   }
-  body:fullscreen #grid, body:-webkit-full-screen #grid { gap: 4px; }
+  body:fullscreen .stage, body:-webkit-full-screen .stage {
+    flex: 1; min-height: 0; width: 100%; height: 100%;
+  }
+  body:fullscreen #grid, body:-webkit-full-screen #grid { gap: 0; }
   body:fullscreen .topnav, body:-webkit-full-screen .topnav,
   body:fullscreen .bar, body:-webkit-full-screen .bar,
-  body:fullscreen .stats-drawer, body:-webkit-full-screen .stats-drawer { display: none; }
-  body:fullscreen, body:-webkit-full-screen { padding: 4px; }
+  body:fullscreen .stats-drawer, body:-webkit-full-screen .stats-drawer,
+  body:fullscreen .pane-bar, body:-webkit-full-screen .pane-bar,
+  body:fullscreen .audio-badge, body:-webkit-full-screen .audio-badge { display: none; }
+  body:fullscreen .pane, body:-webkit-full-screen .pane {
+    border: none; border-radius: 0;
+  }
+  body:fullscreen .pane.audio-active, body:-webkit-full-screen .pane.audio-active {
+    outline: 2px solid var(--acc); outline-offset: -2px;
+  }
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
     background: var(--backdrop); align-items: center; justify-content: center; padding: 16px;
@@ -276,7 +290,7 @@
     <input type="range" id="volume" min="0" max="100" step="1" value="20" aria-label="Volume">
     <span id="vol-pct">100%</span>
   </span>
-  <button id="fs" title="Fullscreen multiview">⛶ Fullscreen</button>
+  <button id="fs" title="Fullscreen multiview (hides chrome for a frameless wall)">⛶ Fullscreen</button>
   <span id="state">idle</span>
 </div>
 
@@ -1134,6 +1148,36 @@
 
   for (let i = 0; i < PANE_COUNT; i++) createPane(i);
   applyLayout("quad");
+
+  // Share links: auto-tune panes from the token's channel list (≤4),
+  // Dual for 1–2 channels, Quad for 3–4. Pane order matches share order.
+  function autoTuneFromShare() {
+    if (!authUser || authUser.auth !== "share") return;
+    const raw = Array.isArray(authUser.channels) ? authUser.channels : [];
+    const list = [];
+    const seen = {};
+    for (const c of raw) {
+      let b = String(c || "").toLowerCase();
+      if (/^ch[0-7]lo$/.test(b)) b = b.slice(0, -2);
+      if (!/^ch[0-7]$/.test(b) || seen[b]) continue;
+      if (!NexVueAuth.channelAllowed(b, authUser)) continue;
+      seen[b] = true;
+      list.push(b);
+      if (list.length >= PANE_COUNT) break;
+    }
+    if (!list.length) return;
+    const mode = list.length <= 2 ? "dual" : "quad";
+    applyLayout(mode);
+    const n = Math.min(list.length, mode === "dual" ? 2 : PANE_COUNT);
+    for (let i = 0; i < n; i++) {
+      const pane = panes[i];
+      if (!pane) continue;
+      pane.select.value = list[i];
+      pane.select.dispatchEvent(new Event("change"));
+    }
+  }
+  autoTuneFromShare();
+
   setInterval(pollRtcStats, 1000);
   setInterval(pollApiStats, 2000);
   setInterval(pollInputStatus, 2000);

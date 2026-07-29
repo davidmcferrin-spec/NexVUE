@@ -556,7 +556,14 @@ function auth_normalize_role(string $role): string {
     return $role;
 }
 
-function auth_normalize_channels(array $channels): array {
+/**
+ * Normalize channel bases (ch0–ch7). Dedupe; optionally sort (default).
+ * Pass $sort=false for share links so Multiview auto-tune keeps pane order.
+ *
+ * @param list<mixed> $channels
+ * @return list<string>
+ */
+function auth_normalize_channels(array $channels, bool $sort = true): array {
     $bases = [];
     foreach ($channels as $c) {
         if (!is_string($c)) {
@@ -572,9 +579,32 @@ function auth_normalize_channels(array $channels): array {
         $bases[$c] = true;
     }
     $list = array_keys($bases);
-    sort($list, SORT_NATURAL);
+    if ($sort) {
+        sort($list, SORT_NATURAL);
+    }
     if ($list === []) {
         throw new InvalidArgumentException('at least one channel required');
+    }
+    return $list;
+}
+
+/** Max channels on a Multiview share link (matches dual/quad pane count). */
+const NEXVUE_AUTH_MULTIVIEW_SHARE_MAX = 4;
+
+/**
+ * Normalize share channels; Multiview page capped at NEXVUE_AUTH_MULTIVIEW_SHARE_MAX.
+ *
+ * @param list<mixed> $channels
+ * @return list<string>
+ */
+function auth_normalize_share_channels(array $channels, string $page = 'player'): array {
+    $page = ($page === 'multiview') ? 'multiview' : 'player';
+    // Preserve submission order for Multiview pane auto-tune.
+    $list = auth_normalize_channels($channels, false);
+    if ($page === 'multiview' && count($list) > NEXVUE_AUTH_MULTIVIEW_SHARE_MAX) {
+        throw new InvalidArgumentException(
+            'multiview shares allow at most ' . NEXVUE_AUTH_MULTIVIEW_SHARE_MAX . ' channels'
+        );
     }
     return $list;
 }
@@ -912,7 +942,8 @@ function auth_share_create(string $name, array $channels, string $expiresAt, ?st
     if ($name === '' || strlen($name) > 128) {
         throw new InvalidArgumentException('invalid share name');
     }
-    $channels = auth_normalize_channels($channels);
+    // Preserve order (caller may already have validated via auth_normalize_share_channels).
+    $channels = auth_normalize_channels($channels, false);
     // Re-validate expiry is set (no open-ended).
     if ($expiresAt === '' || strtotime($expiresAt) === false) {
         throw new InvalidArgumentException('expires_at required');

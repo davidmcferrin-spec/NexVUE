@@ -184,7 +184,12 @@
     <h3>Create share link</h3>
     <label for="share-name">Name</label>
     <input id="share-name" required maxlength="128">
-    <label>Channels (one or more)</label>
+    <label for="share-page">Page</label>
+    <select id="share-page">
+      <option value="player" selected>Player</option>
+      <option value="multiview">Multiview (up to 4 channels)</option>
+    </select>
+    <label id="share-ch-lab">Channels (one or more)</label>
     <div class="ch-grid" id="share-channels"></div>
     <label for="share-mode">Expiry</label>
     <select id="share-mode">
@@ -403,20 +408,59 @@
     document.getElementById("share-hours-lab").hidden = !custom;
   };
 
+  function sharePageKey() {
+    return document.getElementById("share-page").value === "multiview" ? "multiview" : "player";
+  }
+  function syncShareChannelMax() {
+    const max = sharePageKey() === "multiview" ? 4 : 0;
+    document.getElementById("share-ch-lab").textContent =
+      max ? "Channels (up to 4)" : "Channels (one or more)";
+    if (!max) {
+      chGrid.querySelectorAll("input").forEach(function (c) { c.disabled = false; });
+      return;
+    }
+    const checked = chGrid.querySelectorAll("input:checked");
+    if (checked.length > max) {
+      Array.from(checked).slice(max).forEach(function (c) { c.checked = false; });
+    }
+    const atMax = chGrid.querySelectorAll("input:checked").length >= max;
+    chGrid.querySelectorAll("input").forEach(function (c) {
+      c.disabled = atMax && !c.checked;
+    });
+  }
+  document.getElementById("share-page").onchange = syncShareChannelMax;
+  chGrid.addEventListener("change", function (ev) {
+    if (sharePageKey() !== "multiview") return;
+    const t = ev.target;
+    if (!t || t.tagName !== "INPUT") return;
+    if (chGrid.querySelectorAll("input:checked").length > 4 && t.checked) {
+      t.checked = false;
+    }
+    syncShareChannelMax();
+  });
+
   document.getElementById("share-add").onclick = function () {
     document.getElementById("share-name").value = "";
     document.getElementById("share-err").textContent = "";
+    document.getElementById("share-page").value = "player";
     chGrid.querySelectorAll("input").forEach(function (c) { c.checked = false; });
+    syncShareChannelMax();
     document.getElementById("share-dlg").showModal();
   };
   document.getElementById("share-cancel").onclick = function () { document.getElementById("share-dlg").close(); };
   document.getElementById("share-save").onclick = async function () {
     const err = document.getElementById("share-err");
     err.textContent = "";
+    const page = sharePageKey();
     const channels = Array.from(chGrid.querySelectorAll("input:checked")).map(function (c) { return c.value; });
+    if (page === "multiview" && channels.length > 4) {
+      err.textContent = "multiview shares allow at most 4 channels";
+      return;
+    }
     const body = {
       name: document.getElementById("share-name").value,
       channels: channels,
+      page: page,
     };
     if (document.getElementById("share-mode").value === "absolute") {
       const local = document.getElementById("share-expires").value;
