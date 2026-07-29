@@ -49,12 +49,17 @@ ExecStart=/usr/bin/bash -c 'set -a; f="/etc/nexvue/channels/%i.env"; [ -r "$f" ]
 
 Restart=always
 RestartSec=3
+# Exit 75 = auto-park after consecutive unlocked DeckLink starts
+# (nexvue-encode-auto-park.sh). Do not restart; ExecStopPost disables the unit.
+RestartPreventExitStatus=75
 # Bound stop so a stuck Gst NULL (rtspclientsink TCP) cannot sit on the
 # default 90s TimeoutStopSec.
 TimeoutStopSec=12
 # If the pipeline crash-loops (e.g. driver fault), keep trying forever —
 # an unattended edge node must recover without hands. Rate-limited so the
 # journal stays readable.
+# Root helper: if encode left a park request, disable this instance (empty BNC).
+ExecStopPost=+/usr/local/bin/nexvue-encode-auto-park.sh stoppost %i
 
 # Caption side channel state (CEA-608 decode → JSON for Apache/PHP).
 # Shared across encode@N — Preserve=yes so stopping one unit (or restart-all)

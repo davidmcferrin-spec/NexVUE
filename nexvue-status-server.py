@@ -11,9 +11,9 @@ Endpoint:
                       "poll_stats": {...}}   (poll_stats is self-diagnostic —
                       see PollStats below)
 
-Runs as a systemd service (nexvue-status.service), port 9998.
-Phase 3 note: like the MediaMTX API, this is LAN-trust-level. In the DMZ it
-should bind to loopback and be relayed by the portal heartbeat, not exposed.
+Runs as a systemd service (nexvue-status.service), loopback port 9998
+(default NEXVUE_STATUS_BIND=127.0.0.1). Player UI uses nexvue-status.php;
+do not expose :9998 off-box.
 
 Robustness notes (see README "nexvue-status hardening" if that section
 exists, or CLAUDE.md known-issues):
@@ -58,7 +58,11 @@ HELPER_TIMEOUT_S = 15.0
 # helper's worst case, /status flips stale=true mid-poll and the player
 # blanks its signal dots even though the daemon is healthy.
 STALE_AFTER_S = HELPER_TIMEOUT_S + POLL_INTERVAL_S
-LISTEN_ADDR = ("0.0.0.0", 9998)
+# Phase 3 / DMZ: loopback only. Player dots use nexvue-status.php; metrics
+# hits 127.0.0.1. Override with NEXVUE_STATUS_BIND=0.0.0.0 only on a trusted
+# LAN if a remote probe must reach :9998 directly (not for DMZ).
+_BIND_HOST = os.environ.get("NEXVUE_STATUS_BIND", "127.0.0.1").strip() or "127.0.0.1"
+LISTEN_ADDR = (_BIND_HOST, 9998)
 
 # Log level: DEBUG surfaces every poll cycle and every request; INFO (default)
 # keeps a periodic summary plus warnings/errors, without per-poll spam over a

@@ -23,14 +23,14 @@ A `nexvue-metrics` component provides usage/analytics history (bandwidth,
 viewers, active streams, input lock/format, per-viewer IP/channel
 drill-down, Mon–Sun day-and-hour usage heatmap (equal-date averages), host CPU/memory, CPU/GPU package
 temperatures from sysfs hwmon, and Intel iGPU Video/Render engine busy %
-for capacity correlation) — explicitly NOT the health/uptime monitoring
-planned for CheckMK in Phase 4. Split deliberately across two pieces with
-no shared
-network surface: `nexvue-metrics-server.py` is a background collector with
-NO listening port at all (writes to SQLite only); `nexvue-metrics.php`
-(runs inside Apache) reads that SQLite file directly, read-only, and serves
-JSON. No reverse proxy, no WebSocket, no new firewall rule — chosen
-specifically because this box can't get additional ports opened.
+for capacity correlation) — explicitly NOT health/uptime alerting (Phase 4
+portal ops via outbound heartbeats; DMZ edge cannot pull TRUSTED monitors).
+Split deliberately across two pieces with no shared network surface:
+`nexvue-metrics-server.py` is a background collector with NO listening port
+at all (writes to SQLite only); `nexvue-metrics.php` (runs inside Apache)
+reads that SQLite file directly, read-only, and serves JSON. No reverse
+proxy, no WebSocket, no new firewall rule — chosen specifically because
+this box can't get additional ports opened.
 
 ## Architecture (agreed, do not relitigate casually)
 
@@ -82,8 +82,8 @@ specifically because this box can't get additional ports opened.
   excluded), host CPU/memory + Temperature chart (CPU/GPU °C with 95 °C
   limit lines) + iGPU Video engine % (Render % collected but not charted),
   `nexvue-metrics` + `nexvue-metrics.php`) landed
-  ahead of schedule — separate from and not a
-  substitute for the Phase 4 CheckMK health-monitoring plan below.
+  ahead of schedule — separate from and not a substitute for Phase 4
+  portal health via outbound heartbeats.
   Metrics reporting timezone defaults to America/New_York (heatmap buckets,
   chart labels, custom From/To); override with `NEXVUE_METRICS_TZ` only if needed.
   Metrics Kick writes a short-lived registry via `nexvue-ops.php`
@@ -129,8 +129,8 @@ specifically because this box can't get additional ports opened.
   `nexvue-encode.sh`. The script itself was restored to the Phase-1-stable
   revision from immediately before supervisor/slate (`git 4095445^`) so
   supervisor-era pipeline drift is gone. `nexvue-supervisor.py` stays in
-  the tree unused. Park empty ports via Services Enable/Disable.
-  Captions/LO/metrics/ops UI remain. Assembly tests:
+  the tree unused. Empty ports auto-park after consecutive unlocks, or park
+  via Services Enable/Disable. Captions/LO/metrics/ops UI remain. Assembly tests:
   `test/test-pipeline-assembly.sh`.
 - **Phase 2: edge local auth landed** — bcrypt users (admin/operator/sharer/viewer),
   per-user channel ACL, named revocable share links with mandatory expiry
@@ -149,30 +149,33 @@ specifically because this box can't get additional ports opened.
   Player/Multiview start WHEP before waiting on aliases. HTML is soft-gated
   by `nexvue-auth-gate.js`; APIs + WHEP JWT enforce access. Central catalog
   portal + Entra OIDC remain later. Real (non-self-signed) TLS for
-  8889/9997/9998 still recommended before wider users.
-- **Phase 3: DMZ** — webrtcAdditionalHosts, bind MediaMTX API and status
-  daemon back to loopback (portal relays stats), Entra OIDC, CORS. (TLS
-  itself landed early, in Phase 1, ahead of schedule — see README TLS section.)
-- **Phase 4: fleet** — config mgmt, CheckMK checks (status daemon JSON +
-  MediaMTX /v3/paths/list), portal ops dashboard via outbound heartbeats.
+  Apache + WHEP `:8889` still recommended before wider users.
+- **Phase 3: DMZ** — MediaMTX API (`127.0.0.1:9997`) and status
+  (`NEXVUE_STATUS_BIND=127.0.0.1:9998`) are loopback-bound; Player uses
+  `nexvue-mediamtx-api.php` + `nexvue-status.php`. Remaining: Entra OIDC,
+  CORS, portal relays. (TLS landed early — see README TLS section.)
+- **Phase 4: fleet** — config mgmt; portal ops via **outbound** edge
+  heartbeats (status + MediaMTX summary). No inbound TRUSTED monitoring
+  agent (DMZ cannot pull TRUSTED).
 
 ## Known open items / risks
 
-- Empty Quad ports with `nexvue-encode@N` still enabled restart-loop
-  (`RestartSec=3`) — Phase 1.5 slate was rolled back. Enable encoders only
-  for patched Input connectors; closeout script warns and prints
-  `disable --now` for unlocked+active channels. Parking is also doable
-  from the Services page Enable/Disable toggle (encoder units only).
+- Empty Quad ports with `nexvue-encode@N` still enabled used to restart-loop
+  (`RestartSec=3`) after Phase 1.5 slate rollback. **Auto-park** now disables
+  the slot after `AUTO_PARK_UNLOCK_CYCLES` consecutive unlocked starts
+  (default 5 ≈ 15s; `0` = off; station `/etc/nexvue/nexvue.env` or per-channel).
+  Prefer enabling encoders only for patched Inputs; Services Enable/Disable
+  still parks/unparks by hand. Closeout may still hint `disable --now` for
+  unlocked+active channels before the streak completes.
 - Glass-to-glass latency still unmeasured with a burnt-in clock (datacenter
   deployment — no co-located source monitor). RTT-based estimate recorded in
   README; re-measure on bench when possible. Duo 2 connector-direction notes
   in README remain useful reference if a Duo is ever reinstalled.
 - Self-signed TLS cert (Apache's `ssl-cert-snakeoil` or similar) on
-  8889/9997 requires a one-time per-browser click-through — fine for
+  `:8889` requires a one-time per-browser click-through — fine for
   bench testing, plan a real cert before this reaches other users.
-  Player input-status dots no longer need a separate `:9998` trust click
-  (`nexvue-status.php` same-origin proxy); `:9998` TLS remains optional for
-  direct daemon clients / metrics collector URL scheme.
+  Player stats/dots use same-origin proxies (`nexvue-mediamtx-api.php`,
+  `nexvue-status.php`); `:9997`/`:9998` are loopback-only.
 - `decklink-status.cpp`'s active-detection probe takes ~0.7s per IDLE input
   it has to open and test; status daemon poll interval was raised to 5s
   (from 2s) to accommodate, and `STALE_AFTER_S` is set above the helper
@@ -183,8 +186,8 @@ specifically because this box can't get additional ports opened.
   GStreamer/driver combo (Arrow Lake, Ubuntu 24.04 HWE) — `gst-inspect-1.0
   vah264enc` is still the source of truth if a different box rejects a
   property.
-- MediaMTX API (:9997) and status daemon (:9998) are LAN-trust in Phase 1
-  config; MUST be loopback-bound before DMZ exposure (Phase 3).
+- MediaMTX API (:9997) and status daemon (:9998) bind loopback; do not
+  open them in ufw. `setup.sh --firewall` opens viewer ports only.
 - Auto-switch thresholds in `index.html` are conservative first guesses;
   tune from field data.
 

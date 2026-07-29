@@ -49,11 +49,13 @@ done
 REQUIRED_FILES=(
   mediamtx.yml mediamtx.service
   nexvue-encode.sh nexvue-supervisor.py nexvue-encode@.service
+  nexvue-encode-auto-park.sh
   nexvue-decklink-configure.service
   decklink-configure.cpp
   nexvue-status-server.py nexvue-status.service
   nexvue-metrics-server.py nexvue-metrics.service
-  nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js
+  nexvue-metrics.php nexvue-status.php nexvue-mediamtx-api.php
+  nexvue-captions.php nexvue-captions.js
   nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js
   metrics.html index.html multiview.html
   nexvue-ops.php services.html channels.html
@@ -227,6 +229,7 @@ else
   ok "installed mediamtx.yml"
 fi
 install -m 755 "${REPO_DIR}/nexvue-encode.sh" /usr/local/bin/nexvue-encode.sh
+install -m 755 "${REPO_DIR}/nexvue-encode-auto-park.sh" /usr/local/bin/nexvue-encode-auto-park.sh
 install -m 755 "${REPO_DIR}/nexvue-supervisor.py" /usr/local/bin/nexvue-supervisor.py
 install -m 755 "${REPO_DIR}/nexvue-status-server.py" /usr/local/bin/nexvue-status-server.py
 install -m 755 "${REPO_DIR}/nexvue-metrics-server.py" /usr/local/bin/nexvue-metrics-server.py
@@ -295,6 +298,12 @@ systemctl daemon-reload
 systemctl enable nexvue-decklink-configure.service >/dev/null 2>&1 \
   && ok "enabled nexvue-decklink-configure.service (half-duplex BNCs before encode)" \
   || warn "could not enable nexvue-decklink-configure.service"
+# Pick up status bind default (127.0.0.1) + unit file changes.
+if systemctl is-active --quiet nexvue-status 2>/dev/null; then
+  systemctl try-restart nexvue-status >/dev/null 2>&1 \
+    && ok "nexvue-status restarted (loopback :9998)" \
+    || warn "nexvue-status restart failed — sudo systemctl restart nexvue-status"
+fi
 ok "scripts + units installed, systemd reloaded"
 
 # Ops UI sudoers — validate before installing (a bad drop-in breaks sudo).
@@ -396,6 +405,7 @@ if [ -d "${WEBROOT}" ]; then
                  "${REPO_DIR}/metrics.html" \
                  "${REPO_DIR}/nexvue-metrics.php" \
                  "${REPO_DIR}/nexvue-status.php" \
+                 "${REPO_DIR}/nexvue-mediamtx-api.php" \
                  "${REPO_DIR}/nexvue-captions.php" \
                  "${REPO_DIR}/nexvue-captions.js" \
                  "${REPO_DIR}/nexvue-qr.js" \
@@ -467,7 +477,7 @@ if [ -n "${JWKS_URL}" ] && [ -f /etc/nexvue/mediamtx.yml ]; then
   PATCH_ARGS=(--jwks "${JWKS_URL}")
   [ -n "${JWKS_FP}" ] && PATCH_ARGS+=(--fingerprint "${JWKS_FP}")
   if python3 "${REPO_DIR}/nexvue-mediamtx-jwt-patch.py" /etc/nexvue/mediamtx.yml "${PATCH_ARGS[@]}"; then
-    ok "mediamtx.yml JWT auth → ${JWKS_URL}"
+    ok "mediamtx.yml JWT auth → ${JWKS_URL} (apiAddress=127.0.0.1:9997)"
     if systemctl is-active --quiet mediamtx 2>/dev/null; then
       systemctl restart mediamtx >/dev/null 2>&1 \
         && ok "mediamtx restarted (JWT/JWKS)" \
@@ -562,6 +572,9 @@ done
 [ -x /usr/local/bin/nexvue-encode.sh ] \
   && ok "nexvue-encode.sh present" \
   || warn "nexvue-encode.sh missing — nexvue-encode@N will not start"
+[ -x /usr/local/bin/nexvue-encode-auto-park.sh ] \
+  && ok "nexvue-encode-auto-park.sh present" \
+  || warn "nexvue-encode-auto-park.sh missing — empty-port auto-park disabled"
 # Supervisor is installed but not used by ExecStart (Phase 1.5 rolled back).
 [ -x /usr/local/bin/nexvue-supervisor.py ] \
   && ok "nexvue-supervisor.py present (deferred — not ExecStart)" \
@@ -592,7 +605,7 @@ else
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 if [ -d "${WEBROOT}" ]; then
-  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-share-ui.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php nexvue-auth.php nexvue-auth-lib.php nexvue-jwks.php nexvue-auth-gate.js login.html forgot.html reset.html users.html; do
+  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-mediamtx-api.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-share-ui.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php nexvue-auth.php nexvue-auth-lib.php nexvue-jwks.php nexvue-auth-gate.js login.html forgot.html reset.html users.html; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
   if [ -d /var/lib/nexvue/branding ]; then
@@ -623,6 +636,11 @@ if [ -f /etc/nexvue/mediamtx.yml ] && grep -qE '^\s*authMethod:\s*jwt\b' /etc/ne
 else
   warn "mediamtx.yml still open/internal — copy JWT auth block from repo mediamtx.yml (setup leaves existing yml untouched)"
 fi
+if [ -f /etc/nexvue/mediamtx.yml ] && grep -qE '^\s*apiAddress:\s*127\.0\.0\.1:9997\b' /etc/nexvue/mediamtx.yml; then
+  ok "mediamtx.yml apiAddress=127.0.0.1:9997 (loopback)"
+else
+  warn "mediamtx.yml apiAddress not loopback — re-run setup.sh (JWT patch sets 127.0.0.1:9997) or edit manually"
+fi
 if [ -f /etc/nexvue/nexvue.env ] && grep -qE '^\s*NEXVUE_PUBLISH_JWT=' /etc/nexvue/nexvue.env; then
   ok "NEXVUE_PUBLISH_JWT present in nexvue.env"
 else
@@ -635,7 +653,8 @@ for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
          nexvue-ops-audio-probe.sh nexvue-ops-support-bundle.sh \
          nexvue-support-bundle.py nexvue-ops-update.sh \
          nexvue-ops-env-update.py nexvue-phase1-closeout.sh \
-         nexvue-phase1-deploy-verify.sh nexvue-encode-storm-diagnose.sh; do
+         nexvue-phase1-deploy-verify.sh nexvue-encode-storm-diagnose.sh \
+         nexvue-encode-auto-park.sh; do
   [ -x "/usr/local/bin/$w" ] || [ -f "/usr/local/bin/$w" ] \
     && ok "ops helper: $w" || warn "ops helper missing: /usr/local/bin/$w"
 done
@@ -687,24 +706,26 @@ fi
   || warn "decklink-configure not installed (Duo/Quad BNC mapping; see step 5)"
 
 ###############################################################################
-# Optional: Phase 1 firewall rules (only with --firewall — never silent)
+# Optional: viewer firewall rules (only with --firewall — never silent)
 ###############################################################################
 if $APPLY_FIREWALL; then
-  step "Firewall (ufw) — Phase 1 LAN rules"
+  step "Firewall (ufw) — viewer ports (API/status are loopback-only)"
   if ! command -v ufw >/dev/null; then
     warn "ufw not installed — skipping (apt install ufw to use --firewall)"
   else
     # NOTE: does not enable ufw for you — enabling can drop your SSH session if
-    # 22 isn't already allowed. Opens NexVUE ports only; you enable ufw.
+    # 22 isn't already allowed. Opens viewer ports only; you enable ufw.
+    # :9997 / :9998 bind to 127.0.0.1 — do not open them.
     ufw allow 80/tcp comment 'NexVUE player (Apache)' >/dev/null
+    ufw allow 443/tcp comment 'NexVUE player (Apache TLS)' >/dev/null
     ufw allow 8889/tcp comment 'NexVUE WHEP signaling' >/dev/null
     ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)' >/dev/null
-    ufw allow 9997/tcp comment 'NexVUE MediaMTX API' >/dev/null
-    ufw allow 9998/tcp comment 'NexVUE status daemon' >/dev/null
     # Metrics has NO port at all — the collector doesn't listen on anything;
     # PHP reads its SQLite file directly and Apache serves the result on 443.
-    # See README "Usage Metrics Dashboard" for that install.
-    ok "NexVUE ports opened (80,8889,8189/udp+tcp,9997,9998)"
+    ok "NexVUE viewer ports opened (80,443,8889,8189/udp+tcp)"
+    if ufw status 2>/dev/null | grep -qE '\b9997\b|\b9998\b'; then
+      warn "ufw still allows 9997/9998 — remove those rules (API/status are loopback-only now)"
+    fi
     if ! ufw status | grep -q "Status: active"; then
       warn "ufw is NOT active — rules staged but not enforced. Ensure 22/ssh is allowed, then: sudo ufw enable"
     fi

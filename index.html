@@ -412,15 +412,12 @@
   const UP_LOSS = 0.005, UP_AFTER_S = 20;
   const SWITCH_COOLDOWN_MS = 10000;
 
-  // Service ports on the edge host. The page is served by Apache (port 80/443)
-  // but the three services live on their own ports on the SAME host — so we
-  // derive every URL from the hostname used to load the page, ignoring the
-  // page's own port. One edit here if a port ever changes.
-  const PORT = { whep: 8889, api: 9997, status: 9998 };
-  // Match the PAGE's own scheme. If Apache is served over HTTPS, the browser
-  // will block any fetch to plain HTTP as mixed content — so once the page is
-  // HTTPS, WHEP/API/status must be too (MediaMTX webrtcEncryption: yes, and
-  // the status daemon's NEXVUE_STATUS_TLS_CERT/_KEY, both set to match).
+  // WHEP signaling stays on its own port on the edge host. MediaMTX API
+  // (:9997) and status (:9998) are loopback-only — Player uses same-origin
+  // PHP proxies (nexvue-mediamtx-api.php / nexvue-status.php).
+  const PORT = { whep: 8889 };
+  // Match the PAGE's own scheme. If Apache is HTTPS, WHEP must be too
+  // (MediaMTX webrtcEncryption: yes).
   const PROTO = location.protocol === "https:" ? "https:" : "http:";
 
   // Auto-discovered once at load. Falls back to localhost when opened as a
@@ -428,22 +425,13 @@
   const EDGE_HOST = (location.hostname && location.hostname.length)
     ? location.hostname : "127.0.0.1";
 
-  function edgeUrl(service) {
-    return `${PROTO}//${EDGE_HOST}:${PORT[service]}`;
-  }
-
   function setState(text, cls) {
     stateEl.textContent = text;
     stateEl.className = cls || "";
   }
 
-  // WHEP / API / status all use the host that served this page.
   function whepBase() {
-    return edgeUrl("whep");
-  }
-
-  function serviceBase(service) {
-    return edgeUrl(service);
+    return `${PROTO}//${EDGE_HOST}:${PORT.whep}`;
   }
 
   function pathFor(rend) {
@@ -818,11 +806,10 @@
   }
 
   // ---- MediaMTX API: viewer counts, egress, LO availability ------------------------
+  // Same-origin proxy → loopback :9997 (apiAddress is not public).
   async function pollApiStats() {
-    const base = serviceBase("api");
-    if (!base) return;
     try {
-      const res = await fetch(`${base}/v3/paths/list`);
+      const res = await fetch("nexvue-mediamtx-api.php");
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
       const now = performance.now();

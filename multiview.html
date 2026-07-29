@@ -361,7 +361,8 @@
   let preferFullscreen = false;
   let fsRestoreTimer = null;
 
-  const PORT = { whep: 8889, api: 9997, status: 9998 };
+  // WHEP on :8889; API/status are loopback + same-origin PHP proxies.
+  const PORT = { whep: 8889 };
   const PROTO = location.protocol === "https:" ? "https:" : "http:";
   const EDGE_HOST = (location.hostname && location.hostname.length)
     ? location.hostname : "127.0.0.1";
@@ -505,10 +506,6 @@
 
   function whepBase() {
     return `${PROTO}//${EDGE_HOST}:${PORT.whep}`;
-  }
-
-  function serviceBase(service) {
-    return `${PROTO}//${EDGE_HOST}:${PORT[service]}`;
   }
 
   function pathFor(base) {
@@ -969,9 +966,8 @@
 
   async function pollApiStats() {
     const pane = focusedPane();
-    const base = serviceBase("api");
     try {
-      const res = await fetch(`${base}/v3/paths/list`);
+      const res = await fetch("nexvue-mediamtx-api.php");
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
       const now = performance.now();

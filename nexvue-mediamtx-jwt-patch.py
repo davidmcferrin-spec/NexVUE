@@ -84,6 +84,8 @@ def patch(text: str, jwks: str, fingerprint: str | None) -> str:
         if jwks.startswith("http://"):
             text = upsert_scalar(text, "authJWTJWKSFingerprint", None)
     text = ensure_api_exclude(text)
+    # DMZ: Control API loopback-only (Player uses nexvue-mediamtx-api.php).
+    text = upsert_scalar(text, "apiAddress", "127.0.0.1:9997")
     # Collapse accidental blank runs from deletions.
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text

@@ -581,6 +581,7 @@
     LO_WIDTH: "auto",
     LO_HEIGHT: "auto",
     EXTRA_ENC_ARGS: "none",
+    AUTO_PARK_UNLOCK_CYCLES: "5",
   };
 
   const FIELD_META = {
@@ -733,6 +734,11 @@
       tip: "Extra GStreamer encoder properties appended to the encode element (e.g. cpb-size=…). Use none unless you need a specific property.",
       placeholder: "none",
     },
+    AUTO_PARK_UNLOCK_CYCLES: {
+      label: "Auto-park after unlock starts",
+      type: "text",
+      tip: "Consecutive encoder starts while this DeckLink input is unlocked before the slot disables itself (stops empty-port restart storms). Default 5 (~15s with RestartSec=3). 0 = never auto-park. Re-enable from Services when the BNC is patched. Station default can also live in /etc/nexvue/nexvue.env.",
+    },
   };
 
   const FIELD_GROUPS = [
@@ -771,7 +777,7 @@
       id: "advanced",
       title: "Advanced",
       blurb: "Use auto / none unless you need a custom LO raster or a specific encoder property.",
-      keys: ["LO_WIDTH", "LO_HEIGHT", "EXTRA_ENC_ARGS"],
+      keys: ["LO_WIDTH", "LO_HEIGHT", "EXTRA_ENC_ARGS", "AUTO_PARK_UNLOCK_CYCLES"],
       advanced: true,
     },
   ];

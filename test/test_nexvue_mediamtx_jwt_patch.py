@@ -31,7 +31,14 @@ class TestMediaMtxJwtPatch(unittest.TestCase):
         self.assertIn("authJWTJWKS: http://127.0.0.1:9080/nexvue-jwks.php", out)
         self.assertIn("authJWTInHTTPQuery: yes", out)
         self.assertIn("action: api", out)
+        self.assertIn("apiAddress: 127.0.0.1:9997", out)
         self.assertTrue(out.index("authMethod") < out.index("paths:"))
+
+    def test_api_address_loopback_overrides_all_interfaces(self) -> None:
+        src = "apiAddress: :9997\nauthMethod: jwt\npaths:\n  all:\n"
+        out = self.mod.patch(src, "http://127.0.0.1:9080/nexvue-jwks.php", None)
+        self.assertIn("apiAddress: 127.0.0.1:9997", out)
+        self.assertNotIn("apiAddress: :9997", out)
 
     def test_updates_existing(self) -> None:
         src = (

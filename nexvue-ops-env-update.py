@@ -56,6 +56,7 @@ EDITABLE_KEYS = frozenset({
     "SIGNAL_LOSS_DEBOUNCE_S",
     "SIGNAL_ACQUIRE_DEBOUNCE_S",
     "DECKLINK_RETRY_S",
+    "AUTO_PARK_UNLOCK_CYCLES",
 })
 
 READONLY_KEYS = frozenset({"DEVICE_NUMBER", "CHANNEL_PATH", "RTSP_URL"})
@@ -329,6 +330,9 @@ def sanitize_value(key: str, value: str) -> str:
         return _require_int(key, value, lo=1, hi=64)
     if key == "LO_GOP_FRAMES":
         return _require_int(key, value, lo=1, hi=300)
+    if key == "AUTO_PARK_UNLOCK_CYCLES":
+        # 0 = off; upper bound is generous (operators may want a long streak).
+        return _require_int(key, value, lo=0, hi=1000)
     if key in ("SIGNAL_LOSS_DEBOUNCE_S", "SIGNAL_ACQUIRE_DEBOUNCE_S", "DECKLINK_RETRY_S"):
         if value == "":
             return value

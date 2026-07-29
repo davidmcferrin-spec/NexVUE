@@ -9,10 +9,11 @@ querying the same SQLite file directly. That split means this collector has
 zero firewall/port exposure of any kind: nothing to open, nothing to proxy,
 no WebSocket, nothing for a security team to review on this side at all.
 
-This is USAGE ANALYTICS, not health/uptime monitoring (that is CheckMK's job
-per the project roadmap) — it answers "how much bandwidth did we serve last
-week," "was this input locked all night," and "which IP was watching
-channel 2 at 3am," not "is the service up right now."
+This is USAGE ANALYTICS, not health/uptime alerting (Phase 4 portal ops
+via outbound heartbeats — DMZ edge cannot pull TRUSTED monitors) — it
+answers "how much bandwidth did we serve last week," "was this input
+locked all night," and "which IP was watching channel 2 at 3am," not
+"is the service up right now."
 
 Polls existing NexVUE services (and local /proc) on an interval and stores
 time-series samples in SQLite (stdlib `sqlite3` — no pip, no new dependency):
@@ -29,9 +30,10 @@ time-series samples in SQLite (stdlib `sqlite3` — no pip, no new dependency):
                               iGPU °C when the driver exposes a sensor
   - intel_gpu_top -J (optional) -> iGPU Video/Render/VideoEnhance busy %
                               and frequency (capacity correlation for
-                              Metrics — not a CheckMK substitute). Read from
-                              ONE persistent child process (see _GpuStream),
-                              never a kill-after-timeout one-shot: the tool
+                              Metrics — capacity correlation, not uptime
+                              alerting). Read from ONE persistent child
+                              process (see _GpuStream), never a
+                              kill-after-timeout one-shot: the tool
                               block-buffers stdout on a pipe, so short runs
                               died before their first flush and left the
                               iGPU charts empty.
@@ -707,8 +709,8 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_viewer_sessions_last_seen ON viewer_sessions(last_seen);
 
             -- Host capacity samples (CPU/memory/load + optional iGPU engines
-            -- and package/GPU temperatures) for Metrics correlation. Not a
-            -- health monitor — CheckMK remains Phase 4 for that. GPU engine
+            -- and package/GPU temperatures) for Metrics correlation. Not
+            -- uptime/alerting (Phase 4 portal heartbeats). GPU engine
             -- columns filled when intel_gpu_top works; temp columns when
             -- sysfs hwmon exposes coretemp / i915|xe sensors.
             CREATE TABLE IF NOT EXISTS host_samples (

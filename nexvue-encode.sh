@@ -212,6 +212,31 @@ command -v gst-launch-1.0 >/dev/null || { log "ERROR: gst-launch-1.0 not found";
 gst-inspect-1.0 decklinkvideosrc >/dev/null 2>&1 \
     || { log "ERROR: GStreamer decklink plugin missing (install Desktop Video + gst-plugins-bad)"; exit 69; }
 
+# ---- Auto-park empty DeckLink ports ------------------------------------------
+# Consecutive unlocked starts → disable this encode@N (see nexvue-encode-auto-park.sh).
+# Skip when the helper is absent (older install) or CHANNEL_ID is unset.
+AUTO_PARK_BIN="${AUTO_PARK_BIN:-/usr/local/bin/nexvue-encode-auto-park.sh}"
+if [ -x "${AUTO_PARK_BIN}" ] && [ -n "${CHANNEL_ID:-}" ]; then
+  set +e
+  "${AUTO_PARK_BIN}" check "${CHANNEL_ID}" "${DEVICE_NUMBER}"
+  _auto_park_rc=$?
+  set -e
+  case "${_auto_park_rc}" in
+    0) ;;  # locked / disabled / fail-open — continue
+    1)
+      log "auto-park: unlocked start (cycle) — exiting for systemd restart"
+      exit 1
+      ;;
+    75)
+      log "auto-park: unlock threshold reached — exiting 75 for disable"
+      exit 75
+      ;;
+    *)
+      log "WARN: auto-park check rc=${_auto_park_rc} — continuing encode"
+      ;;
+  esac
+fi
+
 # ---- Encoder selection ---------------------------------------------------------
 build_enc() { # $1 = bitrate kbps
   case "${VIDEO_ENCODER}" in

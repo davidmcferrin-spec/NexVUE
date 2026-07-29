@@ -3,7 +3,7 @@
 # NexVUE usage/analytics COLLECTOR — bandwidth, viewer counts, active
 # streams, input lock/format, per-viewer IP/channel drill-down, host
 # CPU/memory, and (when intel_gpu_top works) iGPU Video/Render busy %.
-# NOT health/uptime monitoring (that's CheckMK's job per the project roadmap).
+# NOT health/uptime alerting (Phase 4 portal ops via outbound heartbeats).
 #
 # This process does not listen on any port — it only polls MediaMTX and
 # nexvue-status (and optionally intel_gpu_top), and writes to SQLite.

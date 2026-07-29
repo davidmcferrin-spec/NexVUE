@@ -14,19 +14,16 @@ logLevel: info
 logDestinations: [stdout]          # journald captures stdout via systemd
 
 # --- Control API --------------------------------------------------------------
-# Phase 1: bound to all interfaces so the test player can poll viewer counts
-# and egress bandwidth (/v3/paths/list) from LAN machines. Read-mostly but it
-# DOES expose kick/config endpoints — acceptable on a trusted engineering LAN
-# only. Phase 3 (DMZ): bind back to 127.0.0.1 and let the portal heartbeat
-# relay stats instead; never expose this port to untrusted networks.
+# Loopback only (Phase 3 / DMZ). Kick + metrics + Player/Multiview stats all
+# reach this via same-box clients (nexvue-ops.php, nexvue-metrics-server.py,
+# nexvue-mediamtx-api.php). Never expose :9997 off-box — it has kick/config
+# and is JWT-excluded. setup.sh patches live yml to 127.0.0.1:9997.
 api: yes
-apiAddress: :9997
+apiAddress: 127.0.0.1:9997
 apiAllowOrigin: '*'
 # The API has its OWN encryption setting, separate from webrtcEncryption
-# above — enabling one does not enable the other. Once Apache/the player page
-# is HTTPS, this must be enabled too or the browser blocks it (mixed content
-# if the page went HTTPS-only, or ERR_SSL_PROTOCOL_ERROR if the browser is
-# probing HTTPS here directly). Same cert/key as the WHEP listener.
+# above — enabling one does not enable the other. Same cert/key as WHEP.
+# Browser clients never hit :9997 directly (same-origin PHP proxy).
 apiEncryption: yes
 apiServerKey: /etc/nexvue/tls/privkey.pem
 apiServerCert: /etc/nexvue/tls/fullchain.pem
@@ -79,8 +76,8 @@ authJWTJWKS: http://127.0.0.1:9080/nexvue-jwks.php
 authJWTClaimKey: mediamtx_permissions
 # Allow ?jwt= on WHEP/RTSP (publish from gst + short-lived viewer tokens).
 authJWTInHTTPQuery: yes
-# Keep Control API LAN-open for Player path stats + ops kick (Phase 1 pattern).
-# Phase 3 must bind apiAddress to 127.0.0.1 and drop this exclude.
+# Control API stays JWT-excluded for same-box callers (ops kick, metrics,
+# nexvue-mediamtx-api.php). Safe only because apiAddress is loopback.
 authJWTExclude:
   - action: api
 

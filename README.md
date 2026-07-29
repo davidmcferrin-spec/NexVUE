@@ -132,7 +132,7 @@ sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin nexvue
 
 sudo mkdir -p /etc/nexvue/channels
 sudo cp mediamtx.yml /etc/nexvue/
-sudo cp nexvue-encode.sh nexvue-supervisor.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-encode.sh /usr/local/bin/nexvue-supervisor.py
+sudo cp nexvue-encode.sh nexvue-encode-auto-park.sh nexvue-supervisor.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-encode.sh /usr/local/bin/nexvue-encode-auto-park.sh /usr/local/bin/nexvue-supervisor.py
 sudo cp nexvue-status-server.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-status-server.py
 sudo cp nexvue-captions-decode.py nexvue-captions-probe.sh /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-captions-decode.py /usr/local/bin/nexvue-captions-probe.sh
 sudo cp nexvue-metrics-server.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-metrics-server.py
@@ -170,7 +170,8 @@ for atypical layouts (`NEXVUE_WEBROOT`):
 
 ```bash
 sudo cp index.html multiview.html metrics.html login.html users.html \
-        nexvue-metrics.php nexvue-status.php nexvue-captions.php \
+        nexvue-metrics.php nexvue-status.php nexvue-mediamtx-api.php \
+        nexvue-captions.php \
         nexvue-auth.php nexvue-auth-lib.php nexvue-jwks.php nexvue-auth-gate.js \
         nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js \
         nexvue-logo.php chart.umd.min.js \
@@ -182,8 +183,9 @@ Then open `https://<edge-ip>/login.html` (default bootstrap `admin` /
 `password` — forced change on first login). Top nav → Player / Multiview /
 Metrics / Services / Settings / Users. **Roles gate ops pages** (admin /
 operator / sharer / viewer + named share links). Remove any Apache Basic Auth /
-`.htaccess` AuthType — the app login replaces it. Do not DMZ-expose until
-API ports are loopback-bound (Phase 3).
+`.htaccess` AuthType — the app login replaces it. MediaMTX API (`:9997`) and
+status (`:9998`) bind to loopback; Player/Multiview use same-origin PHP
+proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
 
 ### Local authentication (edge)
 
@@ -216,9 +218,9 @@ API ports are loopback-bound (Phase 3).
 - **MediaMTX:** `authMethod: jwt`, JWKS at
   `http://127.0.0.1:9080/nexvue-jwks.php` (localhost-only Apache vhost from
   `setup.sh` — avoids HTTPS redirects breaking JWKS), short-lived viewer JWTs
-  on WHEP (`?jwt=`), long-lived `NEXVUE_PUBLISH_JWT` for encoders. Control API
-  remains excluded from JWT (LAN paths/list + kick); bind `:9997` to loopback
-  before DMZ.
+  on WHEP (`?jwt=`), long-lived `NEXVUE_PUBLISH_JWT` for encoders. Control
+  API remains JWT-excluded for same-box callers (ops kick, metrics,
+  `nexvue-mediamtx-api.php`) and is bound to `127.0.0.1:9997`.
 - **Sync-ready API** (no portal client yet): `nexvue-auth.php` actions
   `users_export` / `users_import` / `shares_export` / `shares_import` with
   optional `since=` cursor; admin session **or** `Authorization: Bearer`
@@ -257,8 +259,8 @@ opened explicitly. Port/protocol map:
 |-----------|-----------|--------------|-------------------------------------------|
 | 8889      | TCP       | viewers      | WHEP signaling (HTTP POST/PATCH/DELETE)   |
 | 8189      | UDP + TCP | viewers      | WebRTC media (UDP) + ICE-TCP fallback     |
-| 9997      | TCP       | LAN mgmt     | MediaMTX API (viewer counts, egress)      |
-| 9998      | TCP       | LAN mgmt     | Status daemon (input/reference JSON)      |
+| 9997      | TCP       | **loopback** | MediaMTX API — do NOT open; Player uses `nexvue-mediamtx-api.php` |
+| 9998      | TCP       | **loopback** | Status daemon — do NOT open; Player uses `nexvue-status.php` |
 | —         | —         | (none)       | Metrics dashboard has NO port at all — the collector doesn't listen on anything; PHP reads its SQLite file directly and Apache serves it on 443. See Usage Metrics Dashboard section. |
 | 80 / 443  | TCP       | viewers      | Apache serving the player page            |
 | 8554      | —         | **loopback** | RTSP ingest — do NOT open (127.0.0.1 only)|
@@ -269,48 +271,30 @@ viewers on UDP-hostile networks — and it is a *different* port from the WHEP
 signaling port (8889). Opening only 8889 gets you a session that negotiates
 then plays nothing.
 
-### Phase 1 (trusted LAN) — open to everyone on the subnet
+### Viewer ports (LAN or DMZ)
+
+`apiAddress` is `127.0.0.1:9997` and `nexvue-status` binds `127.0.0.1:9998`
+by default — do **not** open those in ufw. Player/Multiview stats and signal
+dots go through Apache PHP proxies on 443.
 
 ```bash
 sudo ufw allow 80/tcp comment 'NexVUE player (Apache)'
+sudo ufw allow 443/tcp comment 'NexVUE player (Apache TLS)'
 sudo ufw allow 8889/tcp comment 'NexVUE WHEP signaling'
 sudo ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)'
-sudo ufw allow 9997/tcp comment 'NexVUE MediaMTX API'
-sudo ufw allow 9998/tcp comment 'NexVUE status daemon'
 sudo ufw enable
 # Metrics has no port to open at all — the collector doesn't listen on
 # anything; PHP reads its SQLite file directly, served by Apache on 443
 # alongside everything else. See "Usage Metrics Dashboard".
+# 9997/9998 are loopback-only — never allow them through the firewall.
 sudo ufw status verbose
 ```
 
 (`ufw allow 8189` with no proto opens both UDP and TCP, which is what the
 media port needs.)
 
-### Tighter: restrict the management ports to your ops subnet
-
-The API (9997) and status daemon (9998) expose viewer/session data and, in
-the case of the MediaMTX API, session-kick and config endpoints — no auth in
-Phase 1. Limit them to the engineering subnet rather than the whole LAN
-(metrics has no port at all, so it isn't listed here):
-
-```bash
-sudo ufw allow from 10.200.0.0/16 to any port 9997 proto tcp comment 'NexVUE API (ops only)'
-sudo ufw allow from 10.200.0.0/16 to any port 9998 proto tcp comment 'NexVUE status (ops only)'
-```
-
-### Phase 3 (DMZ) — viewers only, management goes loopback
-
-In the DMZ the three management ports must NOT be reachable at all (bind
-them to loopback in config; the portal relays their data via outbound
-heartbeat). Open only what viewers need, and 443 replaces 8889 once TLS is on:
-
-```bash
-sudo ufw allow 443/tcp comment 'NexVUE WHEP signaling (TLS)'
-sudo ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)'
-# 9997/9998 intentionally NOT opened — loopback only in DMZ
-# metrics has no port at all — nothing changes here regardless of DMZ vs LAN
-```
+If an older install still has ufw rules for 9997/9998, delete them
+(`sudo ufw status numbered` then `sudo ufw delete N`).
 
 ## Verify
 
@@ -492,8 +476,11 @@ Leave **only populated** channels running for 72h before calling Phase 1 done.
 **Prefer disabling `nexvue-encode@N` on empty Quad ports rather than leaving
 it running against nothing** — leave empty BNCs disabled (Services
 Enable/Disable or `systemctl disable --now`). Phase 1.5 slate was rolled
-back; an enabled encode on an unlocked port restart-loops. Disable empty
-channels:
+back; an enabled encode on an unlocked port restart-loops briefly, then
+**auto-parks** after `AUTO_PARK_UNLOCK_CYCLES` consecutive unlocked starts
+(default **5** ≈ 15s with `RestartSec=3`; set `0` in `/etc/nexvue/nexvue.env`
+or the channel `.env` to disable). Re-enable from Services when patched.
+To park immediately without waiting for the streak:
 
 ```bash
 # example: devices 4–7 unlocked / unpatched
@@ -549,8 +536,8 @@ more code). Current hardware: **DeckLink Quad 2** (already installed at
    (`sudo decklink-configure --apply-inputs`, or Desktop Video Setup). Confirm with `decklink-status` (lock +
    mode per device; order is not guaranteed sequential). Set
    `MAX_DEVICES=8` in `/etc/nexvue/nexvue.env`; enable `nexvue-encode@N`
-   **only** for patched inputs (leave empty BNCs disabled — without slate,
-   empty encoders restart-loop and waste load).
+   **only** for patched inputs (empty BNCs auto-park after consecutive
+   unlocks, but still waste a short restart streak — prefer leave disabled).
 2. **Latency:** RTT-based estimate recorded above (~200 ms). Glass-to-glass
    photo deferred (remote rack) — not a Phase 1 blocker.
 3. **72h soak** with intended (locked) `nexvue-encode@N` up; closeout script
@@ -592,10 +579,11 @@ mistake is enabling some and assuming the rest inherited it. They did not:
 | Service | Port | Config key(s) | Symptom if forgotten |
 |---|---|---|---|
 | MediaMTX WHEP (viewers)   | 8889 | `webrtcEncryption`, `webrtcServerKey/Cert` | Mixed-content block (if page is HTTPS) |
-| MediaMTX Control API      | 9997 | `apiEncryption`, `apiServerKey/Cert` — **separate from webrtcEncryption above, does NOT inherit it** | `ERR_SSL_PROTOCOL_ERROR` |
-| NexVUE status daemon      | 9998 | Optional for the **player UI** and **metrics collector** (both try HTTP then HTTPS on loopback). Still needed for direct curl/CheckMK hits on `:9998`, or if `NEXVUE_STATUS_URL` is pinned to `https://`. | `ERR_SSL_PROTOCOL_ERROR` on direct `:9998` |
+| MediaMTX Control API      | 9997 | Loopback (`apiAddress: 127.0.0.1:9997`). `apiEncryption` + cert/key for same-box HTTPS clients. Browser never hits this port — `nexvue-mediamtx-api.php` proxies `/v3/paths/list`. | Player viewers/egress = `n/a` if proxy/API down |
+| NexVUE status daemon      | 9998 | Loopback (`NEXVUE_STATUS_BIND=127.0.0.1`). TLS optional for direct loopback clients. | Gray dots if `nexvue-status.php` cannot reach daemon |
 | NexVUE metrics dashboard  | —    | N/A — no port, no TLS needed for this piece at all. The collector has no listener; PHP reads SQLite directly and Apache (already TLS) serves the result. | N/A |
 | Player input-status dots  | —    | `nexvue-status.php` on Apache (same-origin). Proxies to loopback `:9998` over HTTP or HTTPS. | Gray dots + SDI input line = `status unreachable` (not “daemon down”) |
+| Player API stats          | —    | `nexvue-mediamtx-api.php` on Apache (same-origin). Proxies loopback `:9997` `/v3/paths/list`. | Viewers / egress tiles show `n/a` |
 
 `ERR_SSL_PROTOCOL_ERROR` specifically means the browser tried a TLS
 handshake against a server that's still answering plain HTTP — i.e. that
@@ -650,24 +638,24 @@ dots stay gray and **SDI input** shows `status unreachable`, check that
    copied to `/etc/systemd/system/` and reloaded.
 5. **Deploy the current web UI to Apache's docroot** (`index.html`,
    `multiview.html`, `metrics.html`, `nexvue-metrics.php`,
-   `nexvue-status.php`, `nexvue-qr.js`, `nexvue-ui.js`, `nexvue-logo.php`,
-   `chart.umd.min.js`, `services.html`, `channels.html`, `nexvue-ops.php`) —
-   player pages auto-detect `https:`/`http:` from `location.protocol`.
-   Input-status dots use `nexvue-status.php` (same-origin). Ops pages need
-   the sudoers drop-in from `setup.sh` as well; logo upload needs
-   `/var/lib/nexvue/branding` (www-data writable).
+   `nexvue-status.php`, `nexvue-mediamtx-api.php`, `nexvue-qr.js`,
+   `nexvue-ui.js`, `nexvue-logo.php`, `chart.umd.min.js`, `services.html`,
+   `channels.html`, `nexvue-ops.php`) — player pages auto-detect
+   `https:`/`http:` from `location.protocol`. Input-status dots use
+   `nexvue-status.php`; viewer/egress stats use `nexvue-mediamtx-api.php`
+   (both same-origin → loopback). Ops pages need the sudoers drop-in from
+   `setup.sh` as well; logo upload needs `/var/lib/nexvue/branding`
+   (www-data writable).
 6. **Self-signed cert (e.g. Ubuntu's `ssl-cert-snakeoil`, or any cert issued
-   for a hostname while you're testing via bare IP): trust it on each port
-   individually**, once per browser — visiting `https://<ip>/` does NOT
+   for a hostname while you're testing via bare IP): trust it on each
+   browser-facing port individually** — visiting `https://<ip>/` does NOT
    extend trust to `https://<ip>:8889/`:
    ```
    https://<edge-ip>:8889/
-   https://<edge-ip>:9997/v3/paths/list
    ```
-   (`:9998` is no longer required for the player UI once `nexvue-status.php`
-   is deployed; still useful for direct daemon checks. Metrics rides entirely
-   on Apache's existing cert.)
-   Click through "Advanced -> Proceed" on each. Skipping this step causes
+   (`:9997` / `:9998` are loopback-only; Player stats/dots use Apache
+   proxies. Metrics rides entirely on Apache's existing cert.)
+   Click through "Advanced -> Proceed" on `:8889`. Skipping this step causes
    silent failures that look identical to a misconfiguration.
 
 A real cert (internal CA, or a hostname + Let's Encrypt) removes the
@@ -726,9 +714,9 @@ Status API does not report lock on an idle, unenabled input by default).
 **This is usage/analytics history, not health/uptime monitoring** — it
 answers "how much bandwidth did channel 2 use in the last hour," "which IP
 was watching what, when," and "was this input locked all night," not "is
-the service up right now." Health/alerting is CheckMK's job, planned for
-Phase 4 (see roadmap below) — this dashboard is separate and needs no
-CheckMK dependency.
+the service up right now." Health/alerting is a Phase 4 portal concern
+(outbound edge heartbeats — the DMZ edge cannot pull from TRUSTED
+monitoring). This dashboard is separate and needs no portal dependency.
 
 ### Architecture: collector writes, PHP reads, nothing new to open
 
@@ -799,7 +787,7 @@ Open `http://<edge-ip>/metrics.html` (top nav → Metrics).
 | `viewers` | Per-viewer session drill-down: IP, channel, user (MediaMTX JWT `sub` when present), first/last seen, duration, bytes served, live/ended. Add `&channel=chN` for an exact channel. Optional column filters (`filter_status`, `filter_ip`, `filter_channel`, `filter_duration`, `filter_data`, `filter_client`) — see below. Response includes `session_total` / `session_count` / `filters`. |
 | `inputs` | Per-DeckLink-input lock/format history as a time series. Powers the input-lock chart. |
 | `weekday_hours` | Mon–Sun × hour-of-day analytical heatmap. Each cell is the equal-weight average of observed calendar dates in the range for that weekday/hour (missing telemetry excluded; `date_count` is the denominator, `sample_count` is diagnostic). Also returns peaks. Timezone: `America/New_York` by default (`NEXVUE_METRICS_TZ` override). |
-| `host` | Host CPU %, memory used/total, load1, CPU package °C / iGPU °C (when sysfs exposes them), and (when available) iGPU Video/Render/VideoEnhance busy % + GPU freq — capacity correlation on the Metrics page, **not** a CheckMK substitute. Engine % requires `intel-gpu-tools` / `intel_gpu_top` + CAP_PERFMON (see setup). The dashboard charts CPU, memory, iGPU Video engine, and a **Temperature** panel (CPU/GPU °C plus a dashed 95 °C sustained-operation limit line — `TEMP_LIMIT_CPU_C` / `TEMP_LIMIT_GPU_C` in `metrics.html`). Render % is still collected/served but not charted. |
+| `host` | Host CPU %, memory used/total, load1, CPU package °C / iGPU °C (when sysfs exposes them), and (when available) iGPU Video/Render/VideoEnhance busy % + GPU freq — capacity correlation on the Metrics page, **not** uptime/alerting. Engine % requires `intel-gpu-tools` / `intel_gpu_top` + CAP_PERFMON (see setup). The dashboard charts CPU, memory, iGPU Video engine, and a **Temperature** panel (CPU/GPU °C plus a dashed 95 °C sustained-operation limit line — `TEMP_LIMIT_CPU_C` / `TEMP_LIMIT_GPU_C` in `metrics.html`). Render % is still collected/served but not charted. |
 
 `range` accepts `15m`, `1h`, `6h`, `24h`, `7d`, `30d` — matching the
 dashboard's preset buttons. For a specific day or window, pass Unix epoch
@@ -1023,7 +1011,10 @@ expired; JWT auth is the lasting gate.
   `nexvue-ops-enable.sh`): Enable/Disable (`set_enabled`, boot config +
   immediate `--now` effect — parking an unpatched Quad port from the UI
   instead of SSH) and Start/Stop (`set_running`, runtime only — boot config
-  untouched). Core units (mediamtx, nexvue-status, nexvue-metrics) can be
+  untouched). Empty unlocked slots also **auto-park** via
+  `nexvue-encode-auto-park.sh` after `AUTO_PARK_UNLOCK_CYCLES` consecutive
+  unlocked starts (default 5; Settings → Advanced, or `/etc/nexvue/nexvue.env`).
+  Core units (mediamtx, nexvue-status, nexvue-metrics) can be
   restarted but never disabled or stopped from the page. Disable and Stop
   both run `reset-failed` after acting, so a previously restart-looping
   encoder stops showing a stale red `failed` after being parked. Any
@@ -1081,12 +1072,15 @@ expired; JWT auth is the lasting gate.
   for a future redesign; do not enable it on live units today.
 - **Self-healing model:** constant output caps mean input format changes never
   drop viewer sessions; the watchdog turns capture hangs into clean systemd
-  restarts; black frames ride through brief signal loss. Unlocked channels
-  still restart (`RestartSec=3`) — park empty ports. Phase 1.5 NO SIGNAL
-  slate was rolled back; production ExecStart is `nexvue-encode.sh` again.
-- **Signal-present alarming** belongs in CheckMK (Phase 4): the status daemon
-  JSON is the data source (local check or HTTP agent), alongside the
-  MediaMTX API (`/v3/paths/list`) for stream/session state.
+  restarts; black frames ride through brief signal loss. Unlocked empty
+  ports restart (`RestartSec=3`) for up to `AUTO_PARK_UNLOCK_CYCLES`
+  consecutive starts (default 5), then `nexvue-encode-auto-park.sh` disables
+  that `encode@N` (exit 75 + `ExecStopPost`). Phase 1.5 NO SIGNAL slate was
+  rolled back; production ExecStart is `nexvue-encode.sh` again.
+- **Signal-present / encoder-alive alarming** belongs in Phase 4 portal ops
+  via **outbound** edge heartbeats (DMZ cannot reach TRUSTED monitors).
+  Status daemon JSON + MediaMTX `/v3/paths/list` remain the on-box data
+  sources the heartbeat will summarize.
 - **Format changes:** normalized away — output caps are constant per channel.
 - **No Docker, no Node** — two binaries, two scripts, systemd.
 
@@ -1291,8 +1285,8 @@ and implemented — see the decisions list above the collapsed spec.
 | 1 (this) | Single edge, LAN WHEP, no auth. Prove stability + latency. |
 | 1.5 | **Rolled back** — production encode is `nexvue-encode.sh` again. Supervisor/slate deferred for redesign after field instability. See "Phase 1.5 supervisor" below. |
 | 2 | **Edge local auth landed** (bcrypt users + roles, share links, MediaMTX JWT/JWKS, sync-shaped export/import). Central PHP portal (catalog + fleet sync client) still future; Entra OIDC remains Phase 3. |
-| 3 | DMZ exposure: TLS on 443, `webrtcAdditionalHosts` = public FQDN, single UDP 8189 rule + ICE-TCP fallback, Entra ID OIDC at portal, CORS validation portal-origin -> edge; bind MediaMTX API to loopback. |
-| 4 | Fleet rollout: per-station config management, CheckMK checks (encoder-alive, signal-present, session counts), portal ops dashboard fed by outbound edge heartbeats. |
+| 3 | DMZ exposure: TLS on 443, `webrtcAdditionalHosts` = public FQDN, single UDP 8189 rule + ICE-TCP fallback; MediaMTX API + status daemon already loopback-bound (`nexvue-mediamtx-api.php` / `nexvue-status.php`). Remaining: Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
+| 4 | Fleet rollout: per-station config management; portal ops dashboard fed by **outbound** edge heartbeats (encoder-alive, signal-present, session counts). No inbound probe from TRUSTED — DMZ edge pushes out only. |
 
 ## Known limitations (accepted for Phase 1)
 

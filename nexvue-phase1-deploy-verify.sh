@@ -150,6 +150,17 @@ if grep -q 'nexvue-encode.sh' <<<"$exec_line"; then
 else
   fail "nexvue-encode@0 ExecStart is not nexvue-encode.sh — redeploy unit: sudo ./setup.sh && sudo systemctl daemon-reload"
 fi
+if [ -x /usr/local/bin/nexvue-encode-auto-park.sh ]; then
+  ok "nexvue-encode-auto-park.sh present"
+else
+  warn "nexvue-encode-auto-park.sh missing — empty unlocked ports will restart-loop until parked by hand"
+fi
+stop_post="$(systemctl show -p ExecStopPost --value nexvue-encode@0 2>/dev/null || true)"
+if grep -q 'nexvue-encode-auto-park.sh' <<<"$stop_post"; then
+  ok "nexvue-encode@0 ExecStopPost → auto-park"
+else
+  warn "nexvue-encode@0 ExecStopPost missing auto-park — redeploy unit: sudo ./setup.sh && sudo systemctl daemon-reload"
+fi
 echo
 
 echo "=== summary: ${PASS} ok, ${WARN} warn, ${FAIL} fail ==="

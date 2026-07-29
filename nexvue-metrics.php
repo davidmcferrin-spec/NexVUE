@@ -39,7 +39,7 @@
  *   weekday_hours  Mon–Sun × hour-of-day heatmap: equal-date averages
  *                  of bandwidth/viewers (missing telemetry excluded).
  *   host           Host CPU % / memory / load1 / CPU+GPU °C time series
- *                  (capacity analytics; not a CheckMK substitute).
+ *                  (capacity analytics; not uptime/alerting).
  *
  * ---- Example calls -------------------------------------------------------------
  *
