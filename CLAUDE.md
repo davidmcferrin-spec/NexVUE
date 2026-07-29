@@ -139,10 +139,13 @@ specifically because this box can't get additional ports opened.
   `/var/lib/nexvue/auth/` (www-data RW; `auth.db` inside that dir so WAL
   works under Apache — `setup.sh` installs Apache/mod_php, bootstraps the
   store, migrates legacy `/var/lib/nexvue/auth.db`, and smokes as www-data).
-  HTML is soft-gated by `nexvue-auth-gate.js`; APIs + WHEP JWT enforce
-  access. Central catalog portal + Entra OIDC remain later. Real
-  (non-self-signed) TLS for 8889/9997/9998 still recommended before wider
-  users.
+  MediaMTX JWKS is served on loopback `:9080` (`nexvue-jwks-loopback.conf`)
+  so HTTPS redirects cannot break publish/WHEP JWT validation; setup patches
+  `mediamtx.yml` and restarts mediamtx + enabled encoders. Auth migrate/keys
+  are hot-path cheap (schema stamp + cached JWKS). HTML is soft-gated by
+  `nexvue-auth-gate.js`; APIs + WHEP JWT enforce access. Central catalog
+  portal + Entra OIDC remain later. Real (non-self-signed) TLS for
+  8889/9997/9998 still recommended before wider users.
 - **Phase 3: DMZ** — webrtcAdditionalHosts, bind MediaMTX API and status
   daemon back to loopback (portal relays stats), Entra OIDC, CORS. (TLS
   itself landed early, in Phase 1, ahead of schedule — see README TLS section.)

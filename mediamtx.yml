@@ -70,12 +70,12 @@ webrtcAdditionalHosts: [nexvue-dc.area51consulting.com]
 # --- Authentication -----------------------------------------------------------
 # Local JWT auth (edge issues viewer JWTs; long-lived publish JWT in
 # /etc/nexvue/nexvue.env as NEXVUE_PUBLISH_JWT). JWKS is same-box Apache.
-# Prefer HTTP loopback so MediaMTX can fetch without trusting self-signed TLS;
-# if :80 is unavailable, switch to https://127.0.0.1/nexvue-jwks.php and set
-# authJWTJWKSFingerprint to the TLS cert SHA-256 hex (openssl x509 -fingerprint).
-# Future central portal can replace authJWTJWKS with the portal JWKS URL.
+# Prefer HTTP loopback so MediaMTX can fetch without trusting self-signed TLS.
+# setup.sh installs a localhost-only Apache vhost on :9080 for this URL so
+# HTTPS redirects on :80/:443 cannot break JWKS. Fallback: https://127.0.0.1/
+# nexvue-jwks.php + authJWTJWKSFingerprint (openssl x509 -fingerprint -sha256).
 authMethod: jwt
-authJWTJWKS: http://127.0.0.1/nexvue-jwks.php
+authJWTJWKS: http://127.0.0.1:9080/nexvue-jwks.php
 authJWTClaimKey: mediamtx_permissions
 # Allow ?jwt= on WHEP/RTSP (publish from gst + short-lived viewer tokens).
 authJWTInHTTPQuery: yes

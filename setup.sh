@@ -59,6 +59,7 @@ REQUIRED_FILES=(
   nexvue-ops.php services.html channels.html
   nexvue-auth-lib.php nexvue-auth.php nexvue-jwks.php nexvue-auth-bootstrap.php
   nexvue-auth-gate.js
+  nexvue-mediamtx-jwt-patch.py nexvue-jwks-loopback.conf
   login.html forgot.html reset.html users.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
   nexvue-phase1-closeout.sh
@@ -417,6 +418,73 @@ else
   warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html … login.html users.html nexvue-auth*.php ${WEBROOT}/"
 fi
 
+install -m 644 "${REPO_DIR}/nexvue-mediamtx-jwt-patch.py" /usr/local/share/nexvue/nexvue-mediamtx-jwt-patch.py
+install -m 644 "${REPO_DIR}/nexvue-jwks-loopback.conf" /usr/local/share/nexvue/nexvue-jwks-loopback.conf
+
+# MediaMTX JWT needs a reachable JWKS. HTTPS-only Apache often 301s :80 → :443,
+# which breaks MediaMTX's JWKS fetch and kills both publish and WHEP. Prefer a
+# localhost-only :9080 vhost; fall back to https://127.0.0.1 + fingerprint.
+JWKS_URL=""
+JWKS_FP=""
+if [ -d /etc/apache2/conf-available ]; then
+  install -m 644 "${REPO_DIR}/nexvue-jwks-loopback.conf" \
+    /etc/apache2/conf-available/nexvue-jwks-loopback.conf
+  if command -v a2enconf >/dev/null 2>&1; then
+    a2enconf nexvue-jwks-loopback >/dev/null 2>&1 || true
+  fi
+  if systemctl is-active --quiet apache2 2>/dev/null; then
+    systemctl reload apache2 >/dev/null 2>&1 \
+      || systemctl restart apache2 >/dev/null 2>&1 \
+      || warn "apache2 reload failed after enabling JWKS loopback :9080"
+  fi
+fi
+if curl -fsS --max-time 3 "http://127.0.0.1:9080/nexvue-jwks.php" 2>/dev/null | grep -q '"keys"'; then
+  JWKS_URL="http://127.0.0.1:9080/nexvue-jwks.php"
+  ok "JWKS reachable at ${JWKS_URL}"
+elif curl -fsS --max-time 3 "http://127.0.0.1/nexvue-jwks.php" 2>/dev/null | grep -q '"keys"'; then
+  JWKS_URL="http://127.0.0.1/nexvue-jwks.php"
+  ok "JWKS reachable at ${JWKS_URL}"
+elif curl -fskS --max-time 3 "https://127.0.0.1/nexvue-jwks.php" 2>/dev/null | grep -q '"keys"'; then
+  JWKS_URL="https://127.0.0.1/nexvue-jwks.php"
+  JWKS_FP="$(echo | openssl s_client -connect 127.0.0.1:443 -servername 127.0.0.1 2>/dev/null \
+    | openssl x509 -fingerprint -sha256 -noout 2>/dev/null \
+    | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+  if [ -n "${JWKS_FP}" ]; then
+    ok "JWKS reachable via HTTPS loopback (fingerprint ${JWKS_FP:0:16}…)"
+  else
+    warn "JWKS HTTPS works but fingerprint could not be derived — MediaMTX may still reject TLS"
+  fi
+else
+  warn "JWKS not reachable on loopback — MediaMTX JWT auth will fail (no publish / no WHEP) until Apache serves nexvue-jwks.php"
+fi
+
+if [ -n "${JWKS_URL}" ] && [ -f /etc/nexvue/mediamtx.yml ]; then
+  PATCH_ARGS=(--jwks "${JWKS_URL}")
+  [ -n "${JWKS_FP}" ] && PATCH_ARGS+=(--fingerprint "${JWKS_FP}")
+  if python3 "${REPO_DIR}/nexvue-mediamtx-jwt-patch.py" /etc/nexvue/mediamtx.yml "${PATCH_ARGS[@]}"; then
+    ok "mediamtx.yml JWT auth → ${JWKS_URL}"
+    if systemctl is-active --quiet mediamtx 2>/dev/null; then
+      systemctl restart mediamtx >/dev/null 2>&1 \
+        && ok "mediamtx restarted (JWT/JWKS)" \
+        || warn "mediamtx restart failed — restart manually after JWT patch"
+      # Encoders must re-open RTSP with ?jwt= from NEXVUE_PUBLISH_JWT.
+      restarted=0
+      for id in 0 1 2 3 4 5 6 7; do
+        if systemctl is-enabled --quiet "nexvue-encode@${id}" 2>/dev/null; then
+          systemctl try-restart "nexvue-encode@${id}" >/dev/null 2>&1 && restarted=$((restarted + 1)) || true
+        fi
+      done
+      if [ "${restarted}" -gt 0 ]; then
+        ok "restarted ${restarted} enabled encoder(s) so publish JWT takes effect"
+      else
+        warn "no enabled nexvue-encode@N — start encoders after NEXVUE_PUBLISH_JWT is set"
+      fi
+    fi
+  else
+    warn "mediamtx.yml JWT patch failed — merge authMethod/authJWTJWKS from repo mediamtx.yml manually"
+  fi
+fi
+
 step "5/5 DeckLink helpers (status + audio probe + configure)"
 if [ -f "${REPO_DIR}/decklink-status.cpp" ] && ls /opt/decklink-sdk/Linux/include/DeckLinkAPI.h >/dev/null 2>&1; then
   ( cd "${REPO_DIR}" && make DECKLINK_SDK=/opt/decklink-sdk all && make install )
@@ -655,23 +723,23 @@ cat <<'NEXT'
 Next steps:
   1. If a reboot was flagged above: reboot, then  sudo ./setup.sh --check
   2. Install Blackmagic Desktop Video if flagged, reboot, re-check
-  3. If /etc/nexvue/mediamtx.yml pre-existed: merge JWT auth from repo mediamtx.yml
-     (authMethod: jwt + authJWTJWKS + authJWTInHTTPQuery), then restart mediamtx
-  4. Configure channels:
+  3. Configure channels:
        sudo cp channels-example.env /etc/nexvue/channels/0.env
        sudo nano /etc/nexvue/channels/0.env
-  5. Start services:
+  4. Start services:
        sudo systemctl enable --now nexvue-decklink-configure   # Duo/Quad BNCs → half-duplex
        sudo systemctl enable --now mediamtx nexvue-status nexvue-metrics nexvue-encode@0
-  6. Firewall (if ufw is in use): open ports with
+  5. Firewall (if ufw is in use): open ports with
        sudo ./setup.sh --firewall     (then: sudo ufw enable, once 22/ssh is allowed)
      or apply the rules manually — see the Firewall section in README.md
-  7. Remove any Apache Basic Auth / .htaccess AuthType — app login replaces it.
-     Confirm JWKS: curl -fsS http://127.0.0.1/nexvue-jwks.php | head
-  8. Login:  https://<edge-ip>/login.html
+  6. Remove any Apache Basic Auth / .htaccess AuthType — app login replaces it.
+     Confirm JWKS (MediaMTX): curl -fsS http://127.0.0.1:9080/nexvue-jwks.php | head
+  7. Login:  https://<edge-ip>/login.html
      Default bootstrap: admin / password  (forced change on first login)
      Users + share links: /users.html (admin). Player/Multiview/Metrics/Services/Settings
      require a session (or a share link ?t=… on Player).
      If login shows "auth store unavailable": sudo ./setup.sh  (repairs
      /var/lib/nexvue/auth ownership + migrates legacy auth.db).
+     If Player connects but never gets video after JWT auth: re-run setup.sh
+     (JWKS loopback :9080 + publish JWT + encoder restart).
 NEXT

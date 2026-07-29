@@ -199,10 +199,12 @@ API ports are loopback-bound (Phase 3).
 - **Share links:** Users page — named, one or more channels, absolute expiry
   **or** duration (always required; no open-ended), revocable. URL form
   `/index.html?t=<token>` (token shown once at create).
-- **MediaMTX:** `authMethod: jwt`, JWKS at `http://127.0.0.1/nexvue-jwks.php`,
-  short-lived viewer JWTs on WHEP (`?jwt=`), long-lived `NEXVUE_PUBLISH_JWT`
-  for encoders. Control API remains excluded from JWT (LAN paths/list + kick);
-  bind `:9997` to loopback before DMZ.
+- **MediaMTX:** `authMethod: jwt`, JWKS at
+  `http://127.0.0.1:9080/nexvue-jwks.php` (localhost-only Apache vhost from
+  `setup.sh` — avoids HTTPS redirects breaking JWKS), short-lived viewer JWTs
+  on WHEP (`?jwt=`), long-lived `NEXVUE_PUBLISH_JWT` for encoders. Control API
+  remains excluded from JWT (LAN paths/list + kick); bind `:9997` to loopback
+  before DMZ.
 - **Sync-ready API** (no portal client yet): `nexvue-auth.php` actions
   `users_export` / `users_import` / `shares_export` / `shares_import` with
   optional `since=` cursor; admin session **or** `Authorization: Bearer`

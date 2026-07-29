@@ -118,7 +118,17 @@ function auth_db(): SQLite3 {
 }
 
 function auth_migrate(): void {
+    static $done = false;
+    if ($done) {
+        return;
+    }
     $db = auth_db();
+    // Hot path: status/metrics/ops hit this often — skip DDL once schema is stamped.
+    $ver = (int)$db->querySingle('PRAGMA user_version');
+    if ($ver >= 1) {
+        $done = true;
+        return;
+    }
     $db->exec(<<<'SQL'
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -168,9 +178,16 @@ SQL);
             'must_change_password' => true,
         ]);
     }
+    $db->exec('PRAGMA user_version = 1');
+    $done = true;
 }
 
 function auth_ensure_keys(): array {
+    static $cached = null;
+    if (is_array($cached)) {
+        return $cached;
+    }
+
     $dir = auth_dir();
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0750, true) && !is_dir($dir)) {
@@ -181,6 +198,30 @@ function auth_ensure_keys(): array {
     $pubPath = $dir . '/public.pem';
     $kidPath = $dir . '/kid';
     $jwksPath = $dir . '/jwks.json';
+
+    // Fast path: existing key material + JWKS — no openssl rebuild per request.
+    if (is_file($privPath) && is_file($pubPath) && is_file($jwksPath)) {
+        $privPem = (string)file_get_contents($privPath);
+        $pubPem = (string)file_get_contents($pubPath);
+        $kid = is_file($kidPath) ? trim((string)file_get_contents($kidPath)) : '';
+        $jwksRaw = trim((string)file_get_contents($jwksPath));
+        $jwks = json_decode($jwksRaw, true);
+        if ($privPem !== '' && $pubPem !== '' && is_array($jwks) && isset($jwks['keys'][0])) {
+            if ($kid === '' && isset($jwks['keys'][0]['kid']) && is_string($jwks['keys'][0]['kid'])) {
+                $kid = $jwks['keys'][0]['kid'];
+            }
+            if ($kid !== '') {
+                $cached = [
+                    'private_pem' => $privPem,
+                    'public_pem' => $pubPem,
+                    'kid' => $kid,
+                    'jwks' => $jwks,
+                    'jwks_path' => $jwksPath,
+                ];
+                return $cached;
+            }
+        }
+    }
 
     if (!is_file($privPath) || !is_file($pubPath)) {
         $cfg = [
@@ -223,8 +264,6 @@ function auth_ensure_keys(): array {
     if ($jwksJson === false) {
         throw new RuntimeException('jwks encode failed');
     }
-    // Rewrite JWKS when missing/stale; tolerate a read-only tree only if a
-    // usable jwks.json is already present (e.g. root-owned after bootstrap).
     $needWrite = !is_file($jwksPath)
         || trim((string)file_get_contents($jwksPath)) !== $jwksJson;
     if ($needWrite && file_put_contents($jwksPath, $jwksJson) === false) {
@@ -233,13 +272,14 @@ function auth_ensure_keys(): array {
         }
     }
 
-    return [
+    $cached = [
         'private_pem' => $privPem,
         'public_pem' => $pubPem,
         'kid' => $kid,
         'jwks' => $jwks,
         'jwks_path' => $jwksPath,
     ];
+    return $cached;
 }
 
 function auth_build_jwks(string $pubPem, string $kid): array {
