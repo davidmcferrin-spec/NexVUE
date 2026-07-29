@@ -11,7 +11,8 @@
  * /var/lib/nexvue/auth.db is migrated on open when possible.
  *
  * Roles: admin | operator | sharer | viewer
- * Share links: named, channel-scoped, mandatory expires_at, revocable.
+ * Share links: named, channel-scoped, mandatory expires_at, revocable,
+ * hard-deletable; expired rows purged 7 days after expires_at.
  * User channel ACL: users.channels JSON (NULL = all ch0–ch7).
  */
 
@@ -22,6 +23,8 @@ const NEXVUE_AUTH_JWT_TTL_S = 90;
 const NEXVUE_AUTH_PUBLISH_TTL_S = 315360000; // ~10 years
 const NEXVUE_AUTH_RESET_TTL_S = 3600;
 const NEXVUE_AUTH_MAX_CHANNELS = 8; // ch0..ch7 (+ lo)
+/** Keep expired share rows this long after expires_at, then hard-delete. */
+const NEXVUE_AUTH_SHARE_PURGE_GRACE_S = 604800; // 7 days
 const NEXVUE_AUTH_SCHEMA_VERSION = 2;
 
 function auth_dir(): string {
@@ -1028,7 +1031,91 @@ function auth_share_revoke(string $id): array {
     return $out;
 }
 
-/** Admin may revoke any share; others only their own. */
+/**
+ * Hard-delete a share row (token becomes invalid immediately).
+ *
+ * @throws InvalidArgumentException when missing
+ */
+function auth_share_delete(string $id): void {
+    $row = auth_share_find_by_id($id);
+    if ($row === null) {
+        throw new InvalidArgumentException('share not found');
+    }
+    $db = auth_db();
+    $st = $db->prepare('DELETE FROM share_links WHERE id = :id');
+    $st->bindValue(':id', $id, SQLITE3_TEXT);
+    if (!$st->execute()) {
+        throw new RuntimeException('share delete failed');
+    }
+}
+
+/**
+ * Update name / channels / expiry. Does not rotate token_hash.
+ * Revoked shares cannot be edited (delete instead). Extending expires_at
+ * on an expired-but-not-revoked row revives it.
+ *
+ * @param list<string> $channels already normalized bases
+ * @throws InvalidArgumentException on validation failure
+ */
+function auth_share_update(string $id, string $name, array $channels, string $expiresAt): array {
+    $row = auth_share_find_by_id($id);
+    if ($row === null) {
+        throw new InvalidArgumentException('share not found');
+    }
+    if (!empty($row['revoked_at'])) {
+        throw new InvalidArgumentException('cannot edit a revoked share');
+    }
+    $name = trim($name);
+    if ($name === '' || strlen($name) > 128) {
+        throw new InvalidArgumentException('invalid share name');
+    }
+    $channels = auth_normalize_channels($channels, false);
+    if ($expiresAt === '' || strtotime($expiresAt) === false) {
+        throw new InvalidArgumentException('expires_at required');
+    }
+    if (strtotime($expiresAt) <= time()) {
+        throw new InvalidArgumentException('expires_at must be in the future');
+    }
+    $now = auth_now_iso();
+    $db = auth_db();
+    $st = $db->prepare(
+        'UPDATE share_links SET name=:n, channels=:ch, expires_at=:ex, updated_at=:up WHERE id=:id'
+    );
+    $st->bindValue(':n', $name, SQLITE3_TEXT);
+    $st->bindValue(':ch', json_encode($channels, JSON_UNESCAPED_SLASHES), SQLITE3_TEXT);
+    $st->bindValue(':ex', $expiresAt, SQLITE3_TEXT);
+    $st->bindValue(':up', $now, SQLITE3_TEXT);
+    $st->bindValue(':id', $id, SQLITE3_TEXT);
+    if (!$st->execute()) {
+        throw new RuntimeException('share update failed');
+    }
+    $out = auth_share_find_by_id($id);
+    if ($out === null) {
+        throw new RuntimeException('share update failed');
+    }
+    return $out;
+}
+
+/**
+ * Hard-delete shares whose expires_at is older than $graceS (default 7 days).
+ * Opportunistic cleanup — no timer required.
+ *
+ * @return int rows deleted
+ */
+function auth_shares_purge_expired(?int $graceS = null): int {
+    $grace = $graceS ?? NEXVUE_AUTH_SHARE_PURGE_GRACE_S;
+    if ($grace < 0) {
+        $grace = 0;
+    }
+    $cutoff = gmdate('Y-m-d\TH:i:s\Z', time() - $grace);
+    $db = auth_db();
+    $st = $db->prepare('DELETE FROM share_links WHERE expires_at < :cut');
+    $st->bindValue(':cut', $cutoff, SQLITE3_TEXT);
+    $st->execute();
+    return $db->changes();
+}
+
+/** Admin may manage any share; others only their own. */
 function auth_share_can_manage(array $shareRow, array $userRow): bool {
     if (($userRow['role'] ?? '') === 'admin') {
         return true;
@@ -1043,6 +1130,7 @@ function auth_share_can_manage(array $shareRow, array $userRow): bool {
  * @return list<array<string,mixed>>
  */
 function auth_shares_list(?string $createdBy = null): array {
+    auth_shares_purge_expired();
     $db = auth_db();
     if ($createdBy !== null && $createdBy !== '') {
         $st = $db->prepare(

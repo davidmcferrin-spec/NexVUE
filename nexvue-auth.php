@@ -5,7 +5,9 @@
  * Public: login, logout, me, forgot, reset, share_redeem
  * Authed: whep_jwt, change_password
  * Admin: users_*, user_reset_link, users_export/import, shares_export/import
- * Admin + sharer: shares_list, share_create, share_revoke (sharer: own only)
+ * Admin + sharer: shares_list, share_create, share_revoke, share_delete
+ *   (sharer: own only). Admin: share_update (name/channels/expiry; no token rotate).
+ * Expired shares are hard-deleted 7 days after expires_at (opportunistic on list).
  * Sync: Bearer NEXVUE_SYNC_KEY may call export/import without a browser session.
  *
  * CLI include: when PHP_SAPI is cli and NEXVUE_AUTH_HTTP is unset, returns
@@ -311,6 +313,67 @@ try {
             $row = auth_share_revoke($id);
         } catch (InvalidArgumentException $e) {
             auth_api_fail(404, $e->getMessage());
+        }
+        auth_api_ok(['share' => auth_share_row_public($row)]);
+    }
+
+    if ($action === 'share_delete') {
+        $actor = auth_require_roles(['admin', 'sharer']);
+        $id = (string)($body['id'] ?? '');
+        if ($id === '') {
+            auth_api_fail(400, 'missing id');
+        }
+        $existing = auth_share_find_by_id($id);
+        if ($existing === null) {
+            auth_api_fail(404, 'share not found');
+        }
+        if (!auth_share_can_manage($existing, $actor)) {
+            auth_api_fail(403, 'forbidden');
+        }
+        $pub = auth_share_row_public($existing);
+        // Active links must be revoked first — delete is for cleanup of
+        // revoked/expired rows (and admin declutter).
+        if (($pub['status'] ?? '') === 'active') {
+            auth_api_fail(400, 'revoke the share before deleting');
+        }
+        try {
+            auth_share_delete($id);
+        } catch (InvalidArgumentException $e) {
+            auth_api_fail(404, $e->getMessage());
+        }
+        auth_api_ok(['deleted' => true, 'id' => $id]);
+    }
+
+    if ($action === 'share_update') {
+        $actor = auth_require_roles(['admin']);
+        $id = (string)($body['id'] ?? '');
+        if ($id === '') {
+            auth_api_fail(400, 'missing id');
+        }
+        $existing = auth_share_find_by_id($id);
+        if ($existing === null) {
+            auth_api_fail(404, 'share not found');
+        }
+        $name = (string)($body['name'] ?? '');
+        $channels = $body['channels'] ?? [];
+        if (!is_array($channels)) {
+            auth_api_fail(400, 'channels must be an array');
+        }
+        $duration = isset($body['duration_s']) ? (int)$body['duration_s'] : null;
+        $absolute = isset($body['expires_at']) ? (string)$body['expires_at'] : null;
+        // page only gates Multiview's 4-channel cap; token URL is unchanged.
+        $pageKey = (isset($body['page']) && is_string($body['page']) && $body['page'] === 'multiview')
+            ? 'multiview'
+            : 'player';
+        try {
+            $normalized = auth_normalize_share_channels($channels, $pageKey);
+            if (!auth_user_allows_channels($actor, $normalized)) {
+                auth_api_fail(403, 'channel not allowed for your account');
+            }
+            $expires = auth_parse_expires($absolute, $duration);
+            $row = auth_share_update($id, $name, $normalized, $expires);
+        } catch (InvalidArgumentException $e) {
+            auth_api_fail(400, $e->getMessage());
         }
         auth_api_ok(['share' => auth_share_row_public($row)]);
     }

@@ -142,6 +142,83 @@ echo json_encode([
         self.assertFalse(data["after"])
         self.assertTrue(data["has_token"])
 
+    def test_share_update_and_delete(self) -> None:
+        data = self._php(
+            """
+$admin = auth_user_find_by_username('admin');
+$exp = gmdate('Y-m-d\\TH:i:s\\Z', time() + 3600);
+$c = auth_share_create('Old name', ['ch0'], $exp, $admin['id']);
+$id = $c['row']['id'];
+$token = $c['token'];
+$exp2 = gmdate('Y-m-d\\TH:i:s\\Z', time() + 7200);
+$upd = auth_share_update($id, 'New name', ['ch1', 'ch3'], $exp2);
+$same_token = auth_share_find_by_token($token) !== null;
+$revoked_edit = null;
+auth_share_revoke($id);
+try {
+  auth_share_update($id, 'Nope', ['ch0'], $exp2);
+  $revoked_edit = 'ok';
+} catch (InvalidArgumentException $e) {
+  $revoked_edit = $e->getMessage();
+}
+auth_share_delete($id);
+$gone = auth_share_find_by_id($id);
+echo json_encode([
+  'name' => $upd['name'],
+  'channels' => json_decode($upd['channels'], true),
+  'same_token' => $same_token,
+  'revoked_edit' => $revoked_edit,
+  'gone' => $gone === null,
+]);
+"""
+        )
+        self.assertEqual(data["name"], "New name")
+        self.assertEqual(data["channels"], ["ch1", "ch3"])
+        self.assertTrue(data["same_token"])
+        self.assertIn("revoked", data["revoked_edit"].lower())
+        self.assertTrue(data["gone"])
+
+    def test_shares_purge_expired_grace(self) -> None:
+        data = self._php(
+            """
+$admin = auth_user_find_by_username('admin');
+$old = gmdate('Y-m-d\\TH:i:s\\Z', time() - (8 * 86400));
+$recent = gmdate('Y-m-d\\TH:i:s\\Z', time() - (2 * 86400));
+$future = gmdate('Y-m-d\\TH:i:s\\Z', time() + 3600);
+// Insert expired rows directly (create() rejects past expires_at).
+$db = auth_db();
+$now = auth_now_iso();
+foreach ([['stale', $old], ['fresh-expired', $recent], ['live', $future]] as $pair) {
+  [$name, $ex] = $pair;
+  $id = auth_uuid();
+  $st = $db->prepare(
+    'INSERT INTO share_links (id, name, token_hash, channels, expires_at, revoked_at, created_by, created_at, updated_at, synced_at)
+     VALUES (:id, :n, :th, :ch, :ex, NULL, :cb, :c, :up, NULL)'
+  );
+  $st->bindValue(':id', $id, SQLITE3_TEXT);
+  $st->bindValue(':n', $name, SQLITE3_TEXT);
+  $st->bindValue(':th', auth_hash_token(bin2hex(random_bytes(8))), SQLITE3_TEXT);
+  $st->bindValue(':ch', '["ch0"]', SQLITE3_TEXT);
+  $st->bindValue(':ex', $ex, SQLITE3_TEXT);
+  $st->bindValue(':cb', $admin['id'], SQLITE3_TEXT);
+  $st->bindValue(':c', $now, SQLITE3_TEXT);
+  $st->bindValue(':up', $now, SQLITE3_TEXT);
+  $st->execute();
+}
+$deleted = auth_shares_purge_expired(7 * 86400);
+$names = [];
+foreach (auth_shares_list() as $s) {
+  $names[] = $s['name'];
+}
+sort($names);
+echo json_encode(['deleted' => $deleted, 'names' => $names]);
+"""
+        )
+        self.assertGreaterEqual(data["deleted"], 1)
+        self.assertIn("fresh-expired", data["names"])
+        self.assertIn("live", data["names"])
+        self.assertNotIn("stale", data["names"])
+
     def test_share_channels_preserve_order(self) -> None:
         data = self._php(
             """

@@ -181,7 +181,8 @@
 
 <dialog class="modal-sheet" id="share-dlg">
   <div class="modal-inner">
-    <h3>Create share link</h3>
+    <h3 id="share-dlg-title">Create share link</h3>
+    <input type="hidden" id="share-id">
     <label for="share-name">Name</label>
     <input id="share-name" required maxlength="128">
     <label for="share-page">Page</label>
@@ -189,6 +190,9 @@
       <option value="player" selected>Player</option>
       <option value="multiview">Multiview (up to 4 channels)</option>
     </select>
+    <p id="share-edit-hint" class="muted" hidden style="font-size:12px;margin:4px 0 0;color:var(--dim)">
+      Editing keeps the same token URL. Page only limits the channel count (Multiview ≤4).
+    </p>
     <label id="share-ch-lab">Channels (one or more)</label>
     <div class="ch-grid" id="share-channels"></div>
     <label for="share-mode">Expiry</label>
@@ -286,6 +290,53 @@
     });
   }
 
+  function toDatetimeLocalValue(iso) {
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return "";
+    const d = new Date(t);
+    const pad = function (n) { return String(n).padStart(2, "0"); };
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+      "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  function openShareEditor(s) {
+    const editing = !!(s && s.id);
+    document.getElementById("share-dlg-title").textContent =
+      editing ? "Edit share link" : "Create share link";
+    document.getElementById("share-id").value = editing ? s.id : "";
+    document.getElementById("share-name").value = editing ? (s.name || "") : "";
+    document.getElementById("share-err").textContent = "";
+    document.getElementById("share-edit-hint").hidden = !editing;
+    document.getElementById("share-save").textContent = editing ? "Save" : "Create";
+    // Page is not stored on the share — only used for Multiview's 4-channel
+    // cap when creating/editing. Default Player; switch to Multiview if needed.
+    document.getElementById("share-page").value = "player";
+    if (editing && Array.isArray(s.channels)) {
+      const set = {};
+      s.channels.forEach(function (c) { set[c] = true; });
+      chGrid.querySelectorAll("input").forEach(function (c) {
+        c.checked = !!set[c.value];
+      });
+    } else {
+      chGrid.querySelectorAll("input").forEach(function (c) { c.checked = false; });
+    }
+    const expMs = editing && s.expires_at ? Date.parse(s.expires_at) : NaN;
+    if (editing && Number.isFinite(expMs) && expMs > Date.now()) {
+      document.getElementById("share-mode").value = "absolute";
+      document.getElementById("share-duration-wrap").hidden = true;
+      document.getElementById("share-abs-wrap").hidden = false;
+      document.getElementById("share-expires").value = toDatetimeLocalValue(s.expires_at);
+    } else {
+      // Create, or revive expired — pick a fresh future expiry.
+      document.getElementById("share-mode").value = "duration";
+      document.getElementById("share-duration-wrap").hidden = false;
+      document.getElementById("share-abs-wrap").hidden = true;
+      document.getElementById("share-expires").value = "";
+    }
+    syncShareChannelMax();
+    document.getElementById("share-dlg").showModal();
+  }
+
   async function loadShares() {
     const data = await authApi("shares_list");
     const tb = document.getElementById("shares-body");
@@ -295,10 +346,22 @@
       const who = s.created_by_username || s.created_by || "—";
       tr.innerHTML = `<td>${esc(s.name)}</td><td>${esc((s.channels || []).join(", "))}</td><td>${esc(s.expires_at)}</td><td>${esc(who)}</td><td class="status-${esc(s.status)}">${esc(s.status)}</td><td></td>`;
       const td = tr.lastElementChild;
+      if (s.status === "active" || s.status === "expired") {
+        td.appendChild(btn("Edit", function () { openShareEditor(s); }));
+        td.appendChild(document.createTextNode(" "));
+      }
       if (s.status === "active") {
         td.appendChild(btn("Revoke", async function () {
           if (!confirm("Revoke share “" + s.name + "”?")) return;
           await authApi("share_revoke", { id: s.id });
+          loadShares();
+        }, "danger"));
+        td.appendChild(document.createTextNode(" "));
+      }
+      if (s.status === "revoked" || s.status === "expired") {
+        td.appendChild(btn("Delete", async function () {
+          if (!confirm("Permanently delete share “" + s.name + "”? This cannot be undone.")) return;
+          await authApi("share_delete", { id: s.id });
           loadShares();
         }, "danger"));
       }
@@ -328,7 +391,7 @@
       "Cannot create share links.",
     sharer:
       "<strong>Viewer+Share</strong> — viewer plus share links. Can watch granted channels and " +
-      "create/revoke their own share links from Player/Multiview (always with an expiry). " +
+      "create/revoke/delete their own share links from Player/Multiview (always with an expiry). " +
       "Cannot open Metrics, Settings, Services, or Users.",
     operator:
       "<strong>operator</strong> — day-to-day station ops. Can watch plus Settings " +
@@ -336,7 +399,8 @@
       "manage accounts or share links.",
     admin:
       "<strong>admin</strong> — full edge control. Can do everything an operator can, " +
-      "plus Services (start/stop/update) and Users (accounts and all share links).",
+      "plus Services (start/stop/update) and Users (accounts and all share links: " +
+      "create, edit name/channels/expiry, revoke, delete).",
   };
 
   function updateRoleHelp() {
@@ -439,20 +503,18 @@
     syncShareChannelMax();
   });
 
-  document.getElementById("share-add").onclick = function () {
-    document.getElementById("share-name").value = "";
-    document.getElementById("share-err").textContent = "";
-    document.getElementById("share-page").value = "player";
-    chGrid.querySelectorAll("input").forEach(function (c) { c.checked = false; });
-    syncShareChannelMax();
-    document.getElementById("share-dlg").showModal();
-  };
+  document.getElementById("share-add").onclick = function () { openShareEditor(null); };
   document.getElementById("share-cancel").onclick = function () { document.getElementById("share-dlg").close(); };
   document.getElementById("share-save").onclick = async function () {
     const err = document.getElementById("share-err");
     err.textContent = "";
+    const id = document.getElementById("share-id").value;
     const page = sharePageKey();
     const channels = Array.from(chGrid.querySelectorAll("input:checked")).map(function (c) { return c.value; });
+    if (!channels.length) {
+      err.textContent = "select at least one channel";
+      return;
+    }
     if (page === "multiview" && channels.length > 4) {
       err.textContent = "multiview shares allow at most 4 channels";
       return;
@@ -462,6 +524,7 @@
       channels: channels,
       page: page,
     };
+    if (id) body.id = id;
     if (document.getElementById("share-mode").value === "absolute") {
       const local = document.getElementById("share-expires").value;
       if (!local) { err.textContent = "expiry required"; return; }
@@ -477,14 +540,21 @@
       }
     }
     try {
-      const data = await authApi("share_create", body);
-      document.getElementById("share-dlg").close();
-      const once = document.getElementById("share-once");
-      once.hidden = false;
-      once.textContent = "Copy now (token shown once): " + (data.share && data.share.url ? data.share.url : "");
-      loadShares();
+      if (id) {
+        await authApi("share_update", body);
+        document.getElementById("share-dlg").close();
+        document.getElementById("share-once").hidden = true;
+        loadShares();
+      } else {
+        const data = await authApi("share_create", body);
+        document.getElementById("share-dlg").close();
+        const once = document.getElementById("share-once");
+        once.hidden = false;
+        once.textContent = "Copy now (token shown once): " + (data.share && data.share.url ? data.share.url : "");
+        loadShares();
+      }
     } catch (e) {
-      err.textContent = e.message || "create failed";
+      err.textContent = e.message || (id ? "save failed" : "create failed");
     }
   };
 

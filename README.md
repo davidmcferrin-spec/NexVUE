@@ -213,7 +213,11 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   + creator; sharer sees own. URL form `/index.html?t=<token>` or
   `/multiview.html?t=<token>` (token shown once). Opening a Multiview share
   **auto-tunes** panes from the token's channel list (Dual for 1–2, Quad for
-  3–4; order preserved from create).
+  3–4; order preserved from create). Admin can **Edit** name/channels/expiry
+  (token URL unchanged) and **Delete** revoked/expired rows; sharers can
+  Delete their own revoked/expired shares. Rows whose `expires_at` is more
+  than **7 days** in the past are hard-deleted opportunistically on
+  `shares_list` (no cron).
 - **Player audio defaults (first visit):** volume 20%, muted, VU meters off
   (`nexvue-vu.js` localStorage). Existing prefs unchanged.
 - **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`
@@ -321,8 +325,9 @@ Then from a LAN machine:
   toggle; click a pane for audio (one unmuted at a time) and to focus the
   **Session metrics** bottom drawer on that pane. Same NexVUE brand → QR
   share. Global **CC** toggle matches the player preference key.
-  **⛶ Fullscreen** hides nav, control bar, session metrics, and per-pane
-  channel selectors for a near-frameless wall (Esc / button to exit).
+  **⛶ Fullscreen** hides nav, control bar, pane borders, and per-pane
+  channel selectors for a frameless wall; the session-metrics drawer stays
+  hidden unless it was already open (Esc / button to exit).
 - **Usage metrics:** top nav → Metrics (`/metrics.html` + `nexvue-metrics.php`
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer

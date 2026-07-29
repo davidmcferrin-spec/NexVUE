@@ -10,7 +10,8 @@
   toggle. Only one pane is audible at a time — click a pane to hear it.
   Per-channel VU meters + solo are browser-local (nexvue-vu.js).
   Share links (?t=) cap at 4 channels and auto-tune panes on open.
-  Fullscreen hides chrome (nav/bar/pane selectors) for a near-frameless wall.
+  Fullscreen (on <html>) hides chrome (nav/bar/pane selectors/borders) for a
+  frameless wall; collapsed stats drawer hides unless already open.
   Reuses the same WHEP + latency-hint pattern as index.html.
 -->
 <script src="nexvue-ui.js"></script>
@@ -218,23 +219,45 @@
   }
   #stat-tip.visible { display: block; }
 
-  /* Near-frameless wall mode: hide all chrome so dual/quad fill the display. */
+  /* Near-frameless wall mode: hide chrome so dual/quad fill the display.
+     Fullscreen is requested on <html> (documentElement), so match html:fullscreen
+     — body:fullscreen never fires and left the wall chrome visible. */
+  html:fullscreen, html:-webkit-full-screen,
   body:fullscreen, body:-webkit-full-screen {
-    padding: 0;
+    width: 100%; height: 100%;
     background: #000;
   }
+  html:fullscreen body, html:-webkit-full-screen body,
+  body:fullscreen, body:-webkit-full-screen {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+  html:fullscreen .stage, html:-webkit-full-screen .stage,
   body:fullscreen .stage, body:-webkit-full-screen .stage {
     flex: 1; min-height: 0; width: 100%; height: 100%;
   }
+  html:fullscreen #grid, html:-webkit-full-screen #grid,
   body:fullscreen #grid, body:-webkit-full-screen #grid { gap: 0; }
+  html:fullscreen .topnav, html:-webkit-full-screen .topnav,
+  html:fullscreen .bar, html:-webkit-full-screen .bar,
+  html:fullscreen .pane-bar, html:-webkit-full-screen .pane-bar,
+  html:fullscreen .audio-badge, html:-webkit-full-screen .audio-badge,
   body:fullscreen .topnav, body:-webkit-full-screen .topnav,
   body:fullscreen .bar, body:-webkit-full-screen .bar,
-  body:fullscreen .stats-drawer, body:-webkit-full-screen .stats-drawer,
   body:fullscreen .pane-bar, body:-webkit-full-screen .pane-bar,
   body:fullscreen .audio-badge, body:-webkit-full-screen .audio-badge { display: none; }
+  /* Collapsed metrics drawer off; leave it if the operator already opened it. */
+  html:fullscreen .stats-drawer:not(.open), html:-webkit-full-screen .stats-drawer:not(.open),
+  body:fullscreen .stats-drawer:not(.open), body:-webkit-full-screen .stats-drawer:not(.open) {
+    display: none;
+  }
+  html:fullscreen .pane, html:-webkit-full-screen .pane,
   body:fullscreen .pane, body:-webkit-full-screen .pane {
     border: none; border-radius: 0;
   }
+  html:fullscreen .pane.audio-active, html:-webkit-full-screen .pane.audio-active,
   body:fullscreen .pane.audio-active, body:-webkit-full-screen .pane.audio-active {
     outline: 2px solid var(--acc); outline-offset: -2px;
   }

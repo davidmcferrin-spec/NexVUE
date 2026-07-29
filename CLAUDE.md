@@ -136,7 +136,9 @@ this box can't get additional ports opened.
   per-user channel ACL, named revocable share links with mandatory expiry
   (Users admin UI + Player/Multiview Share for admin/sharer; sharer sees own
   tokens only; Multiview shares ≤4 channels and auto-tune panes on open;
-  Multiview Fullscreen is near-frameless), MediaMTX JWT + local
+  Multiview Fullscreen is frameless (html:fullscreen hides chrome/borders);
+  admin edit + delete revoked/expired;
+  expired rows purged 7d after expires_at), MediaMTX JWT + local
   JWKS, long-lived publish JWT in `nexvue.env`, sync-shaped export/import
   on `nexvue-auth.php` for a future portal. Auth SQLite + keys live under
   `/var/lib/nexvue/auth/` (www-data RW; `auth.db` inside that dir so WAL
@@ -216,7 +218,8 @@ this box can't get additional ports opened.
   Top nav: Player / Multiview / Metrics / Services / Settings / Users.
   Login at `login.html` (session cookie); share links use `?t=` on Player /
   Multiview (Multiview shares ≤4 channels, auto-tune panes; Fullscreen
-  near-frameless). Roles: admin (Users+Services+Settings+Metrics+all shares),
+  near-frameless; admin edit name/channels/expiry; delete after revoke/expiry;
+  purge 7d post-expiry). Roles: admin (Users+Services+Settings+Metrics+all shares),
   operator (Settings+Metrics), sharer / UI **Viewer+Share** (watch + own share
   links via Player/Multiview Share), viewer (watch). Per-user channel ACL on Users
   (`users.channels`; null = all). MediaMTX JWT via local JWKS; encoders use

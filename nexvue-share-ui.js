@@ -260,6 +260,29 @@
               };
               td.appendChild(rev);
             }
+            if (s.status === "revoked" || s.status === "expired") {
+              var del = document.createElement("button");
+              del.type = "button";
+              del.className = "danger";
+              del.textContent = "Delete";
+              del.onclick = function () {
+                if (
+                  !confirm(
+                    'Permanently delete share "' +
+                      s.name +
+                      '"? This cannot be undone.'
+                  )
+                ) {
+                  return;
+                }
+                NexVueAuth.api("share_delete", { id: s.id })
+                  .then(loadList)
+                  .catch(function (e) {
+                    alert(e.message || e);
+                  });
+              };
+              td.appendChild(del);
+            }
             tb.appendChild(tr);
           });
         })
