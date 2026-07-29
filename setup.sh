@@ -49,6 +49,8 @@ done
 REQUIRED_FILES=(
   mediamtx.yml mediamtx.service
   nexvue-encode.sh nexvue-supervisor.py nexvue-encode@.service
+  nexvue-decklink-configure.service
+  decklink-configure.cpp
   nexvue-status-server.py nexvue-status.service
   nexvue-metrics-server.py nexvue-metrics.service
   nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js
@@ -96,11 +98,38 @@ apt-get install -y -qq \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
   intel-media-va-driver-non-free vainfo intel-gpu-tools \
-  build-essential curl ca-certificates jq \
-  php-sqlite3 \
+  build-essential curl ca-certificates jq openssl \
+  apache2 libapache2-mod-php php-cli php-sqlite3 \
   python3-gi python3-gst-1.0 gir1.2-glib-2.0 gir1.2-gstreamer-1.0 \
   gir1.2-gst-plugins-base-1.0
-ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for the Phase 1.5 supervisor — never pip; php-sqlite3 for metrics.php)"
+ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for the Phase 1.5 supervisor — never pip; Apache + php-cli/sqlite3 for login/auth + metrics.php)"
+
+# PHP under Apache (login / ops / metrics). Idempotent: enable whatever
+# versioned mod_php apt just installed, then reload if Apache is running.
+if command -v a2enmod >/dev/null 2>&1; then
+  php_mod_enabled=false
+  for load in /etc/apache2/mods-available/php*.load; do
+    [ -f "$load" ] || continue
+    m="$(basename "$load" .load)"
+    if a2enmod "$m" >/dev/null 2>&1; then
+      ok "Apache module enabled: $m"
+      php_mod_enabled=true
+      break
+    fi
+  done
+  $php_mod_enabled || warn "no php*.load under /etc/apache2/mods-available — login JSON APIs will 500 until libapache2-mod-php is enabled"
+  if systemctl is-active --quiet apache2 2>/dev/null; then
+    systemctl reload apache2 >/dev/null 2>&1 \
+      && ok "apache2 reloaded" \
+      || warn "apache2 reload failed — restart manually after setup if login fails"
+  else
+    systemctl enable --now apache2 >/dev/null 2>&1 \
+      && ok "apache2 enabled and started" \
+      || warn "could not start apache2 — start it before using /login.html"
+  fi
+else
+  warn "a2enmod missing — install apache2 + libapache2-mod-php for the web UI"
+fi
 
 # Allow the metrics collector (user nexvue) to read iGPU PMU without root.
 # AmbientCapabilities on the unit also requests CAP_PERFMON; setcap covers
@@ -254,9 +283,13 @@ chown nexvue:nexvue /run/nexvue/captions 2>/dev/null || true
 chmod 755 /run/nexvue/captions 2>/dev/null || true
 install -m 644 "${REPO_DIR}/mediamtx.service" \
                "${REPO_DIR}/nexvue-encode@.service" \
+               "${REPO_DIR}/nexvue-decklink-configure.service" \
                "${REPO_DIR}/nexvue-status.service" \
                "${REPO_DIR}/nexvue-metrics.service" /etc/systemd/system/
 systemctl daemon-reload
+systemctl enable nexvue-decklink-configure.service >/dev/null 2>&1 \
+  && ok "enabled nexvue-decklink-configure.service (half-duplex BNCs before encode)" \
+  || warn "could not enable nexvue-decklink-configure.service"
 ok "scripts + units installed, systemd reloaded"
 
 # Ops UI sudoers — validate before installing (a bad drop-in breaks sudo).
@@ -284,25 +317,63 @@ if id www-data >/dev/null 2>&1; then
 fi
 
 # Local auth store (www-data RW) + keypair / JWKS / bootstrap admin + publish JWT.
+# DB path is /var/lib/nexvue/auth/auth.db (inside the www-data dir) so Apache can
+# create SQLite WAL sidecars. Legacy /var/lib/nexvue/auth.db is migrated here.
 install -d -m 755 /usr/local/share/nexvue
+install -d -m 755 /var/lib/nexvue
 install -d -m 750 -o www-data -g www-data /var/lib/nexvue/auth 2>/dev/null \
   || install -d -m 750 /var/lib/nexvue/auth
 if id www-data >/dev/null 2>&1; then
   chown www-data:www-data /var/lib/nexvue/auth 2>/dev/null || true
   chmod 750 /var/lib/nexvue/auth 2>/dev/null || true
 fi
+# Migrate legacy DB sitting next to metrics.db (parent dir is often nexvue:nexvue
+# 0755 — www-data cannot create auth.db-wal there → "auth store unavailable").
+if [ -f /var/lib/nexvue/auth.db ] && [ ! -f /var/lib/nexvue/auth/auth.db ]; then
+  mv /var/lib/nexvue/auth.db /var/lib/nexvue/auth/auth.db
+  for side in /var/lib/nexvue/auth.db-*; do
+    [ -e "$side" ] || continue
+    mv "$side" "/var/lib/nexvue/auth/$(basename "$side")"
+  done
+  ok "migrated auth.db → /var/lib/nexvue/auth/auth.db"
+fi
 install -m 644 "${REPO_DIR}/nexvue-auth-lib.php" /usr/local/share/nexvue/nexvue-auth-lib.php
 install -m 755 "${REPO_DIR}/nexvue-auth-bootstrap.php" /usr/local/bin/nexvue-auth-bootstrap.php
 if command -v php >/dev/null 2>&1; then
   if php "${REPO_DIR}/nexvue-auth-bootstrap.php"; then
     ok "auth bootstrap (auth.db + JWKS + seed admin + NEXVUE_PUBLISH_JWT)"
-    if id www-data >/dev/null 2>&1; then
-      chown www-data:www-data /var/lib/nexvue/auth.db /var/lib/nexvue/auth.db-* 2>/dev/null || true
-      chown -R www-data:www-data /var/lib/nexvue/auth 2>/dev/null || true
-      chmod 640 /var/lib/nexvue/auth/private.pem 2>/dev/null || true
-    fi
   else
     warn "auth bootstrap failed — run: sudo php ${REPO_DIR}/nexvue-auth-bootstrap.php"
+  fi
+  if id www-data >/dev/null 2>&1; then
+    chown -R www-data:www-data /var/lib/nexvue/auth 2>/dev/null || true
+    chmod 750 /var/lib/nexvue/auth 2>/dev/null || true
+    chmod 640 /var/lib/nexvue/auth/private.pem 2>/dev/null || true
+    chmod 644 /var/lib/nexvue/auth/public.pem /var/lib/nexvue/auth/jwks.json \
+      /var/lib/nexvue/auth/kid /var/lib/nexvue/auth/auth.db 2>/dev/null || true
+    # WAL sidecars if present from bootstrap.
+    chmod 644 /var/lib/nexvue/auth/auth.db-* 2>/dev/null || true
+    # Smoke: Apache user must open/migrate/write the store (login uses this path).
+    AUTH_SMOKE_PHP='
+      require "'"${REPO_DIR}"'/nexvue-auth-lib.php";
+      auth_migrate();
+      auth_ensure_keys();
+      $n = (int)auth_db()->querySingle("SELECT COUNT(*) FROM users");
+      if ($n < 1) { fwrite(STDERR, "no users\n"); exit(1); }
+      echo "users=$n\n";
+    '
+    auth_smoke_ok=false
+    if command -v runuser >/dev/null 2>&1; then
+      runuser -u www-data -- php -r "${AUTH_SMOKE_PHP}" >/dev/null 2>&1 && auth_smoke_ok=true
+    fi
+    if ! $auth_smoke_ok; then
+      sudo -u www-data php -r "${AUTH_SMOKE_PHP}" >/dev/null 2>&1 && auth_smoke_ok=true
+    fi
+    if $auth_smoke_ok; then
+      ok "auth store writable by www-data (/var/lib/nexvue/auth)"
+    else
+      warn "auth store NOT usable as www-data — login will show 'auth store unavailable'; fix ownership on /var/lib/nexvue/auth and re-run setup"
+    fi
   fi
 else
   warn "php missing — cannot bootstrap auth.db / JWKS"
@@ -346,16 +417,30 @@ else
   warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html … login.html users.html nexvue-auth*.php ${WEBROOT}/"
 fi
 
-step "5/5 DeckLink helpers (status + audio probe)"
+step "5/5 DeckLink helpers (status + audio probe + configure)"
 if [ -f "${REPO_DIR}/decklink-status.cpp" ] && ls /opt/decklink-sdk/Linux/include/DeckLinkAPI.h >/dev/null 2>&1; then
   ( cd "${REPO_DIR}" && make DECKLINK_SDK=/opt/decklink-sdk all && make install )
-  ok "decklink-status + decklink-audio-probe built from SDK at /opt/decklink-sdk"
-elif [ -x /usr/local/bin/decklink-status ] && [ -x /usr/local/bin/decklink-audio-probe ]; then
+  ok "decklink-status + decklink-audio-probe + decklink-configure built from SDK at /opt/decklink-sdk"
+elif [ -x /usr/local/bin/decklink-status ] && [ -x /usr/local/bin/decklink-audio-probe ] \
+     && [ -x /usr/local/bin/decklink-configure ]; then
   ok "decklink helpers already installed"
 elif [ -x /usr/local/bin/decklink-status ]; then
-  warn "decklink-status present but decklink-audio-probe missing — rebuild: make && sudo make install"
+  warn "decklink helpers incomplete — rebuild: make && sudo make install"
 else
-  warn "DeckLink helpers not built — download the SDK, then: make DECKLINK_SDK=/path && sudo make install (status dots + Settings Detect audio need them)"
+  warn "DeckLink helpers not built — download the SDK, then: make DECKLINK_SDK=/path && sudo make install (status dots + Settings Detect audio + BNC mapping need them)"
+fi
+if [ -x /usr/local/bin/decklink-configure ]; then
+  # Apply half-duplex now (encoders may be stopped during setup; safe no-op if already set).
+  if /usr/local/bin/decklink-configure --apply-inputs >/tmp/nexvue-decklink-configure.json 2>/tmp/nexvue-decklink-configure.err; then
+    ok "decklink-configure --apply-inputs (BNC half-duplex for capture)"
+  else
+    rc=$?
+    if [ "$rc" -eq 1 ]; then
+      warn "decklink-configure: no DeckLink API (Desktop Video not installed?)"
+    else
+      warn "decklink-configure --apply-inputs failed (rc=$rc) — stop encoders and re-run: sudo decklink-configure --apply-inputs"
+    fi
+  fi
 fi
 
 fi # !CHECK_ONLY
@@ -411,15 +496,26 @@ done
 
 # MediaMTX + units
 [ -x /usr/local/bin/mediamtx ] && ok "mediamtx binary present" || warn "mediamtx binary missing"
-for u in mediamtx.service nexvue-encode@.service nexvue-status.service nexvue-metrics.service; do
+for u in mediamtx.service nexvue-encode@.service nexvue-decklink-configure.service \
+         nexvue-status.service nexvue-metrics.service; do
   [ -f "/etc/systemd/system/$u" ] && ok "unit installed: $u" || warn "unit missing: $u"
 done
 
-# Metrics PHP reader (SQLite) + web UI
+# Metrics PHP reader (SQLite) + web UI / auth
 if command -v php >/dev/null 2>&1 && php -m 2>/dev/null | grep -qi sqlite3; then
-  ok "php sqlite3 extension present (nexvue-metrics.php)"
+  ok "php sqlite3 extension present (auth + metrics.php)"
 else
-  warn "php sqlite3 missing — apt install php-sqlite3 (and libapache2-mod-php if Apache has no PHP yet)"
+  warn "php sqlite3 missing — re-run setup.sh (installs php-cli php-sqlite3 libapache2-mod-php)"
+fi
+if command -v php >/dev/null 2>&1 && php -m 2>/dev/null | grep -qi openssl; then
+  ok "php openssl extension present (JWT / auth keys)"
+else
+  warn "php openssl missing — login JWT minting will fail until php openssl is installed"
+fi
+if systemctl is-active --quiet apache2 2>/dev/null; then
+  ok "apache2 is active"
+else
+  warn "apache2 not running — sudo systemctl enable --now apache2"
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 if [ -d "${WEBROOT}" ]; then
@@ -431,8 +527,17 @@ if [ -d "${WEBROOT}" ]; then
   else
     warn "branding dir missing — Settings logo upload needs /var/lib/nexvue/branding (www-data writable)"
   fi
-  if [ -d /var/lib/nexvue/auth ] && [ -f /var/lib/nexvue/auth.db ]; then
-    ok "auth store: /var/lib/nexvue/auth.db"
+  if [ -d /var/lib/nexvue/auth ] && { [ -f /var/lib/nexvue/auth/auth.db ] || [ -f /var/lib/nexvue/auth.db ]; }; then
+    if [ -f /var/lib/nexvue/auth/auth.db ]; then
+      ok "auth store: /var/lib/nexvue/auth/auth.db"
+    else
+      warn "auth store still at legacy /var/lib/nexvue/auth.db — re-run setup.sh to migrate into /var/lib/nexvue/auth/"
+    fi
+    if [ -f /var/lib/nexvue/auth/jwks.json ] && [ -f /var/lib/nexvue/auth/private.pem ]; then
+      ok "auth JWKS + private key present"
+    else
+      warn "auth keys missing under /var/lib/nexvue/auth — sudo php /usr/local/bin/nexvue-auth-bootstrap.php"
+    fi
   else
     warn "auth store missing — run: sudo php /usr/local/bin/nexvue-auth-bootstrap.php"
   fi
@@ -487,6 +592,8 @@ fi
   || warn "decklink-status helper not installed (optional; see step 5)"
 [ -x /usr/local/bin/decklink-audio-probe ] && ok "decklink-audio-probe helper present" \
   || warn "decklink-audio-probe not installed (Settings → Detect audio; see step 5)"
+[ -x /usr/local/bin/decklink-configure ] && ok "decklink-configure helper present" \
+  || warn "decklink-configure not installed (Duo/Quad BNC mapping; see step 5)"
 
 ###############################################################################
 # Optional: Phase 1 firewall rules (only with --firewall — never silent)
@@ -536,17 +643,17 @@ Next steps:
        sudo cp channels-example.env /etc/nexvue/channels/0.env
        sudo nano /etc/nexvue/channels/0.env
   5. Start services:
+       sudo systemctl enable --now nexvue-decklink-configure   # Duo/Quad BNCs → half-duplex
        sudo systemctl enable --now mediamtx nexvue-status nexvue-metrics nexvue-encode@0
   6. Firewall (if ufw is in use): open ports with
        sudo ./setup.sh --firewall     (then: sudo ufw enable, once 22/ssh is allowed)
      or apply the rules manually — see the Firewall section in README.md
-  7. Apache + PHP (if not already serving pages):
-       sudo apt install -y libapache2-mod-php   # if PHP module not enabled yet
-       sudo a2enmod php8.3                      # adjust version; then: sudo systemctl restart apache2
-       # Remove any Apache Basic Auth / .htaccess AuthType — app login replaces it.
-       # Ensure http://127.0.0.1/nexvue-jwks.php is reachable (MediaMTX JWKS fetch).
+  7. Remove any Apache Basic Auth / .htaccess AuthType — app login replaces it.
+     Confirm JWKS: curl -fsS http://127.0.0.1/nexvue-jwks.php | head
   8. Login:  https://<edge-ip>/login.html
      Default bootstrap: admin / password  (forced change on first login)
      Users + share links: /users.html (admin). Player/Multiview/Metrics/Services/Settings
      require a session (or a share link ?t=… on Player).
+     If login shows "auth store unavailable": sudo ./setup.sh  (repairs
+     /var/lib/nexvue/auth ownership + migrates legacy auth.db).
 NEXT

@@ -82,11 +82,11 @@ sudo apt install -y \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
   intel-media-va-driver-non-free vainfo \
-  php-sqlite3
+  apache2 libapache2-mod-php php-cli php-sqlite3
 ```
 
-(`php-sqlite3` is required for `nexvue-metrics.php`. If Apache is not yet
-serving PHP, also install `libapache2-mod-php` and enable the module.)
+(`setup.sh` installs these automatically — Apache + PHP for login/auth,
+metrics, and ops; `php-sqlite3` for SQLite readers.)
 
 Verify Quick Sync is visible (expect H264 encode entrypoints under iHD driver):
 
@@ -160,24 +160,19 @@ Drop the UI files into Apache's docroot (same place IT already serves on
 80/443). Metrics and ops PHP scripts must sit next to the HTML so relative
 `fetch()` paths resolve:
 
+Prefer `sudo ./setup.sh` — it installs Apache + mod_php, copies the full
+web UI (including `login.html` / `nexvue-auth*.php`), bootstraps the auth
+store as `www-data`, and installs ops sudoers. Manual docroot copy is only
+for atypical layouts (`NEXVUE_WEBROOT`):
+
 ```bash
-sudo cp index.html multiview.html metrics.html nexvue-metrics.php \
-        nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js \
-        nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js \
+sudo cp index.html multiview.html metrics.html login.html users.html \
+        nexvue-metrics.php nexvue-status.php nexvue-captions.php \
+        nexvue-auth.php nexvue-auth-lib.php nexvue-jwks.php nexvue-auth-gate.js \
+        nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js \
+        nexvue-logo.php chart.umd.min.js \
         services.html channels.html nexvue-ops.php /var/www/html/
-sudo install -d -m 750 -o www-data -g www-data /var/lib/nexvue/branding
-# if PHP isn't wired into Apache yet:
-#   sudo apt install -y libapache2-mod-php && sudo a2enmod php8.3
 sudo systemctl restart apache2
-```
-
-Ops pages (`services.html`, `channels.html`) also need the allowlisted sudo
-wrappers and sudoers drop-in (installed by `setup.sh`):
-
-```bash
-sudo install -m 755 nexvue-ops-*.sh nexvue-ops-env-update.py /usr/local/bin/
-sudo install -m 440 nexvue-ops.sudoers /etc/sudoers.d/nexvue-ops
-sudo visudo -cf /etc/sudoers.d/nexvue-ops
 ```
 
 Then open `https://<edge-ip>/login.html` (default bootstrap `admin` /
@@ -189,7 +184,15 @@ API ports are loopback-bound (Phase 3).
 
 ### Local authentication (edge)
 
-- **Store:** `/var/lib/nexvue/auth.db` + `/var/lib/nexvue/auth/` (RSA keypair + JWKS).
+- **Store:** `/var/lib/nexvue/auth/auth.db` + keypair/JWKS in the same
+  directory (www-data owned — SQLite WAL sidecars must live there; legacy
+  `/var/lib/nexvue/auth.db` is migrated by `setup.sh`). Login error
+  `auth store unavailable` almost always means ownership/path — re-run
+  `sudo ./setup.sh`.
+- **Page gate:** static HTML is still served by Apache; `nexvue-auth-gate.js`
+  redirects unauthenticated browsers to `/login.html`. APIs
+  (`nexvue-ops.php`, `nexvue-metrics.php`, …) and WHEP JWTs enforce the real
+  access control.
 - **Roles:** `admin` (Users, Services, Settings, Metrics, watch), `operator`
   (Settings, Metrics, watch), `viewer` (Player/Multiview only).
 - **Share links:** Users page — named, one or more channels, absolute expiry
@@ -216,8 +219,9 @@ is current and preferred on the HWE kernel). Then:
 
 ```bash
 make DECKLINK_SDK=/path/to/Blackmagic_DeckLink_SDK_16.x
-sudo make install                       # -> /usr/local/bin/decklink-status
+sudo make install                       # -> /usr/local/bin/decklink-{status,audio-probe,configure}
 /usr/local/bin/decklink-status          # sanity: JSON with your 8 inputs
+sudo /usr/local/bin/decklink-configure --apply-inputs   # Duo/Quad BNCs → half-duplex
 ```
 
 (`setup.sh` builds this automatically when the SDK is at `/opt/decklink-sdk`.
@@ -519,8 +523,8 @@ more code). Current hardware: **DeckLink Quad 2** (already installed at
 | Captions probe + Player CC | Operator on a captioned feed |
 | Phase 1.5 supervisor assumptions | Rolled back — ExecStart is `nexvue-encode.sh` again |
 
-1. **Quad 2 connectors → Input** for every intended capture BNC
-   (`BlackmagicDesktopVideoSetup`). Confirm with `decklink-status` (lock +
+1. **Quad 2 connectors → half-duplex** for every intended capture BNC
+   (`sudo decklink-configure --apply-inputs`, or Desktop Video Setup). Confirm with `decklink-status` (lock +
    mode per device; order is not guaranteed sequential). Set
    `MAX_DEVICES=8` in `/etc/nexvue/nexvue.env`; enable `nexvue-encode@N`
    **only** for patched inputs (leave empty BNCs disabled — without slate,
@@ -648,24 +652,34 @@ A real cert (internal CA, or a hostname + Let's Encrypt) removes the
 per-browser click-through in step 6 and is worth doing before this goes
 beyond bench testing — self-signed is fine for Phase 1 validation only.
 
-## DeckLink Duo 2 connector direction (read this before patching)
+## DeckLink Duo 2 / Quad 2 connector mapping (read this before patching)
 
-**The Duo 2's BNCs are bidirectional and can be individually configured as
-Input or Output.** Out of the box some connectors may default to Output
-(commonly showing "NTSC" under Desktop Video Setup's OUTPUT FORMAT column for
-that row) rather than Input. An output-configured connector cannot capture —
+**BNCs are bidirectional.** Full-duplex ("SDI N & N+1") parks half the
+sub-devices; NexVUE needs **half-duplex** so every connector is an independent
+capture path. An output-/full-duplex-misconfigured connector cannot capture —
 GStreamer fails immediately with `streaming stopped, reason not-negotiated
 (-4)` before a single frame, which is a distinctly different failure than "no
 signal" (which still negotiates and emits black). If you see `not-negotiated`
 at pipeline start, check this first, before assuming a bad cable or a card
 fault.
 
-**Check and fix:**
-1. Open `BlackmagicDesktopVideoSetup` (GUI utility, ships with Desktop Video).
-2. Each `DeckLink Duo (N)` row shows VIDEO IN, OUTPUT FORMAT, GENLOCK columns.
-   A row with something in OUTPUT FORMAT (e.g. "NTSC") is currently an OUTPUT.
-3. Click that row's config icon, set the connector direction to **Input**.
-4. Repeat for every connector you intend to capture from.
+**Preferred (headless):** `decklink-configure` (DeckLink SDK; built by
+`make install` / `setup.sh`). Activates `bmdProfileTwoSubDevicesHalfDuplex`
+and persists via Desktop Video preferences — no GUI required.
+
+```bash
+sudo systemctl stop 'nexvue-encode@*'
+sudo decklink-configure --status          # JSON: profile, duplex, capture_ready
+sudo decklink-configure --apply-inputs    # set half-duplex on all groups
+sudo systemctl start nexvue-encode@0      # etc.
+```
+
+`setup.sh` runs `--apply-inputs` after building helpers, and enables
+`nexvue-decklink-configure.service` so mapping is applied at boot before
+encoders (`nexvue-encode@.service` Wants/After that oneshot).
+
+**GUI fallback:** `BlackmagicDesktopVideoSetup` → each sub-device → Connector
+Mapping → single connector / half-duplex (not "SDI N & N+1").
 
 **The physical-connector-to-`device-number` order is not guaranteed
 sequential.** `BlackmagicFirmwareUpdater status` may show device paths like
@@ -734,12 +748,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now nexvue-metrics
 ```
 
-**2. PHP + dashboard** (drop into Apache's docroot, or wherever the player
-page already lives):
+**2. PHP + dashboard** (prefer `sudo ./setup.sh`, which installs Apache +
+mod_php and copies the UI). Manual:
 ```bash
-sudo apt install -y php-sqlite3   # if PHP itself isn't already installed:
-                                  #   sudo apt install -y libapache2-mod-php
-sudo a2enmod php8.3               # (module name matches your PHP version)
 sudo cp nexvue-metrics.php metrics.html index.html multiview.html /var/www/html/
 sudo systemctl restart apache2
 ```

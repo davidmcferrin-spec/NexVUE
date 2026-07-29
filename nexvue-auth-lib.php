@@ -2,9 +2,13 @@
 /**
  * nexvue-auth-lib.php — local auth helpers (stdlib PHP + openssl, no Composer).
  *
- * SQLite: /var/lib/nexvue/auth.db (override NEXVUE_AUTH_DB)
+ * SQLite: /var/lib/nexvue/auth/auth.db (override NEXVUE_AUTH_DB)
  * Keys:   /var/lib/nexvue/auth/{private.pem,public.pem,jwks.json,kid}
  *         (override NEXVUE_AUTH_DIR)
+ *
+ * DB lives inside the www-data-owned auth dir so SQLite WAL sidecars
+ * (auth.db-wal / auth.db-shm) can be created under Apache. Legacy path
+ * /var/lib/nexvue/auth.db is migrated on open when possible.
  *
  * Roles: admin | operator | viewer
  * Share links: named, channel-scoped, mandatory expires_at, revocable.
@@ -31,7 +35,21 @@ function auth_db_path(): string {
     if (is_string($o) && $o !== '') {
         return $o;
     }
-    return '/var/lib/nexvue/auth.db';
+    $preferred = auth_dir() . '/auth.db';
+    $legacy = '/var/lib/nexvue/auth.db';
+    if (!is_file($preferred) && is_file($legacy)) {
+        $dir = auth_dir();
+        if (is_dir($dir) && is_writable($dir) && @rename($legacy, $preferred)) {
+            foreach (glob($legacy . '-*') ?: [] as $side) {
+                if (is_string($side) && is_file($side)) {
+                    @rename($side, $dir . '/' . basename($side));
+                }
+            }
+            return $preferred;
+        }
+        return $legacy;
+    }
+    return $preferred;
 }
 
 function auth_station_env_path(): string {
@@ -197,8 +215,23 @@ function auth_ensure_keys(): array {
 
     $privPem = (string)file_get_contents($privPath);
     $pubPem = (string)file_get_contents($pubPath);
+    if ($privPem === '' || $pubPem === '') {
+        throw new RuntimeException('auth keypair unreadable');
+    }
     $jwks = auth_build_jwks($pubPem, $kid);
-    file_put_contents($jwksPath, json_encode($jwks, JSON_UNESCAPED_SLASHES));
+    $jwksJson = json_encode($jwks, JSON_UNESCAPED_SLASHES);
+    if ($jwksJson === false) {
+        throw new RuntimeException('jwks encode failed');
+    }
+    // Rewrite JWKS when missing/stale; tolerate a read-only tree only if a
+    // usable jwks.json is already present (e.g. root-owned after bootstrap).
+    $needWrite = !is_file($jwksPath)
+        || trim((string)file_get_contents($jwksPath)) !== $jwksJson;
+    if ($needWrite && file_put_contents($jwksPath, $jwksJson) === false) {
+        if (!is_file($jwksPath)) {
+            throw new RuntimeException('cannot write jwks.json');
+        }
+    }
 
     return [
         'private_pem' => $privPem,

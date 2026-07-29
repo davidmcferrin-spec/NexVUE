@@ -12,8 +12,8 @@
 
 [Unit]
 Description=NexVUE encoder channel %i (DeckLink -> MediaMTX)
-After=network-online.target mediamtx.service
-Wants=mediamtx.service
+After=network-online.target mediamtx.service nexvue-decklink-configure.service
+Wants=mediamtx.service nexvue-decklink-configure.service
 StartLimitIntervalSec=0
 
 [Service]

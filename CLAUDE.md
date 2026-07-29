@@ -135,9 +135,14 @@ specifically because this box can't get additional ports opened.
 - **Phase 2: edge local auth landed** — bcrypt users (admin/operator/viewer),
   named revocable share links with mandatory expiry, MediaMTX JWT + local
   JWKS, long-lived publish JWT in `nexvue.env`, sync-shaped export/import
-  on `nexvue-auth.php` for a future portal. Central catalog portal + Entra
-  OIDC remain later. Real (non-self-signed) TLS for 8889/9997/9998 still
-  recommended before wider users.
+  on `nexvue-auth.php` for a future portal. Auth SQLite + keys live under
+  `/var/lib/nexvue/auth/` (www-data RW; `auth.db` inside that dir so WAL
+  works under Apache — `setup.sh` installs Apache/mod_php, bootstraps the
+  store, migrates legacy `/var/lib/nexvue/auth.db`, and smokes as www-data).
+  HTML is soft-gated by `nexvue-auth-gate.js`; APIs + WHEP JWT enforce
+  access. Central catalog portal + Entra OIDC remain later. Real
+  (non-self-signed) TLS for 8889/9997/9998 still recommended before wider
+  users.
 - **Phase 3: DMZ** — webrtcAdditionalHosts, bind MediaMTX API and status
   daemon back to loopback (portal relays stats), Entra OIDC, CORS. (TLS
   itself landed early, in Phase 1, ahead of schedule — see README TLS section.)
@@ -179,7 +184,10 @@ specifically because this box can't get additional ports opened.
 ## Conventions (owner: David McFerrin, davidmcferrin-spec)
 
 - Stacks: bash/Python/PHP + vanilla JS. GNU C++ only where required
-  (DeckLink SDK). **No Docker, no Node, no frontend frameworks, no Composer.**
+  (DeckLink SDK: `decklink-status`, `decklink-audio-probe`,
+  `decklink-configure` for Duo/Quad half-duplex BNC mapping — oneshot
+  `nexvue-decklink-configure.service` before encode). **No Docker, no Node,
+  no frontend frameworks, no Composer.**
 - **No pip.** Python is stdlib-only today; if a dependency ever becomes
   necessary, it comes from apt (`python3-<package>`), never pip.
 - `setup.sh` is the canonical installer — keep it in sync with any new

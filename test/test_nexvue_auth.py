@@ -70,6 +70,27 @@ auth_ensure_keys();
         self.assertEqual(data["user"]["role"], "admin")
         self.assertTrue(data["user"]["must_change_password"])
 
+    def test_default_db_path_inside_auth_dir(self) -> None:
+        """Default SQLite path must be under auth/ so Apache can create WAL files."""
+        lib = LIB.as_posix()
+        code = f"""
+putenv('NEXVUE_AUTH_DIR={self.auth_dir.as_posix()}');
+putenv('NEXVUE_AUTH_DB');
+putenv('NEXVUE_STATION_ENV={self.env.as_posix()}');
+include '{lib}';
+echo json_encode(['path' => auth_db_path(), 'dir' => auth_dir()]);
+"""
+        r = subprocess.run(
+            [PHP, "-d", "display_errors=stderr", "-r", code],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if r.returncode != 0:
+            self.fail(f"php failed ({r.returncode}): {r.stderr or r.stdout}")
+        data = json.loads((r.stdout or "").strip())
+        self.assertEqual(data["path"], data["dir"] + "/auth.db")
+
     def test_password_verify(self) -> None:
         data = self._php(
             """

@@ -1,0 +1,31 @@
+# nexvue-decklink-configure.service — set Duo 2 / Quad 2 BNC mapping for capture
+#
+# Activates bmdProfileTwoSubDevicesHalfDuplex (independent connectors) via the
+# DeckLink SDK so operators need not open BlackmagicDesktopVideoSetup.
+# Runs once at boot before encoders; SetActive persists in Desktop Video prefs.
+#
+#   sudo systemctl enable --now nexvue-decklink-configure
+#   sudo /usr/local/bin/decklink-configure --apply-inputs   # manual
+#
+# Stop encoders before a manual re-apply if the card is busy.
+
+[Unit]
+Description=NexVUE DeckLink half-duplex connector mapping (capture)
+Documentation=file:///usr/local/share/nexvue/VERSION
+Before=nexvue-encode@0.service nexvue-encode@1.service nexvue-encode@2.service
+Before=nexvue-encode@3.service nexvue-encode@4.service nexvue-encode@5.service
+Before=nexvue-encode@6.service nexvue-encode@7.service nexvue-encode@8.service
+Before=nexvue-encode@9.service
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Root: Desktop Video preferences write; card nodes under /dev.
+# Missing binary or no DeckLink API must not block encoders.
+ExecStart=/bin/bash -c 'if [ ! -x /usr/local/bin/decklink-configure ]; then echo "decklink-configure missing — skip"; exit 0; fi; /usr/local/bin/decklink-configure --apply-inputs; rc=$?; [ "$rc" -eq 1 ] && exit 0; exit "$rc"'
+# Exit 2 = partial apply failure — unit failed so journal shows it; encode still starts (Wants=).
+
+[Install]
+WantedBy=multi-user.target
