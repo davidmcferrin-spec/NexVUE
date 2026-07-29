@@ -790,26 +790,76 @@ if ($action === 'support_bundle') {
 
 // ---- update_status / update_repo (JSON from nexvue-ops-update.sh) ------------
 
+/**
+ * Parse helper JSON from stdout (or a trailing JSON line after setup banners).
+ * @return array<string,mixed>|null
+ */
+function ops_parse_helper_json(string $raw): ?array {
+    $raw = trim($raw);
+    if ($raw === '') {
+        return null;
+    }
+    $parsed = json_decode($raw, true);
+    if (is_array($parsed)) {
+        return $parsed;
+    }
+    // Prefer the last line that looks like a JSON object (setup.sh used to
+    // leak banners onto stdout before the final {"ok":...}).
+    $lines = preg_split("/\r\n|\n|\r/", $raw) ?: [];
+    for ($i = count($lines) - 1; $i >= 0; $i--) {
+        $line = trim($lines[$i]);
+        if ($line === '' || !str_starts_with($line, '{')) {
+            continue;
+        }
+        $parsed = json_decode($line, true);
+        if (is_array($parsed)) {
+            return $parsed;
+        }
+    }
+    return null;
+}
+
 if ($action === 'update_status' || $action === 'update_repo') {
     if (function_exists('set_time_limit')) {
         @set_time_limit($action === 'update_repo' ? 600 : 120);
     }
+    $helper = '/usr/local/bin/nexvue-ops-update.sh';
+    if (!is_file($helper)) {
+        fail(
+            500,
+            'nexvue-ops-update.sh not installed — on the edge host: '
+            . 'cd "$(cat /etc/nexvue/repo.path 2>/dev/null || echo /path/to/NexVUE)" && sudo ./setup.sh'
+        );
+    }
+    if (!is_executable($helper)) {
+        fail(500, 'nexvue-ops-update.sh is not executable — re-run sudo ./setup.sh');
+    }
     $verb = $action === 'update_repo' ? 'apply' : 'status';
-    $r = sudo_run(['/usr/local/bin/nexvue-ops-update.sh', $verb]);
-    $raw = trim($r['stdout']);
-    $parsed = json_decode($raw, true);
+    $r = sudo_run([$helper, $verb]);
+    $parsed = ops_parse_helper_json($r['stdout']);
     if (!is_array($parsed)) {
-        // Wrapper may have printed JSON on stderr via fail_json before exit.
         $errRaw = trim($r['stderr']);
-        $errParsed = json_decode($errRaw, true);
+        $errParsed = ops_parse_helper_json($errRaw);
         if (is_array($errParsed) && isset($errParsed['error'])) {
             fail(500, (string)$errParsed['error']);
         }
+        if ($errRaw !== '') {
+            // Common: sudoers missing the update line, or sudo -n denied.
+            if (stripos($errRaw, 'not allowed') !== false
+                || stripos($errRaw, 'password') !== false) {
+                fail(
+                    500,
+                    'sudo denied for nexvue-ops-update.sh — install sudoers: '
+                    . 'sudo install -m 440 nexvue-ops.sudoers /etc/sudoers.d/nexvue-ops '
+                    . '&& sudo visudo -cf /etc/sudoers.d/nexvue-ops'
+                );
+            }
+            fail(500, $errRaw);
+        }
         fail(
             500,
-            $errRaw !== ''
-                ? $errRaw
-                : 'update helper returned no JSON (is nexvue-ops-update.sh installed?)'
+            'update helper returned no JSON (exit ' . (int)$r['code'] . ') — '
+            . 're-run sudo ./setup.sh from the clone to install nexvue-ops-update.sh + sudoers'
         );
     }
     if ($r['code'] !== 0 || empty($parsed['ok'])) {

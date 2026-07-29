@@ -330,8 +330,10 @@ Then from a LAN machine:
   `nexvue-ops-support-bundle.sh` → `nexvue-support-bundle.py` (zips land under
   `/var/lib/nexvue/support`, pruned after 24h). **Update from repo…** fetches
   `origin/<branch>`, hard-resets the clone (`/etc/nexvue/repo.path`), and runs
-  `setup.sh` (`nexvue-ops-update.sh`). Does not restart encoders. Top-nav shows
-  **vX.Y.Z** from the `VERSION` file (`nexvue-version.php`). LAN-trust ops.
+  `setup.sh` (`nexvue-ops-update.sh` + sudoers). First enable requires one
+  SSH `sudo ./setup.sh` from the clone so the helper is installed; after that
+  the UI can self-update. Does not restart encoders. Top-nav shows **vX.Y.Z**
+  from the `VERSION` file (`nexvue-version.php`). LAN-trust ops.
 - **Settings:** top nav → Settings — optional station **logo** (Branding
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
   shown in the top nav next to **NexVUE** when present) plus channel list

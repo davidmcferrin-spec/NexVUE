@@ -8,15 +8,35 @@
 # Repo path: NEXVUE_REPO, else /etc/nexvue/repo.path (written by setup.sh).
 # Branch:    NEXVUE_UPDATE_BRANCH (default main), else from nexvue.env if set.
 #
-# Prints one JSON object on stdout. Progress/errors also on stderr.
+# Prints one JSON object on stdout (and only that — progress goes to stderr).
 set -euo pipefail
+
+json_escape() {
+  # Minimal JSON string escape for paths / short messages.
+  local s="${1:-}"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s"
+}
+
+fail_json() {
+  trap - ERR
+  local msg="$1"
+  echo "{\"ok\":false,\"error\":\"$(json_escape "$msg")\"}"
+  exit 1
+}
+
+# Any unexpected set -e abort still returns JSON (PHP parses stdout).
+trap 'ec=$?; trap - ERR; echo "{\"ok\":false,\"error\":\"update helper aborted (exit ${ec})\"}"; exit 1' ERR
 
 CMD="${1:-}"
 case "$CMD" in
   status|apply) ;;
   *)
-    echo '{"ok":false,"error":"usage: nexvue-ops-update.sh status|apply"}' >&2
-    exit 2
+    fail_json "usage: nexvue-ops-update.sh status|apply"
     ;;
 esac
 
@@ -40,22 +60,6 @@ if [[ -z "$REPO" && -f "$REPO_PATH_FILE" ]]; then
   REPO="$(tr -d '\r\n' < "$REPO_PATH_FILE")"
 fi
 BRANCH="${NEXVUE_UPDATE_BRANCH:-main}"
-
-json_escape() {
-  # Minimal JSON string escape for paths / short messages.
-  local s="${1:-}"
-  s="${s//\\/\\\\}"
-  s="${s//\"/\\\"}"
-  s="${s//$'\n'/\\n}"
-  s="${s//$'\r'/}"
-  printf '%s' "$s"
-}
-
-fail_json() {
-  local msg="$1"
-  echo "{\"ok\":false,\"error\":\"$(json_escape "$msg")\"}"
-  exit 1
-}
 
 if [[ -z "$REPO" ]]; then
   fail_json "repo path unknown — re-run setup.sh from the clone (writes /etc/nexvue/repo.path) or set NEXVUE_REPO in nexvue.env"
@@ -130,14 +134,16 @@ collect_status() {
   ahead=0
   remote_sha=""
   fetch_note=""
-  if git fetch --quiet origin "$BRANCH" 2>/tmp/nexvue-update-fetch.err; then
+  local fetch_err
+  fetch_err="$(mktemp)"
+  if git fetch --quiet origin "$BRANCH" 2>"$fetch_err"; then
     remote_sha="$(git rev-parse --short=12 "origin/${BRANCH}" 2>/dev/null || echo "")"
     behind="$(git rev-list --count "HEAD..origin/${BRANCH}" 2>/dev/null || echo 0)"
     ahead="$(git rev-list --count "origin/${BRANCH}..HEAD" 2>/dev/null || echo 0)"
   else
-    fetch_note="$(tr -d '\r' </tmp/nexvue-update-fetch.err | tail -n 3 | tr '\n' ' ')"
+    fetch_note="$(tr -d '\r' <"$fetch_err" | tail -n 3 | tr '\n' ' ')"
   fi
-  rm -f /tmp/nexvue-update-fetch.err
+  rm -f "$fetch_err"
   write_stamp
   printf '{'
   printf '"ok":true,'
@@ -190,7 +196,8 @@ apply_update() {
   git reset --hard "origin/${BRANCH}"
 
   echo "running setup.sh…" >&2
-  if ! bash "$REPO/setup.sh"; then
+  # Keep stdout JSON-only — setup banners/progress must not pollute the parse.
+  if ! bash "$REPO/setup.sh" >&2; then
     fail_json "setup.sh failed after git reset — clone is at origin/${BRANCH}; fix errors and re-run setup.sh"
   fi
 

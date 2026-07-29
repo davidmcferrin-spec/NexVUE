@@ -583,8 +583,26 @@ else
 fi
 if [ -f /etc/sudoers.d/nexvue-ops ]; then
   ok "sudoers drop-in: /etc/sudoers.d/nexvue-ops"
+  if grep -q 'nexvue-ops-update\.sh' /etc/sudoers.d/nexvue-ops; then
+    ok "sudoers allows nexvue-ops-update.sh"
+  else
+    warn "sudoers missing nexvue-ops-update.sh — Services Update will fail until sudoers is refreshed from repo"
+  fi
 else
   warn "sudoers drop-in missing — Services/Settings need /etc/sudoers.d/nexvue-ops"
+fi
+if [ -x /usr/local/bin/nexvue-ops-update.sh ] && [ -f /etc/nexvue/repo.path ]; then
+  if id www-data >/dev/null 2>&1 \
+    && sudo -n -u www-data sudo -n /usr/local/bin/nexvue-ops-update.sh status >/dev/null 2>&1; then
+    ok "update helper runnable as www-data (Services → Update)"
+  else
+    # Direct root smoke (sudoers path may still be wrong for www-data).
+    if /usr/local/bin/nexvue-ops-update.sh status >/dev/null 2>&1; then
+      warn "nexvue-ops-update.sh runs as root but not via www-data sudo — reinstall /etc/sudoers.d/nexvue-ops from repo"
+    else
+      warn "nexvue-ops-update.sh status failed — check /etc/nexvue/repo.path and git remote"
+    fi
+  fi
 fi
 
 # DeckLink helpers
