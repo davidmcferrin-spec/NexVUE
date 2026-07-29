@@ -251,6 +251,22 @@ class TestApplyPatch(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(r.stdout, "5000:true")
 
+    def test_php_editable_keys_match_python(self):
+        # channel_put gates on nexvue-ops.php EDITABLE_KEYS before the Python
+        # writer runs — keep the two allowlists identical.
+        import re
+        php = (SPEC_PATH.parent / "nexvue-ops.php").read_text(encoding="utf-8")
+        m = re.search(
+            r"const\s+EDITABLE_KEYS\s*=\s*\[(.*?)\];",
+            php,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(m, "EDITABLE_KEYS missing from nexvue-ops.php")
+        php_keys = set(re.findall(r"'([A-Z0-9_]+)'", m.group(1)))
+        self.assertEqual(php_keys, set(mod.EDITABLE_KEYS))
+        self.assertIn("DEINT_METHOD", php_keys)
+        self.assertIn("AUTO_PARK_UNLOCK_CYCLES", php_keys)
+
 
 if __name__ == "__main__":
     unittest.main()
