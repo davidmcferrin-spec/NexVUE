@@ -164,12 +164,12 @@ this box can't get additional ports opened.
 ## Known open items / risks
 
 - Empty Quad ports with `nexvue-encode@N` still enabled used to restart-loop
-  (`RestartSec=3`) after Phase 1.5 slate rollback. **Auto-park** now disables
-  the slot after `AUTO_PARK_UNLOCK_CYCLES` consecutive unlocked starts
-  (default 5 ≈ 15s; `0` = off; station `/etc/nexvue/nexvue.env` or per-channel).
+  after Phase 1.5 slate rollback. **Auto-park** disables the slot after
+  `AUTO_PARK_UNLOCK_CYCLES` consecutive unlocked starts (default 5;
+  `RestartSec=5`). Encode also **retries DeckLink opens** with backoff and
+  kills hung `gst-launch` after fatal `not-negotiated` (zombie green unit).
   Prefer enabling encoders only for patched Inputs; Services Enable/Disable
-  still parks/unparks by hand. Closeout may still hint `disable --now` for
-  unlocked+active channels before the streak completes.
+  still parks/unparks by hand.
 - Glass-to-glass latency still unmeasured with a burnt-in clock (datacenter
   deployment — no co-located source monitor). RTT-based estimate recorded in
   README; re-measure on bench when possible. Duo 2 connector-direction notes

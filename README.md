@@ -488,7 +488,7 @@ it running against nothing** — leave empty BNCs disabled (Services
 Enable/Disable or `systemctl disable --now`). Phase 1.5 slate was rolled
 back; an enabled encode on an unlocked port restart-loops briefly, then
 **auto-parks** after `AUTO_PARK_UNLOCK_CYCLES` consecutive unlocked starts
-(default **5** ≈ 15s with `RestartSec=3`; set `0` in `/etc/nexvue/nexvue.env`
+(default **5** ≈ 25s with `RestartSec=5`; set `0` in `/etc/nexvue/nexvue.env`
 or the channel `.env` to disable). Re-enable from Services when patched.
 To park immediately without waiting for the streak:
 
@@ -1084,11 +1084,14 @@ expired; JWT auth is the lasting gate.
   for a future redesign; do not enable it on live units today.
 - **Self-healing model:** constant output caps mean input format changes never
   drop viewer sessions; the watchdog turns capture hangs into clean systemd
-  restarts; black frames ride through brief signal loss. Unlocked empty
-  ports restart (`RestartSec=3`) for up to `AUTO_PARK_UNLOCK_CYCLES`
-  consecutive starts (default 5), then `nexvue-encode-auto-park.sh` disables
-  that `encode@N` (exit 75 + `ExecStopPost`). Phase 1.5 NO SIGNAL slate was
-  rolled back; production ExecStart is `nexvue-encode.sh` again.
+  restarts; black frames ride through brief signal loss. `nexvue-encode.sh`
+  retries DeckLink opens (`DECKLINK_OPEN_ATTEMPTS`, backoff) and force-kills
+  hung `gst-launch` after fatal `not-negotiated` so the unit cannot stay
+  green with a dead pipeline. Unlocked empty ports cycle (`RestartSec=5`)
+  for up to `AUTO_PARK_UNLOCK_CYCLES` consecutive starts (default 5), then
+  `nexvue-encode-auto-park.sh` disables that `encode@N` (exit 75 +
+  `ExecStopPost`). Phase 1.5 NO SIGNAL slate was rolled back; production
+  ExecStart is `nexvue-encode.sh` again.
 - **Signal-present / encoder-alive alarming** belongs in Phase 4 portal ops
   via **outbound** edge heartbeats (DMZ cannot reach TRUSTED monitors).
   Status daemon JSON + MediaMTX `/v3/paths/list` remain the on-box data

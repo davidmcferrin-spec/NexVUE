@@ -48,7 +48,9 @@ Environment=GST_REGISTRY=/tmp/.gstreamer-registry.bin
 ExecStart=/usr/bin/bash -c 'set -a; f="/etc/nexvue/channels/%i.env"; [ -r "$f" ] || { echo "missing env file: $f" >&2; exit 71; }; . "$f"; g="/etc/nexvue/nexvue.env"; [ -r "$g" ] && . "$g"; CHANNEL_ID=%i; exec /usr/local/bin/nexvue-encode.sh'
 
 Restart=always
-RestartSec=3
+# Slightly longer than DeckLink exclusive-open release after SIGTERM; in-script
+# open retries (nexvue-encode.sh) handle the short reopen race.
+RestartSec=5
 # Exit 75 = auto-park after consecutive unlocked DeckLink starts
 # (nexvue-encode-auto-park.sh). Do not restart; ExecStopPost disables the unit.
 RestartPreventExitStatus=75

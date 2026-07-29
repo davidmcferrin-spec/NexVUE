@@ -103,6 +103,18 @@ RTSP_URL="${RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}}"
 VIDEO_ENCODER="${VIDEO_ENCODER:-vah264enc}" # vah264enc (QSV/VA-API) | x264enc
 EXTRA_ENC_ARGS="${EXTRA_ENC_ARGS:-}"
 
+# DeckLink open supervisor: reopen races (not-negotiated) + hung gst teardown
+# leave the unit "active" with a dead pipeline. Retry with backoff while locked;
+# force-kill gst if it logs a fatal error but does not exit.
+DECKLINK_OPEN_ATTEMPTS="$(strip_inline "${DECKLINK_OPEN_ATTEMPTS:-5}")"
+DECKLINK_OPEN_DELAY_S="$(strip_inline "${DECKLINK_OPEN_DELAY_S:-2}")"
+DECKLINK_OPEN_BACKOFF_S="$(strip_inline "${DECKLINK_OPEN_BACKOFF_S:-2}")"
+DECKLINK_OPEN_BACKOFF_CAP_S="$(strip_inline "${DECKLINK_OPEN_BACKOFF_CAP_S:-15}")"
+DECKLINK_HANG_KILL_S="$(strip_inline "${DECKLINK_HANG_KILL_S:-5}")"
+DECKLINK_OPEN_GATE_S="$(strip_inline "${DECKLINK_OPEN_GATE_S:-10}")"
+# Per-slot settle before first open (Restart-all stampede). Blank = CHANNEL_ID seconds.
+DECKLINK_START_STAGGER_S="$(strip_inline "${DECKLINK_START_STAGGER_S:-}")"
+
 # MediaMTX JWT auth: append long-lived publish token from station env when set.
 # Sourced via nexvue-encode@.service EnvironmentFile=/etc/nexvue/nexvue.env.
 NEXVUE_PUBLISH_JWT="$(strip_inline "${NEXVUE_PUBLISH_JWT:-}")"
@@ -207,6 +219,20 @@ if ! [[ "${AUDIO_RESAMPLE_QUALITY}" =~ ^([0-9]|10)$ ]]; then
 fi
 if ! [[ "${AUDIO_QUEUE_BUFFERS}" =~ ^[0-9]+$ ]] || [ "${AUDIO_QUEUE_BUFFERS}" -lt 1 ]; then
     log "ERROR: AUDIO_QUEUE_BUFFERS must be a positive integer, got '${AUDIO_QUEUE_BUFFERS}'"; exit 64
+fi
+if ! [[ "${DECKLINK_OPEN_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${DECKLINK_OPEN_ATTEMPTS}" -lt 1 ]; then
+    log "ERROR: DECKLINK_OPEN_ATTEMPTS must be a positive integer, got '${DECKLINK_OPEN_ATTEMPTS}'"; exit 64
+fi
+for _nv_delay_key in DECKLINK_OPEN_DELAY_S DECKLINK_OPEN_BACKOFF_S DECKLINK_OPEN_BACKOFF_CAP_S \
+                     DECKLINK_HANG_KILL_S DECKLINK_OPEN_GATE_S; do
+  _nv_delay_val="$(eval "printf '%s' \"\${${_nv_delay_key}}\"")"
+  if ! [[ "${_nv_delay_val}" =~ ^[0-9]+$ ]]; then
+    log "ERROR: ${_nv_delay_key} must be an integer seconds, got '${_nv_delay_val}'"; exit 64
+  fi
+done
+unset _nv_delay_key _nv_delay_val
+if [ -n "${DECKLINK_START_STAGGER_S}" ] && ! [[ "${DECKLINK_START_STAGGER_S}" =~ ^[0-9]+$ ]]; then
+    log "ERROR: DECKLINK_START_STAGGER_S must be an integer seconds, got '${DECKLINK_START_STAGGER_S}'"; exit 64
 fi
 command -v gst-launch-1.0 >/dev/null || { log "ERROR: gst-launch-1.0 not found"; exit 69; }
 gst-inspect-1.0 decklinkvideosrc >/dev/null 2>&1 \
@@ -414,11 +440,213 @@ fi
 log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS}/${DEINT_METHOD} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) audio=${ENABLE_AUDIO} layout=${AUDIO_LAYOUT}(8ch@${AUDIO_BITRATE_BPS}bps embeds=${AUDIO_EMBEDS:-1-8}) captions=${CAPTIONS_ACTIVE} enc=${VIDEO_ENCODER}"
 log "publishing HI to ${RTSP_URL}$([ "${LO_ENABLE}" = "true" ] && echo ", LO to ${LO_RTSP_URL}")"
 
-# Intentional word-splitting: PIPELINE is a gst-launch description whose
-# tokens never contain spaces (caps use commas), so this is safe.
-# Do not exec — a background captions decoder needs EXIT cleanup.
-# shellcheck disable=SC2086
-gst-launch-1.0 -e ${PIPELINE}
-rc=$?
+# Probe DeckLink lock without touching auto-park counters (retry decisions).
+# Prints: locked | unlocked | busy | error | skip
+decklink_probe_state() {
+  local bin="" json
+  if [ -x /usr/local/bin/decklink-status ]; then
+    bin=/usr/local/bin/decklink-status
+  else
+    bin="$(command -v decklink-status 2>/dev/null || true)"
+  fi
+  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+    echo "skip"
+    return
+  fi
+  if ! json="$("$bin" 2>/dev/null)"; then
+    echo "error"
+    return
+  fi
+  if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+    echo "error"
+    return
+  fi
+  local py=python3
+  command -v python3 >/dev/null 2>&1 || py=python
+  printf '%s' "$json" | "$py" -c '
+import json, sys
+dev = int(sys.argv[1])
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("error")
+    raise SystemExit(0)
+for d in data.get("devices") or []:
+    if int(d.get("index", -1)) == dev:
+        if d.get("busy") is True:
+            print("busy")
+        elif d.get("input_locked") is True:
+            print("locked")
+        else:
+            print("unlocked")
+        raise SystemExit(0)
+print("error")
+' "${DEVICE_NUMBER}" 2>/dev/null || echo "error"
+}
+
+# Run one gst-launch; stream logs to journal; kill hung teardown after fatal.
+# Sets globals: _GST_RC, _GST_QUICK_FAIL (0|1), _GST_SAW_FATAL (0|1)
+#
+# gst runs inside a wrapper subshell that writes ${logdir}/rc on exit so we
+# detect short-lived failures immediately (kill -0 alone can linger on
+# zombies). Past the open gate we catch up logs once, then tail -f.
+run_gst_once() {
+  local logdir wrap_pid gst_pid="" tail_out_pid="" tail_err_pid=""
+  local elapsed=0 saw_fatal=0 rc=0 streamed=0
+  logdir="$(mktemp -d -t nexvue-gst.XXXXXX)"
+  # Intentional word-splitting: PIPELINE tokens never contain spaces.
+  # Do not exec — captions decoder needs EXIT cleanup + this retry loop.
+  # stdout/stderr kept separate (assembly stubs print the pipeline on stdout).
+  (
+    set +e
+    # shellcheck disable=SC2086
+    gst-launch-1.0 -e ${PIPELINE} >"${logdir}/out" 2>"${logdir}/err" &
+    echo $! >"${logdir}/gst.pid"
+    wait $!
+    echo $? >"${logdir}/rc"
+  ) &
+  wrap_pid=$!
+
+  # 100ms poll: short-lived opens (and assembly stubs) must not pay 1s/attempt.
+  local ticks=0 hang_ticks=0
+  while [ ! -f "${logdir}/rc" ]; do
+    if [ -z "${gst_pid}" ] && [ -f "${logdir}/gst.pid" ]; then
+      gst_pid="$(cat "${logdir}/gst.pid")"
+    fi
+    if grep -qE 'not-negotiated|Internal data stream error' \
+         "${logdir}/out" "${logdir}/err" 2>/dev/null; then
+      saw_fatal=1
+      hang_ticks=0
+      while [ "${hang_ticks}" -lt $((DECKLINK_HANG_KILL_S * 10)) ] && [ ! -f "${logdir}/rc" ]; do
+        sleep 0.1
+        hang_ticks=$((hang_ticks + 1))
+        ticks=$((ticks + 1))
+      done
+      if [ ! -f "${logdir}/rc" ]; then
+        if [ -z "${gst_pid}" ] && [ -f "${logdir}/gst.pid" ]; then
+          gst_pid="$(cat "${logdir}/gst.pid")"
+        fi
+        log "gst pid ${gst_pid:-?} hung after fatal error — SIGTERM/KILL"
+        if [ -n "${gst_pid}" ]; then
+          kill -TERM "${gst_pid}" 2>/dev/null || true
+          sleep 2
+          kill -KILL "${gst_pid}" 2>/dev/null || true
+        fi
+        kill -TERM "${wrap_pid}" 2>/dev/null || true
+      fi
+      break
+    fi
+    elapsed=$((ticks / 10))
+    if [ "${elapsed}" -ge "${DECKLINK_OPEN_GATE_S}" ] && [ "${streamed}" -eq 0 ]; then
+      # Healthy past open gate — dump current log then follow (no cat/tail race).
+      streamed=1
+      tail -n +1 -f "${logdir}/out" &
+      tail_out_pid=$!
+      tail -n +1 -f "${logdir}/err" >&2 &
+      tail_err_pid=$!
+    fi
+    sleep 0.1
+    ticks=$((ticks + 1))
+  done
+  elapsed=$((ticks / 10))
+
+  set +e
+  wait "${wrap_pid}" 2>/dev/null
+  set -e
+  if [ -f "${logdir}/rc" ]; then
+    rc="$(cat "${logdir}/rc")"
+  else
+    rc=1
+  fi
+  if [ -n "${tail_out_pid}" ]; then
+    kill "${tail_out_pid}" 2>/dev/null || true
+    wait "${tail_out_pid}" 2>/dev/null || true
+  fi
+  if [ -n "${tail_err_pid}" ]; then
+    kill "${tail_err_pid}" 2>/dev/null || true
+    wait "${tail_err_pid}" 2>/dev/null || true
+  fi
+  # Short-lived / failed open: emit logs once (not already tailed).
+  if [ "${streamed}" -eq 0 ]; then
+    cat "${logdir}/out" 2>/dev/null || true
+    cat "${logdir}/err" >&2 2>/dev/null || true
+  fi
+  rm -rf "${logdir}"
+
+  _GST_RC="${rc}"
+  _GST_SAW_FATAL="${saw_fatal}"
+  if [ "${rc}" -ne 0 ] && { [ "${streamed}" -eq 0 ] || [ "${saw_fatal}" -eq 1 ]; }; then
+    _GST_QUICK_FAIL=1
+  else
+    _GST_QUICK_FAIL=0
+  fi
+}
+
+# Stagger Restart-all / boot stampede across encode slots.
+_stagger="${DECKLINK_START_STAGGER_S}"
+if [ -z "${_stagger}" ]; then
+  if [[ "${CHANNEL_ID:-}" =~ ^[0-9]+$ ]]; then
+    _stagger="${CHANNEL_ID}"
+  else
+    _stagger=0
+  fi
+fi
+if [ "${_stagger}" -gt 0 ]; then
+  log "start stagger ${_stagger}s (slot ${CHANNEL_ID:-?})"
+  sleep "${_stagger}"
+fi
+if [ "${DECKLINK_OPEN_DELAY_S}" -gt 0 ]; then
+  log "DeckLink open settle ${DECKLINK_OPEN_DELAY_S}s"
+  sleep "${DECKLINK_OPEN_DELAY_S}"
+fi
+
+attempt=1
+backoff="${DECKLINK_OPEN_BACKOFF_S}"
+while [ "${attempt}" -le "${DECKLINK_OPEN_ATTEMPTS}" ]; do
+  log "gst open attempt ${attempt}/${DECKLINK_OPEN_ATTEMPTS}"
+  run_gst_once
+  if [ "${_GST_RC}" -eq 0 ]; then
+    cleanup_captions
+    exit 0
+  fi
+  if [ "${_GST_QUICK_FAIL}" -eq 0 ]; then
+    # Mid-run death after a healthy open — let systemd Restart=always take over.
+    log "gst exited rc=${_GST_RC} after open gate — handing off to systemd restart"
+    cleanup_captions
+    exit "${_GST_RC}"
+  fi
+
+  state="$(decklink_probe_state)"
+  case "${state}" in
+    unlocked)
+      log "device ${DEVICE_NUMBER}: unlocked after failed open — exit 1 for auto-park / systemd cycle"
+      cleanup_captions
+      exit 1
+      ;;
+    busy)
+      log "device ${DEVICE_NUMBER}: busy after failed open — backoff ${backoff}s"
+      ;;
+    locked|skip|error)
+      log "device ${DEVICE_NUMBER}: probe=${state} after failed open (rc=${_GST_RC} fatal=${_GST_SAW_FATAL}) — retry"
+      ;;
+  esac
+
+  if [ "${attempt}" -ge "${DECKLINK_OPEN_ATTEMPTS}" ]; then
+    break
+  fi
+  log "retrying gst open in ${backoff}s"
+  sleep "${backoff}"
+  if [ "${backoff}" -lt "${DECKLINK_OPEN_BACKOFF_CAP_S}" ]; then
+    next=$((backoff * 2))
+    if [ "${next}" -gt "${DECKLINK_OPEN_BACKOFF_CAP_S}" ]; then
+      backoff="${DECKLINK_OPEN_BACKOFF_CAP_S}"
+    else
+      backoff="${next}"
+    fi
+  fi
+  attempt=$((attempt + 1))
+done
+
+log "ERROR: gst open failed after ${DECKLINK_OPEN_ATTEMPTS} attempt(s) — exit ${_GST_RC:-1}"
 cleanup_captions
-exit "${rc}"
+exit "${_GST_RC:-1}"

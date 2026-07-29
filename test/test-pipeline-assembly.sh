@@ -11,6 +11,12 @@ fi
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$PWD/test/stubbin:$PATH"
+# Open-supervisor defaults add settle sleeps; assembly only checks pipeline text.
+export DECKLINK_OPEN_DELAY_S=0
+export DECKLINK_START_STAGGER_S=0
+export DECKLINK_OPEN_ATTEMPTS=1
+export DECKLINK_OPEN_GATE_S=30
+export DECKLINK_HANG_KILL_S=0
 fail() { echo "FAIL: $1"; exit 1; }
 run_encode() { bash ./nexvue-encode.sh "$@"; }
 
