@@ -1,5 +1,7 @@
-# Build artifacts
+# Build artifacts (make all leaves these in the clone; install copies to /usr/local/bin)
 decklink-status
+decklink-audio-probe
+decklink-configure
 *.o
 
 # Local/test scratch
