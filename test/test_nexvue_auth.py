@@ -214,6 +214,76 @@ echo json_encode([
         self.assertTrue(data["same"])
         self.assertTrue(data["in_env"])
 
+    def test_sharer_role_and_user_channel_acl(self) -> None:
+        data = self._php(
+            """
+$u = auth_user_create([
+  'username' => 'sharebob',
+  'password' => 'password1',
+  'role' => 'sharer',
+  'channels' => ['ch1', 'ch3'],
+]);
+$pub = auth_user_row_public($u);
+$bases = auth_user_channel_bases($u);
+$ok = auth_user_allows_channels($u, ['ch1']);
+$deny = auth_user_allows_channels($u, ['ch0', 'ch1']);
+$admin = auth_user_find_by_username('admin');
+$adminBases = auth_user_channel_bases($admin);
+echo json_encode([
+  'role' => $pub['role'],
+  'channels' => $pub['channels'],
+  'bases' => $bases,
+  'ok' => $ok,
+  'deny' => $deny,
+  'admin_all' => count($adminBases) === 8 && $pub['channels'] !== null,
+  'admin_null' => auth_user_row_public($admin)['channels'] === null,
+]);
+"""
+        )
+        self.assertEqual(data["role"], "sharer")
+        self.assertEqual(data["channels"], ["ch1", "ch3"])
+        self.assertEqual(data["bases"], ["ch1", "ch3"])
+        self.assertTrue(data["ok"])
+        self.assertFalse(data["deny"])
+        self.assertTrue(data["admin_all"])
+        self.assertTrue(data["admin_null"])
+
+    def test_share_list_filter_and_can_manage(self) -> None:
+        data = self._php(
+            """
+$admin = auth_user_find_by_username('admin');
+$sharer = auth_user_create([
+  'username' => 'sharer1',
+  'password' => 'password1',
+  'role' => 'sharer',
+]);
+$exp = gmdate('Y-m-d\\TH:i:s\\Z', time() + 3600);
+$a = auth_share_create('Admin share', ['ch0'], $exp, $admin['id']);
+$s = auth_share_create('Sharer share', ['ch1'], $exp, $sharer['id']);
+$all = auth_shares_list(null);
+$mine = auth_shares_list($sharer['id']);
+$canOwn = auth_share_can_manage($s['row'], $sharer);
+$canOther = auth_share_can_manage($a['row'], $sharer);
+$adminAny = auth_share_can_manage($s['row'], $admin);
+echo json_encode([
+  'all_n' => count($all),
+  'mine_n' => count($mine),
+  'mine_name' => $mine[0]['name'] ?? null,
+  'owner_name' => $mine[0]['created_by_username'] ?? null,
+  'can_own' => $canOwn,
+  'can_other' => $canOther,
+  'admin_any' => $adminAny,
+]);
+"""
+        )
+        self.assertGreaterEqual(data["all_n"], 2)
+        self.assertEqual(data["mine_n"], 1)
+        self.assertEqual(data["mine_name"], "Sharer share")
+        self.assertEqual(data["owner_name"], "sharer1")
+        self.assertTrue(data["can_own"])
+        self.assertFalse(data["can_other"])
+        self.assertTrue(data["admin_any"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,10 +9,10 @@
  * the UI shows — encode still publishes all eight.
  *
  * Per-browser prefs (localStorage) never change encode or other viewers:
- *   nexvue-vu-on          1 | 0               (show/hide meter overlay)
+ *   nexvue-vu-on          1 | 0               (default off when unset)
  *   nexvue-vu-scale       1 | 0               (show dBFS scale beside meters)
- *   nexvue-audio-muted    1 | 0               (Web Audio listen off)
- *   nexvue-audio-volume   0..1               (Web Audio master gain)
+ *   nexvue-audio-muted    1 | 0               (default muted when unset)
+ *   nexvue-audio-volume   0..1               (default 0.2 when unset)
  *   nexvue-audio-program  main | sap
  *   nexvue-audio-playout  stereo | surround   (5.1 → stereo mixdown vs discrete)
  *   nexvue-vu-solo        -1 | channel index  (engineering solo)
@@ -114,12 +114,12 @@
     return LAYOUTS[normalizeLayout(raw)] || LAYOUTS.stereo;
   }
 
-  /** Default on — hide only when user explicitly turns VU off. */
+  /** Default off — show only when user explicitly turns VU on. */
   function getVisiblePref() {
     try {
-      return localStorage.getItem(PREF_VISIBLE) !== "0";
+      return localStorage.getItem(PREF_VISIBLE) === "1";
     } catch {
-      return true;
+      return false;
     }
   }
 
@@ -146,12 +146,14 @@
     return !!on;
   }
 
-  /** User mute — element stays muted; Web Audio master gain is the real mute. */
+  /** User mute — element stays muted; Web Audio master gain is the real mute. Default muted. */
   function getMutedPref() {
     try {
-      return localStorage.getItem(PREF_MUTED) === "1";
+      const raw = localStorage.getItem(PREF_MUTED);
+      if (raw === null || raw === "") return true;
+      return raw === "1";
     } catch {
-      return false;
+      return true;
     }
   }
 
@@ -162,22 +164,22 @@
     return !!on;
   }
 
-  /** Linear gain 0–1 (default 1). */
+  /** Linear gain 0–1 (default 0.2 / 20%). */
   function getVolumePref() {
     try {
       const raw = localStorage.getItem(PREF_VOLUME);
-      if (raw === null || raw === "") return 1;
-      const n = parseFloat(raw);
-      if (!Number.isFinite(n)) return 1;
+      if (raw === null || raw === "") return 0.2;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return 0.2;
       return Math.max(0, Math.min(1, n));
     } catch {
-      return 1;
+      return 0.2;
     }
   }
 
   function setVolumePref(v) {
     const n = Math.max(0, Math.min(1, Number(v)));
-    const out = Number.isFinite(n) ? n : 1;
+    const out = Number.isFinite(n) ? n : 0.2;
     try {
       localStorage.setItem(PREF_VOLUME, String(out));
     } catch { /* private mode */ }

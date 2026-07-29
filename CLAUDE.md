@@ -43,9 +43,9 @@ specifically because this box can't get additional ports opened.
   format changes never renegotiate the encoder or drop viewer sessions.
 - Adaptive bandwidth = per-channel LO rendition (tee in the same pipeline —
   DeckLink sub-devices are exclusive-open, never a second process) plus
-  player-side loss-driven switching. Any channel may set `LO_ENABLE=true`
-  (no station-wide pool cap). True simulcast/SFU (Ant Media, Janus) is the
-  deliberate back-pocket option, not the plan.
+  player-side loss-driven switching. Defaults: `LO_ENABLE=true`,
+  `LO_PRESET=360p` (per-channel override still supported). True simulcast/SFU
+  (Ant Media, Janus) is the deliberate back-pocket option, not the plan.
 - Channel slots `MAX_CHANNELS` (default 8, ids 0–7) match Quad 2 DeckLink
   `MAX_DEVICES`. Duo 2 uses `MAX_DEVICES=4` and parks unused `@N`. SRT can
   still be hand-configured on any slot via `INPUT_TYPE=srt` in the channel
@@ -132,8 +132,10 @@ specifically because this box can't get additional ports opened.
   the tree unused. Park empty ports via Services Enable/Disable.
   Captions/LO/metrics/ops UI remain. Assembly tests:
   `test/test-pipeline-assembly.sh`.
-- **Phase 2: edge local auth landed** — bcrypt users (admin/operator/viewer),
-  named revocable share links with mandatory expiry, MediaMTX JWT + local
+- **Phase 2: edge local auth landed** — bcrypt users (admin/operator/sharer/viewer),
+  per-user channel ACL, named revocable share links with mandatory expiry
+  (Users admin UI + Player/Multiview Share for admin/sharer; sharer sees own
+  tokens only), MediaMTX JWT + local
   JWKS, long-lived publish JWT in `nexvue.env`, sync-shaped export/import
   on `nexvue-auth.php` for a future portal. Auth SQLite + keys live under
   `/var/lib/nexvue/auth/` (www-data RW; `auth.db` inside that dir so WAL
@@ -208,14 +210,18 @@ specifically because this box can't get additional ports opened.
   Multiview session metric tiles live in a collapsed bottom drawer
   (Multiview shows the audio-focused pane).
   Top nav: Player / Multiview / Metrics / Services / Settings / Users.
-  Login at `login.html` (session cookie); share links use `?t=` on Player.
-  Roles: admin (Users+Services+Settings+Metrics), operator (Settings+Metrics),
-  viewer (watch). MediaMTX JWT via local JWKS; encoders use `NEXVUE_PUBLISH_JWT`.
+  Login at `login.html` (session cookie); share links use `?t=` on Player /
+  Multiview. Roles: admin (Users+Services+Settings+Metrics+all shares),
+  operator (Settings+Metrics), sharer / UI **Viewer+Share** (watch + own share
+  links via Player/Multiview Share), viewer (watch). Per-user channel ACL on Users
+  (`users.channels`; null = all). MediaMTX JWT via local JWKS; encoders use
+  `NEXVUE_PUBLISH_JWT`.
   Player/Multiview **CC** uses `nexvue-captions.js` + SSE (not WHEP text
   tracks). Player/Multiview **VU / audio program** use `nexvue-vu.js`
   (Web Audio on the WHEP MediaStream). Top-bar **VU** toggle (like CC)
-  shows/hides the meter overlay (`localStorage.nexvue-vu-on`, default on).
-  Encode always opens DeckLink 8ch and publishes 8ch positioned Opus
+  shows/hides the meter overlay (`localStorage.nexvue-vu-on`, default off).
+  First-visit audio defaults: volume 20%, muted. Encode always opens DeckLink
+  8ch and publishes 8ch positioned Opus
   (default `AUDIO_BITRATE_BPS=384000`) tee'd to HI+LO. No 16ch path.
   `AUDIO_LAYOUT` is a player role preset only; `AUDIO_EMBEDS` (Settings
   checkboxes) gates which embeds the browser VU offers — metadata only.
@@ -248,9 +254,11 @@ specifically because this box can't get additional ports opened.
  (hours 1|6|12|24|48|72; output `/var/lib/nexvue/support`, 24h retention).
  **Update from repo…** (`update_status` / `update_repo`) runs
  `nexvue-ops-update.sh`: fetch + hard-reset to `origin/$NEXVUE_UPDATE_BRANCH`
- (default `main`) using `/etc/nexvue/repo.path`, then `setup.sh`. Semver lives
- in repo `VERSION`; top-nav badge via `nexvue-version.php` +
- `/var/lib/nexvue/version.json`.
+ (default `main`) using `/etc/nexvue/repo.path`, then `setup.sh`. Status line
+ is `vX.Y.Z · up to date` or `vX.Y.Z → vA.B.C · update available` (no SHA /
+ dirty); confirm dialog shows `remote_version` + commit-subject changelog
+ (`HEAD..origin/<branch>`). Semver lives in repo `VERSION`; top-nav badge via
+ `nexvue-version.php` + `/var/lib/nexvue/version.json`.
  Settings Channel list shows LO yes/no and
  **Restart all encoders** (`restart_encoders`: systemd-enabled encode slots
  only); Services has the same bulk restart. Channel editor **Factory

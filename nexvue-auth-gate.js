@@ -144,7 +144,8 @@
       if (isShare) {
         who.textContent = "share:" + (user.name || "");
       } else if (user && user.username) {
-        who.textContent = user.username + " (" + user.role + ")";
+        var roleLabel = user.role === "sharer" ? "Viewer+Share" : user.role;
+        who.textContent = user.username + " (" + roleLabel + ")";
       }
       who.hidden = false;
     }
@@ -159,12 +160,12 @@
   function channelAllowed(path, user) {
     user = user || _user;
     if (!user) return true;
-    // Local users (admin/operator/viewer) always see every station channel.
-    // Only share-link sessions are channel-scoped. Do not treat a missing /
-    // empty / non-array `channels` on a user session as "deny all" — that
-    // blanked the Player/Multiview channel picker after login.
-    if (user.auth !== "share") return true;
     var channels = user.channels;
+    // Share sessions and local users with an ACL both use channels[].
+    // null channels on a user (legacy) → treat as all allowed.
+    if (user.auth !== "share" && (channels == null || channels === undefined)) {
+      return true;
+    }
     if (!Array.isArray(channels) || channels.length === 0) return false;
     var p = String(path || "").toLowerCase();
     var base = /^ch[0-7]lo$/.test(p) ? p.slice(0, -2) : p;
@@ -174,6 +175,12 @@
       if (/^ch[0-7]lo$/.test(c) && c.slice(0, -2) === base) return true;
     }
     return false;
+  }
+
+  function canShare(user) {
+    user = user || _user;
+    if (!user || user.auth === "share") return false;
+    return user.role === "admin" || user.role === "sharer";
   }
 
   function currentUser() {
@@ -186,6 +193,7 @@
     requirePage: requirePage,
     whepJwt: whepJwt,
     channelAllowed: channelAllowed,
+    canShare: canShare,
     currentUser: currentUser,
     shareTokenFromLocation: shareTokenFromLocation,
     redeemShare: redeemShare,

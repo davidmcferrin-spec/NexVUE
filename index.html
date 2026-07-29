@@ -263,7 +263,7 @@
   <button id="mute" class="tgl" title="Mute (this browser only)">Mute</button>
   <span class="vol-wrap" title="Volume (this browser only — Web Audio)">
     <span class="qlabel">vol</span>
-    <input type="range" id="volume" min="0" max="100" step="1" value="100" aria-label="Volume">
+    <input type="range" id="volume" min="0" max="100" step="1" value="20" aria-label="Volume">
     <span id="vol-pct">100%</span>
   </span>
   <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip/rotate)">⛶ Fullscreen</button>
@@ -323,10 +323,23 @@
 <script src="nexvue-captions.js"></script>
 <script src="nexvue-vu.js"></script>
 <script src="nexvue-auth-gate.js"></script>
+<script src="nexvue-share-ui.js"></script>
 <script>
 "use strict";
 (async () => {
   const authUser = await NexVueAuth.requirePage({ allowShare: true });
+  if (window.NexVueShareUI) {
+    NexVueShareUI.mount({
+      page: "player",
+      getDefaultChannels: function () {
+        if (currentPath) return [currentPath];
+        return [];
+      },
+      getAllowedChannels: function () {
+        return (authUser && authUser.channels) || [];
+      },
+    });
+  }
   const $ = id => document.getElementById(id);
   const video = $("video"), stateEl = $("state");
   const videoWrap = document.querySelector(".videowrap");

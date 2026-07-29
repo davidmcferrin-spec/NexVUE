@@ -10,17 +10,19 @@
  * (auth.db-wal / auth.db-shm) can be created under Apache. Legacy path
  * /var/lib/nexvue/auth.db is migrated on open when possible.
  *
- * Roles: admin | operator | viewer
+ * Roles: admin | operator | sharer | viewer
  * Share links: named, channel-scoped, mandatory expires_at, revocable.
+ * User channel ACL: users.channels JSON (NULL = all ch0–ch7).
  */
 
 declare(strict_types=1);
 
-const NEXVUE_AUTH_ROLES = ['admin', 'operator', 'viewer'];
+const NEXVUE_AUTH_ROLES = ['admin', 'operator', 'sharer', 'viewer'];
 const NEXVUE_AUTH_JWT_TTL_S = 90;
 const NEXVUE_AUTH_PUBLISH_TTL_S = 315360000; // ~10 years
 const NEXVUE_AUTH_RESET_TTL_S = 3600;
 const NEXVUE_AUTH_MAX_CHANNELS = 8; // ch0..ch7 (+ lo)
+const NEXVUE_AUTH_SCHEMA_VERSION = 2;
 
 function auth_dir(): string {
     $o = getenv('NEXVUE_AUTH_DIR');
@@ -125,11 +127,12 @@ function auth_migrate(): void {
     $db = auth_db();
     // Hot path: status/metrics/ops hit this often — skip DDL once schema is stamped.
     $ver = (int)$db->querySingle('PRAGMA user_version');
-    if ($ver >= 1) {
+    if ($ver >= NEXVUE_AUTH_SCHEMA_VERSION) {
         $done = true;
         return;
     }
-    $db->exec(<<<'SQL'
+    if ($ver < 1) {
+        $db->exec(<<<'SQL'
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -138,6 +141,7 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL,
   must_change_password INTEGER NOT NULL DEFAULT 0,
   disabled_at TEXT,
+  channels TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   synced_at TEXT
@@ -167,18 +171,33 @@ CREATE INDEX IF NOT EXISTS idx_share_expires ON share_links(expires_at);
 CREATE INDEX IF NOT EXISTS idx_users_updated ON users(updated_at);
 CREATE INDEX IF NOT EXISTS idx_shares_updated ON share_links(updated_at);
 SQL);
-
-    $n = (int)$db->querySingle('SELECT COUNT(*) FROM users');
-    if ($n === 0) {
-        auth_user_create([
-            'username' => 'admin',
-            'password' => 'password',
-            'email' => null,
-            'role' => 'admin',
-            'must_change_password' => true,
-        ]);
+        $n = (int)$db->querySingle('SELECT COUNT(*) FROM users');
+        if ($n === 0) {
+            auth_user_create([
+                'username' => 'admin',
+                'password' => 'password',
+                'email' => null,
+                'role' => 'admin',
+                'must_change_password' => true,
+            ]);
+        }
+        $db->exec('PRAGMA user_version = ' . (string)NEXVUE_AUTH_SCHEMA_VERSION);
+        $done = true;
+        return;
     }
-    $db->exec('PRAGMA user_version = 1');
+    if ($ver < 2) {
+        $cols = [];
+        $info = $db->query('PRAGMA table_info(users)');
+        if ($info) {
+            while ($c = $info->fetchArray(SQLITE3_ASSOC)) {
+                $cols[(string)$c['name']] = true;
+            }
+        }
+        if (!isset($cols['channels'])) {
+            $db->exec('ALTER TABLE users ADD COLUMN channels TEXT');
+        }
+        $db->exec('PRAGMA user_version = 2');
+    }
     $done = true;
 }
 
@@ -560,6 +579,80 @@ function auth_normalize_channels(array $channels): array {
     return $list;
 }
 
+/** Base channel paths ch0..ch7 (no lo). */
+function auth_all_channel_bases(): array {
+    $out = [];
+    for ($i = 0; $i < NEXVUE_AUTH_MAX_CHANNELS; $i++) {
+        $out[] = 'ch' . $i;
+    }
+    return $out;
+}
+
+/**
+ * Encode user channel ACL for SQLite.
+ * null / full ch0–ch7 set → NULL (all channels).
+ *
+ * @param list<string>|null $channels
+ */
+function auth_encode_user_channels(?array $channels): ?string {
+    if ($channels === null) {
+        return null;
+    }
+    $list = auth_normalize_channels($channels);
+    if ($list === auth_all_channel_bases()) {
+        return null;
+    }
+    return json_encode(array_values($list), JSON_UNESCAPED_SLASHES);
+}
+
+/**
+ * Decode users.channels column.
+ * null / empty → null meaning "all channels".
+ *
+ * @return list<string>|null
+ */
+function auth_decode_user_channels(mixed $raw): ?array {
+    if ($raw === null || $raw === '') {
+        return null;
+    }
+    if (is_array($raw)) {
+        return auth_normalize_channels($raw);
+    }
+    if (!is_string($raw)) {
+        return null;
+    }
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded) || $decoded === []) {
+        return null;
+    }
+    return auth_normalize_channels($decoded);
+}
+
+/**
+ * Effective base channels for a user row (never empty).
+ *
+ * @return list<string>
+ */
+function auth_user_channel_bases(array $row): array {
+    $decoded = auth_decode_user_channels($row['channels'] ?? null);
+    return $decoded ?? auth_all_channel_bases();
+}
+
+/**
+ * True when every channel in $want is allowed for $row.
+ *
+ * @param list<string> $want
+ */
+function auth_user_allows_channels(array $row, array $want): bool {
+    $allowed = array_fill_keys(auth_user_channel_bases($row), true);
+    foreach (auth_normalize_channels($want) as $c) {
+        if (!isset($allowed[$c])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 function auth_parse_expires(?string $absolute, ?int $durationS): string {
     if ($absolute !== null && trim($absolute) !== '') {
         $t = strtotime(trim($absolute));
@@ -578,6 +671,7 @@ function auth_parse_expires(?string $absolute, ?int $durationS): string {
 }
 
 function auth_user_row_public(array $row): array {
+    $channels = auth_decode_user_channels($row['channels'] ?? null);
     return [
         'id' => $row['id'],
         'username' => $row['username'],
@@ -585,6 +679,8 @@ function auth_user_row_public(array $row): array {
         'role' => $row['role'],
         'must_change_password' => ((int)$row['must_change_password']) === 1,
         'disabled_at' => $row['disabled_at'] ?: null,
+        // null = all station channels; otherwise restricted base list.
+        'channels' => $channels,
         'created_at' => $row['created_at'],
         'updated_at' => $row['updated_at'],
         'synced_at' => $row['synced_at'] ?: null,
@@ -636,10 +732,22 @@ function auth_user_create(array $in): array {
         }
         $hash = password_hash($password, PASSWORD_BCRYPT);
     }
+    $channelsSql = null;
+    if (array_key_exists('channels', $in)) {
+        if ($in['channels'] === null) {
+            $channelsSql = null;
+        } elseif (is_array($in['channels'])) {
+            $channelsSql = auth_encode_user_channels($in['channels']);
+        } elseif (is_string($in['channels']) && $in['channels'] !== '') {
+            $channelsSql = auth_encode_user_channels(
+                auth_decode_user_channels($in['channels']) ?? auth_all_channel_bases()
+            );
+        }
+    }
     $db = auth_db();
     $st = $db->prepare(
-        'INSERT INTO users (id, username, password_hash, email, role, must_change_password, disabled_at, created_at, updated_at, synced_at)
-         VALUES (:id, :u, :ph, :e, :r, :m, :d, :c, :up, :sy)'
+        'INSERT INTO users (id, username, password_hash, email, role, must_change_password, disabled_at, channels, created_at, updated_at, synced_at)
+         VALUES (:id, :u, :ph, :e, :r, :m, :d, :ch, :c, :up, :sy)'
     );
     $st->bindValue(':id', $id, SQLITE3_TEXT);
     $st->bindValue(':u', $username, SQLITE3_TEXT);
@@ -648,6 +756,7 @@ function auth_user_create(array $in): array {
     $st->bindValue(':r', $role, SQLITE3_TEXT);
     $st->bindValue(':m', $must, SQLITE3_INTEGER);
     $st->bindValue(':d', $in['disabled_at'] ?? null, isset($in['disabled_at']) && $in['disabled_at'] ? SQLITE3_TEXT : SQLITE3_NULL);
+    $st->bindValue(':ch', $channelsSql, $channelsSql === null ? SQLITE3_NULL : SQLITE3_TEXT);
     $st->bindValue(':c', $in['created_at'] ?? $now, SQLITE3_TEXT);
     $st->bindValue(':up', $in['updated_at'] ?? $now, SQLITE3_TEXT);
     $st->bindValue(':sy', $in['synced_at'] ?? null, isset($in['synced_at']) && $in['synced_at'] ? SQLITE3_TEXT : SQLITE3_NULL);
@@ -696,11 +805,25 @@ function auth_user_update(string $id, array $in): array {
     if (!empty($in['password_hash']) && is_string($in['password_hash'])) {
         $hash = $in['password_hash'];
     }
+    $channelsSql = $row['channels'] ?? null;
+    if (array_key_exists('channels', $in)) {
+        if ($in['channels'] === null) {
+            $channelsSql = null;
+        } elseif (is_array($in['channels'])) {
+            $channelsSql = auth_encode_user_channels($in['channels']);
+        } elseif (is_string($in['channels'])) {
+            $channelsSql = $in['channels'] === ''
+                ? null
+                : auth_encode_user_channels(
+                    auth_decode_user_channels($in['channels']) ?? auth_all_channel_bases()
+                );
+        }
+    }
     $now = auth_now_iso();
     $db = auth_db();
     $st = $db->prepare(
         'UPDATE users SET username=:u, password_hash=:ph, email=:e, role=:r,
-         must_change_password=:m, disabled_at=:d, updated_at=:up, synced_at=:sy WHERE id=:id'
+         must_change_password=:m, disabled_at=:d, channels=:ch, updated_at=:up, synced_at=:sy WHERE id=:id'
     );
     $st->bindValue(':u', $username, SQLITE3_TEXT);
     $st->bindValue(':ph', $hash, SQLITE3_TEXT);
@@ -708,6 +831,7 @@ function auth_user_update(string $id, array $in): array {
     $st->bindValue(':r', $role, SQLITE3_TEXT);
     $st->bindValue(':m', $must, SQLITE3_INTEGER);
     $st->bindValue(':d', $disabled, $disabled === null ? SQLITE3_NULL : SQLITE3_TEXT);
+    $st->bindValue(':ch', $channelsSql, $channelsSql === null || $channelsSql === '' ? SQLITE3_NULL : SQLITE3_TEXT);
     $st->bindValue(':up', $now, SQLITE3_TEXT);
     $st->bindValue(':sy', $in['synced_at'] ?? $row['synced_at'], isset($in['synced_at']) || $row['synced_at'] ? SQLITE3_TEXT : SQLITE3_NULL);
     $st->bindValue(':id', $id, SQLITE3_TEXT);
@@ -756,6 +880,14 @@ function auth_share_row_public(array $row, bool $includeToken = false, ?string $
     } elseif (strtotime((string)$row['expires_at']) !== false && strtotime((string)$row['expires_at']) <= time()) {
         $status = 'expired';
     }
+    $createdBy = $row['created_by'] ?: null;
+    $createdByUsername = null;
+    if (is_string($createdBy) && $createdBy !== '') {
+        $owner = auth_user_find_by_id($createdBy);
+        if ($owner !== null) {
+            $createdByUsername = (string)$owner['username'];
+        }
+    }
     $out = [
         'id' => $row['id'],
         'name' => $row['name'],
@@ -763,7 +895,8 @@ function auth_share_row_public(array $row, bool $includeToken = false, ?string $
         'expires_at' => $row['expires_at'],
         'revoked_at' => $row['revoked_at'] ?: null,
         'status' => $status,
-        'created_by' => $row['created_by'] ?: null,
+        'created_by' => $createdBy,
+        'created_by_username' => $createdByUsername,
         'created_at' => $row['created_at'],
         'updated_at' => $row['updated_at'],
         'synced_at' => $row['synced_at'] ?: null,
@@ -864,12 +997,36 @@ function auth_share_revoke(string $id): array {
     return $out;
 }
 
-function auth_shares_list(): array {
+/** Admin may revoke any share; others only their own. */
+function auth_share_can_manage(array $shareRow, array $userRow): bool {
+    if (($userRow['role'] ?? '') === 'admin') {
+        return true;
+    }
+    $owner = (string)($shareRow['created_by'] ?? '');
+    $uid = (string)($userRow['id'] ?? '');
+    return $owner !== '' && $uid !== '' && hash_equals($owner, $uid);
+}
+
+/**
+ * @param string|null $createdBy when set, only shares created by that user id
+ * @return list<array<string,mixed>>
+ */
+function auth_shares_list(?string $createdBy = null): array {
     $db = auth_db();
-    $r = $db->query('SELECT * FROM share_links ORDER BY created_at DESC');
+    if ($createdBy !== null && $createdBy !== '') {
+        $st = $db->prepare(
+            'SELECT * FROM share_links WHERE created_by = :cb ORDER BY created_at DESC'
+        );
+        $st->bindValue(':cb', $createdBy, SQLITE3_TEXT);
+        $r = $st->execute();
+    } else {
+        $r = $db->query('SELECT * FROM share_links ORDER BY created_at DESC');
+    }
     $out = [];
-    while ($row = $r->fetchArray(SQLITE3_ASSOC)) {
-        $out[] = auth_share_row_public($row);
+    if ($r) {
+        while ($row = $r->fetchArray(SQLITE3_ASSOC)) {
+            $out[] = auth_share_row_public($row);
+        }
     }
     return $out;
 }
@@ -1102,8 +1259,7 @@ function auth_role_at_least(?array $user, array $allowed): bool {
 function auth_allowed_channels_for_session(): ?array {
     $user = auth_current_user();
     if ($user !== null) {
-        // Local users: all station channels (share links are the scoped mechanism).
-        return auth_all_channel_paths();
+        return auth_expand_channel_paths(auth_user_channel_bases($user));
     }
     $share = auth_current_share();
     if ($share !== null) {
@@ -1121,10 +1277,8 @@ function auth_me_payload(): ?array {
     if ($user !== null) {
         $pub = auth_user_row_public($user);
         $pub['auth'] = 'user';
-        $pub['channels'] = array_values(array_filter(
-            auth_all_channel_paths(),
-            static fn(string $p): bool => !str_ends_with($p, 'lo')
-        ));
+        // Always emit explicit base list for the gate (null ACL → all ch0–ch7).
+        $pub['channels'] = auth_user_channel_bases($user);
         return $pub;
     }
     $share = auth_current_share();
@@ -1253,6 +1407,9 @@ function auth_users_import(array $users): array {
             'updated_at' => $u['updated_at'] ?? auth_now_iso(),
             'synced_at' => auth_now_iso(),
         ];
+        if (array_key_exists('channels', $u)) {
+            $payload['channels'] = $u['channels'];
+        }
         if (!empty($u['password_hash'])) {
             $payload['password_hash'] = (string)$u['password_hash'];
             $payload['password'] = 'imported-placeholder-xxxxxxxx'; // bypassed when hash set

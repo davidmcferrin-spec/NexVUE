@@ -273,7 +273,7 @@
   <button id="mute" class="tgl" title="Mute focused pane (this browser only)">Mute</button>
   <span class="vol-wrap" title="Volume (this browser only — Web Audio)">
     <span class="qlabel">vol</span>
-    <input type="range" id="volume" min="0" max="100" step="1" value="100" aria-label="Volume">
+    <input type="range" id="volume" min="0" max="100" step="1" value="20" aria-label="Volume">
     <span id="vol-pct">100%</span>
   </span>
   <button id="fs" title="Fullscreen multiview">⛶ Fullscreen</button>
@@ -328,10 +328,31 @@
 <script src="nexvue-captions.js"></script>
 <script src="nexvue-vu.js"></script>
 <script src="nexvue-auth-gate.js"></script>
+<script src="nexvue-share-ui.js"></script>
 <script>
 "use strict";
 (async () => {
   const authUser = await NexVueAuth.requirePage({ allowShare: true });
+  if (window.NexVueShareUI) {
+    NexVueShareUI.mount({
+      page: "multiview",
+      getDefaultChannels: function () {
+        const out = [];
+        const seen = {};
+        for (const p of panes) {
+          if (!p.base) continue;
+          const b = String(p.base).toLowerCase().replace(/lo$/, "");
+          if (seen[b]) continue;
+          seen[b] = true;
+          out.push(b);
+        }
+        return out;
+      },
+      getAllowedChannels: function () {
+        return (authUser && authUser.channels) || [];
+      },
+    });
+  }
   const $ = id => document.getElementById(id);
   const grid = $("grid");
   const stateEl = $("state");

@@ -110,8 +110,8 @@ if [ -n "${NEXVUE_PUBLISH_JWT}" ]; then
 fi
 
 # LO rendition (adaptive-bandwidth fallback the portal player can switch to)
-LO_ENABLE="${LO_ENABLE:-false}"
-LO_PRESET="${LO_PRESET:-720p}"              # 720p|540p|480p|360p|240p|180p
+LO_ENABLE="${LO_ENABLE:-true}"
+LO_PRESET="${LO_PRESET:-360p}"              # 720p|540p|480p|360p|240p|180p
 LO_FPS="${LO_FPS:-30000/1001}"              # 29.97p default: cellular-friendly
 LO_RTSP_URL="${LO_RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}lo}"
 if [ -n "${NEXVUE_PUBLISH_JWT}" ]; then

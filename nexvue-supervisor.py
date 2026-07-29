@@ -167,8 +167,8 @@ class SupervisorConfig:
     rtsp_url: str = ""
     video_encoder: str = "vah264enc"
     extra_enc_args: str = ""
-    lo_enable: bool = False
-    lo_preset: str = "720p"
+    lo_enable: bool = True
+    lo_preset: str = "360p"
     lo_fps: str = "30000/1001"
     lo_rtsp_url: str = ""
     lo_width: int = 1280
@@ -360,9 +360,9 @@ def load_config(
 
     extra_enc_args = opt("EXTRA_ENC_ARGS", "")
 
-    lo_enable = opt_bool("LO_ENABLE", False)
+    lo_enable = opt_bool("LO_ENABLE", True)
 
-    lo_preset = opt("LO_PRESET", "720p")
+    lo_preset = opt("LO_PRESET", "360p")
     if lo_preset not in LO_PRESETS:
         raise ConfigError(f"LO_PRESET must be one of {','.join(LO_PRESETS)}, got {lo_preset!r}")
     lo_w_def, lo_h_def, lo_br_def = LO_PRESETS[lo_preset]

@@ -80,6 +80,21 @@
     width: 100%; background: var(--bg); color: var(--text);
     border: 1px solid var(--edge); border-radius: 4px; padding: 7px 9px; font: inherit;
   }
+  input[type="checkbox"] {
+    width: auto; margin: 0; padding: 0; flex-shrink: 0;
+    accent-color: var(--acc);
+  }
+  .check-row {
+    display: flex; align-items: center; gap: 8px;
+    margin: 12px 0 4px; color: var(--text); font-size: 12px; cursor: pointer;
+  }
+  .check-row span { color: var(--text); }
+  .role-help {
+    margin: 6px 0 0; padding: 8px 10px; font-size: 11px; line-height: 1.45;
+    color: var(--dim); background: var(--bg); border: 1px solid var(--edge);
+    border-radius: 4px;
+  }
+  .role-help strong { color: var(--text); font-weight: 600; }
   .ch-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; font-size: 12px; }
   .ch-grid label { display: flex; gap: 4px; align-items: center; margin: 0; color: var(--text); }
   .ch-grid input { width: auto; }
@@ -113,7 +128,7 @@
     <button type="button" id="users-reload">Reload</button>
   </div>
   <table>
-    <thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Channels</th><th>Status</th><th></th></tr></thead>
     <tbody id="users-body"></tbody>
   </table>
 </div>
@@ -125,7 +140,7 @@
     <button type="button" id="shares-reload">Reload</button>
   </div>
   <table>
-    <thead><tr><th>Name</th><th>Channels</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Channels</th><th>Expires</th><th>Created by</th><th>Status</th><th></th></tr></thead>
     <tbody id="shares-body"></tbody>
   </table>
   <div class="once" id="share-once" hidden></div>
@@ -140,14 +155,22 @@
     <label for="user-email">Email (optional)</label>
     <input id="user-email" type="email">
     <label for="user-role">Role</label>
-    <select id="user-role">
+    <select id="user-role" aria-describedby="user-role-help">
       <option value="viewer">viewer</option>
+      <option value="sharer">Viewer+Share</option>
       <option value="operator">operator</option>
       <option value="admin">admin</option>
     </select>
+    <p class="role-help" id="user-role-help"></p>
+    <label>Channels</label>
+    <div class="ch-grid" id="user-channels"></div>
+    <p class="role-help" style="margin-top:6px">Unchecked channels are hidden in Player/Multiview for this account. Leave all checked for full access.</p>
     <label for="user-password">Password <span id="pw-hint">(required)</span></label>
     <input id="user-password" type="password" minlength="8" autocomplete="new-password">
-    <label><input type="checkbox" id="user-disabled"> Disabled</label>
+    <label class="check-row" for="user-disabled">
+      <input type="checkbox" id="user-disabled">
+      <span>Disabled</span>
+    </label>
     <div class="err" id="user-err"></div>
     <div class="modal-actions">
       <button type="button" id="user-cancel">Cancel</button>
@@ -199,14 +222,42 @@
   const user = await NexVueAuth.requirePage({ roles: ["admin"] });
 
   const chGrid = document.getElementById("share-channels");
+  const userChGrid = document.getElementById("user-channels");
   for (let i = 0; i < 8; i++) {
     const lab = document.createElement("label");
     lab.innerHTML = `<input type="checkbox" value="ch${i}"> ch${i}`;
     chGrid.appendChild(lab);
+    const ulab = document.createElement("label");
+    ulab.innerHTML = `<input type="checkbox" value="ch${i}"> ch${i}`;
+    userChGrid.appendChild(ulab);
+  }
+
+  function setUserChannelChecks(channels) {
+    const all = channels == null;
+    userChGrid.querySelectorAll("input").forEach(function (c) {
+      c.checked = all || (Array.isArray(channels) && channels.indexOf(c.value) >= 0);
+    });
+  }
+
+  function selectedUserChannels() {
+    return Array.from(userChGrid.querySelectorAll("input:checked")).map(function (c) {
+      return c.value;
+    });
   }
 
   async function authApi(action, body) {
     return NexVueAuth.api(action, body || {});
+  }
+
+  function channelsLabel(channels) {
+    if (channels == null) return "all";
+    if (!Array.isArray(channels) || channels.length === 0) return "—";
+    return channels.join(", ");
+  }
+
+  function roleLabel(role) {
+    if (role === "sharer") return "Viewer+Share";
+    return role || "—";
   }
 
   async function loadUsers() {
@@ -216,7 +267,7 @@
     (data.users || []).forEach(function (u) {
       const tr = document.createElement("tr");
       const st = u.disabled_at ? "disabled" : (u.must_change_password ? "must change pw" : "active");
-      tr.innerHTML = `<td>${esc(u.username)}</td><td>${esc(u.email || "—")}</td><td>${esc(u.role)}</td><td>${esc(st)}</td><td></td>`;
+      tr.innerHTML = `<td>${esc(u.username)}</td><td>${esc(u.email || "—")}</td><td>${esc(roleLabel(u.role))}</td><td>${esc(channelsLabel(u.channels))}</td><td>${esc(st)}</td><td></td>`;
       const td = tr.lastElementChild;
       const edit = btn("Edit", function () { openUser(u); });
       const reset = btn("Reset link", async function () {
@@ -236,7 +287,8 @@
     tb.innerHTML = "";
     (data.shares || []).forEach(function (s) {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${esc(s.name)}</td><td>${esc((s.channels || []).join(", "))}</td><td>${esc(s.expires_at)}</td><td class="status-${esc(s.status)}">${esc(s.status)}</td><td></td>`;
+      const who = s.created_by_username || s.created_by || "—";
+      tr.innerHTML = `<td>${esc(s.name)}</td><td>${esc((s.channels || []).join(", "))}</td><td>${esc(s.expires_at)}</td><td>${esc(who)}</td><td class="status-${esc(s.status)}">${esc(s.status)}</td><td></td>`;
       const td = tr.lastElementChild;
       if (s.status === "active") {
         td.appendChild(btn("Revoke", async function () {
@@ -264,6 +316,30 @@
       .replace(/"/g, "&quot;");
   }
 
+  const ROLE_HELP = {
+    viewer:
+      "<strong>viewer</strong> — watch only. Can open Player and Multiview for " +
+      "channels you grant below. Cannot open Metrics, Settings, Services, or Users. " +
+      "Cannot create share links.",
+    sharer:
+      "<strong>Viewer+Share</strong> — viewer plus share links. Can watch granted channels and " +
+      "create/revoke their own share links from Player/Multiview (always with an expiry). " +
+      "Cannot open Metrics, Settings, Services, or Users.",
+    operator:
+      "<strong>operator</strong> — day-to-day station ops. Can watch plus Settings " +
+      "(channel encode knobs) and Metrics. Cannot open Services or Users, and cannot " +
+      "manage accounts or share links.",
+    admin:
+      "<strong>admin</strong> — full edge control. Can do everything an operator can, " +
+      "plus Services (start/stop/update) and Users (accounts and all share links).",
+  };
+
+  function updateRoleHelp() {
+    const role = document.getElementById("user-role").value;
+    document.getElementById("user-role-help").innerHTML =
+      ROLE_HELP[role] || ROLE_HELP.viewer;
+  }
+
   function openUser(u) {
     document.getElementById("user-dlg-title").textContent = u ? "Edit user" : "Add user";
     document.getElementById("user-id").value = u ? u.id : "";
@@ -274,8 +350,12 @@
     document.getElementById("pw-hint").textContent = u ? "(leave blank to keep)" : "(required)";
     document.getElementById("user-disabled").checked = !!(u && u.disabled_at);
     document.getElementById("user-err").textContent = "";
+    setUserChannelChecks(u ? u.channels : null);
+    updateRoleHelp();
     document.getElementById("user-dlg").showModal();
   }
+
+  document.getElementById("user-role").addEventListener("change", updateRoleHelp);
 
   document.getElementById("user-add").onclick = function () { openUser(null); };
   document.getElementById("user-cancel").onclick = function () { document.getElementById("user-dlg").close(); };
@@ -283,11 +363,17 @@
     const err = document.getElementById("user-err");
     err.textContent = "";
     const id = document.getElementById("user-id").value;
+    const channels = selectedUserChannels();
+    if (!channels.length) {
+      err.textContent = "select at least one channel";
+      return;
+    }
     const body = {
       username: document.getElementById("user-username").value,
       email: document.getElementById("user-email").value || null,
       role: document.getElementById("user-role").value,
       disabled: document.getElementById("user-disabled").checked,
+      channels: channels,
     };
     const pw = document.getElementById("user-password").value;
     try {

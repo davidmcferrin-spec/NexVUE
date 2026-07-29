@@ -4,7 +4,8 @@
  *
  * Public: login, logout, me, forgot, reset, share_redeem
  * Authed: whep_jwt, change_password
- * Admin: users_*, shares_*, user_reset_link, users_export/import, shares_export/import
+ * Admin: users_*, user_reset_link, users_export/import, shares_export/import
+ * Admin + sharer: shares_list, share_create, share_revoke (sharer: own only)
  * Sync: Bearer NEXVUE_SYNC_KEY may call export/import without a browser session.
  *
  * CLI include: when PHP_SAPI is cli and NEXVUE_AUTH_HTTP is unset, returns
@@ -213,6 +214,7 @@ try {
                 'email' => $body['email'] ?? null,
                 'role' => (string)($body['role'] ?? 'viewer'),
                 'must_change_password' => !empty($body['must_change_password']),
+                'channels' => $body['channels'] ?? null,
             ]);
         } catch (InvalidArgumentException $e) {
             auth_api_fail(400, $e->getMessage());
@@ -257,12 +259,13 @@ try {
     }
 
     if ($action === 'shares_list') {
-        auth_require_roles(['admin']);
-        auth_api_ok(['shares' => auth_shares_list()]);
+        $actor = auth_require_roles(['admin', 'sharer']);
+        $filter = ($actor['role'] === 'admin') ? null : (string)$actor['id'];
+        auth_api_ok(['shares' => auth_shares_list($filter)]);
     }
 
     if ($action === 'share_create') {
-        $admin = auth_require_roles(['admin']);
+        $actor = auth_require_roles(['admin', 'sharer']);
         $name = (string)($body['name'] ?? '');
         $channels = $body['channels'] ?? [];
         if (!is_array($channels)) {
@@ -271,23 +274,37 @@ try {
         $duration = isset($body['duration_s']) ? (int)$body['duration_s'] : null;
         $absolute = isset($body['expires_at']) ? (string)$body['expires_at'] : null;
         try {
+            $normalized = auth_normalize_channels($channels);
+            if (!auth_user_allows_channels($actor, $normalized)) {
+                auth_api_fail(403, 'channel not allowed for your account');
+            }
             $expires = auth_parse_expires($absolute, $duration);
-            $created = auth_share_create($name, $channels, $expires, $admin['id']);
+            $created = auth_share_create($name, $normalized, $expires, (string)$actor['id']);
         } catch (InvalidArgumentException $e) {
             auth_api_fail(400, $e->getMessage());
         }
         $pub = auth_share_row_public($created['row'], true, $created['token']);
         $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-        $pub['url'] = $scheme . '://' . $host . '/index.html?t=' . rawurlencode($created['token']);
+        $page = isset($body['page']) && is_string($body['page']) && $body['page'] === 'multiview'
+            ? 'multiview.html'
+            : 'index.html';
+        $pub['url'] = $scheme . '://' . $host . '/' . $page . '?t=' . rawurlencode($created['token']);
         auth_api_ok(['share' => $pub]);
     }
 
     if ($action === 'share_revoke') {
-        auth_require_roles(['admin']);
+        $actor = auth_require_roles(['admin', 'sharer']);
         $id = (string)($body['id'] ?? '');
         if ($id === '') {
             auth_api_fail(400, 'missing id');
+        }
+        $existing = auth_share_find_by_id($id);
+        if ($existing === null) {
+            auth_api_fail(404, 'share not found');
+        }
+        if (!auth_share_can_manage($existing, $actor)) {
+            auth_api_fail(403, 'forbidden');
         }
         try {
             $row = auth_share_revoke($id);

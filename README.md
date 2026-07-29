@@ -178,7 +178,7 @@ sudo systemctl restart apache2
 Then open `https://<edge-ip>/login.html` (default bootstrap `admin` /
 `password` — forced change on first login). Top nav → Player / Multiview /
 Metrics / Services / Settings / Users. **Roles gate ops pages** (admin /
-operator / viewer + named share links). Remove any Apache Basic Auth /
+operator / sharer / viewer + named share links). Remove any Apache Basic Auth /
 `.htaccess` AuthType — the app login replaces it. Do not DMZ-expose until
 API ports are loopback-bound (Phase 3).
 
@@ -192,15 +192,24 @@ API ports are loopback-bound (Phase 3).
 - **Page gate:** static HTML is still served by Apache; `nexvue-auth-gate.js`
   redirects unauthenticated browsers to `/login.html`. APIs
   (`nexvue-ops.php`, `nexvue-metrics.php`, …) and WHEP JWTs enforce the real
-  access control. Player/Multiview channel pickers list ch0–ch7 for any
-  logged-in user; only share links (`?t=`) filter to granted channels.
-  After login, hot paths release the PHP session lock immediately (captions
-  SSE must not block status/WHEP) and aliases read channel `.env` without sudo.
-- **Roles:** `admin` (Users, Services, Settings, Metrics, watch), `operator`
-  (Settings, Metrics, watch), `viewer` (Player/Multiview only).
-- **Share links:** Users page — named, one or more channels, absolute expiry
-  **or** duration (always required; no open-ended), revocable. URL form
-  `/index.html?t=<token>` (token shown once at create).
+  access control. Player/Multiview channel pickers honor each user's channel
+  ACL (Users checkboxes; `null`/unset = all ch0–ch7). Share links (`?t=`)
+  remain channel-scoped. After login, hot paths release the PHP session lock
+  immediately (captions SSE must not block status/WHEP) and aliases read
+  channel `.env` without sudo.
+- **Roles:** `admin` (Users, Services, Settings, Metrics, watch, all shares),
+  `operator` (Settings, Metrics, watch), `sharer` (UI label **Viewer+Share** —
+  watch + create/revoke own shares from Player/Multiview Share), `viewer`
+  (Player/Multiview only).
+- **Share links:** Users page (admin) or Player/Multiview **Share**
+  (`nexvue-share-ui.js`, admin/sharer). Named, one or more channels, absolute
+  expiry **or** duration (always required; no open-ended), revocable. Admin
+  sees all tokens + creator; sharer sees own. URL form
+  `/index.html?t=<token>` or `/multiview.html?t=<token>` (token shown once).
+- **Player audio defaults (first visit):** volume 20%, muted, VU meters off
+  (`nexvue-vu.js` localStorage). Existing prefs unchanged.
+- **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`
+  (existing station `.env` files unchanged until rewritten).
 - **MediaMTX:** `authMethod: jwt`, JWKS at
   `http://127.0.0.1:9080/nexvue-jwks.php` (localhost-only Apache vhost from
   `setup.sh` — avoids HTTPS redirects breaking JWKS), short-lived viewer JWTs
@@ -332,12 +341,15 @@ Then from a LAN machine:
   zip of journals, `/etc/nexvue` channel/MediaMTX config, metrics samples, and
   small `/run/nexvue` state via `nexvue-ops.php?action=support_bundle` →
   `nexvue-ops-support-bundle.sh` → `nexvue-support-bundle.py` (zips land under
-  `/var/lib/nexvue/support`, pruned after 24h). **Update from repo…** fetches
+  `/var/lib/nexvue/support`, pruned after 24h).   **Update from repo…** fetches
   `origin/<branch>`, hard-resets the clone (`/etc/nexvue/repo.path`), and runs
-  `setup.sh` (`nexvue-ops-update.sh` + sudoers). First enable requires one
-  SSH `sudo ./setup.sh` from the clone so the helper is installed; after that
-  the UI can self-update. Does not restart encoders. Top-nav shows **vX.Y.Z**
-  from the `VERSION` file (`nexvue-version.php`). LAN-trust ops.
+  `setup.sh` (`nexvue-ops-update.sh` + sudoers). Status shows
+  `vX.Y.Z · up to date` or `vX.Y.Z → vA.B.C · update available`; confirming an
+  update lists the commit subjects between the running clone and origin.
+  First enable requires one SSH `sudo ./setup.sh` from the clone so the helper
+  is installed; after that the UI can self-update. Does not restart encoders.
+  Top-nav shows **vX.Y.Z** from the `VERSION` file (`nexvue-version.php`).
+  LAN-trust ops.
 - **Settings:** top nav → Settings — optional station **logo** (Branding
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
   shown in the top nav next to **NexVUE** when present) plus channel list
@@ -1049,19 +1061,18 @@ expired; JWT auth is the lasting gate.
   `make DECKLINK_SDK=/path/to/sdk && sudo make install`, and
   `systemctl enable --now nexvue-status`. Status queries coexist safely with an
   active capture.
-- **LO renditions (adaptive bandwidth):** `LO_ENABLE=true` in a channel env
-  publishes a `<path>lo` stream (default 720p29.97 @ 2.5 Mbps, `LO_TARGET_USAGE=7`,
-  deeper LO queue, `qos=false` on LO videorate/scale so encoder QoS cannot
-  starve the branch) alongside the HI rendition — one live source, two QSV encodes
-  via tee. Any channel may enable LO; watch iGPU load when many LO tees run at once.
-  HI and LO both default to `target-usage=7` for realtime throughput; lower
-  `LO_TARGET_USAGE` trades speed for quality. Settings only offers curated `LO_FPS` / `LO_TARGET_USAGE` /
-  `LO_QUEUE_BUFFERS` values; ops also map legacy aliases
-  (`60`/`30`/`15`, `59.94`/`29.97`) to GStreamer fractions — bare integers
-  used to become `framerate=(int)N` and break the LO pipeline. Viewers on bad links get switched to it by the
-  portal player (Phase 2). Tune `LO_BITRATE_KBPS` / `LO_PRESET` /
-  `LO_TARGET_USAGE` / `LO_QUEUE_BUFFERS` in Settings if LO still looks choppy
-  — under multi-channel load keep usage at 7 or use a lower preset.
+- **LO renditions (adaptive bandwidth):** default `LO_ENABLE=true` /
+  `LO_PRESET=360p` for new channel envs and Factory defaults (override per
+  channel). Publishes `<path>lo` alongside HI — one live source, two QSV
+  encodes via tee (`LO_TARGET_USAGE=7`, deeper LO queue, `qos=false` on LO
+  videorate/scale). Watch iGPU load when many LO tees run. Settings only
+  offers curated `LO_FPS` / `LO_TARGET_USAGE` / `LO_QUEUE_BUFFERS` values;
+  ops also map legacy aliases (`60`/`30`/`15`, `59.94`/`29.97`) to GStreamer
+  fractions — bare integers used to become `framerate=(int)N` and break the
+  LO pipeline. Viewers on bad links switch to LO in the player. Tune
+  `LO_BITRATE_KBPS` / `LO_PRESET` / `LO_TARGET_USAGE` / `LO_QUEUE_BUFFERS`
+  in Settings if LO still looks choppy — under multi-channel load keep usage
+  at 7 or use a lower preset.
 - **SRT inputs:** deferred with the Phase 1.5 rollback — production encode
   is DeckLink-only (`nexvue-encode.sh`). `INPUT_TYPE=srt` remains in Settings
   for a future redesign; do not enable it on live units today.

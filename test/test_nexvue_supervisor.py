@@ -128,7 +128,7 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(cfg.lo_target_usage, 3)
         self.assertEqual(cfg.lo_queue_buffers, 24)
         self.assertEqual(cfg.lo_gop_frames, 30)
-        self.assertEqual(cfg.lo_bitrate_kbps, 2500)  # 720p default
+        self.assertEqual(cfg.lo_bitrate_kbps, 800)  # 360p default (supervisor ladder)
         with self.assertRaises(mod.ConfigError):
             mod.load_config(
                 {"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "LO_TARGET_USAGE": "8"}

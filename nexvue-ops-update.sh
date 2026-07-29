@@ -2,7 +2,8 @@
 # Allowlisted git update + redeploy for NexVUE Services UI.
 #
 # Usage:
-#   nexvue-ops-update.sh status   — JSON: version, git, ahead/behind, dirty
+#   nexvue-ops-update.sh status   — JSON: version, remote_version, changelog,
+#                                   ahead/behind, dirty (dirty for apply warn only)
 #   nexvue-ops-update.sh apply    — fetch, hard-reset to origin/<branch>, setup.sh
 #
 # Repo path: NEXVUE_REPO, else /etc/nexvue/repo.path (written by setup.sh).
@@ -101,6 +102,44 @@ git_full() {
   git rev-parse HEAD 2>/dev/null || echo ""
 }
 
+# Normalize a VERSION blob (file contents or git-show) to semver or empty.
+normalize_version() {
+  local v
+  v="$(printf '%s' "${1:-}" | tr -d '[:space:]')"
+  if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]; then
+    v=""
+  fi
+  printf '%s' "$v"
+}
+
+# JSON string array of commit subjects for HEAD..origin/<branch> (newest first).
+# Caps at CHANGELOG_MAX; appends "…and N more" when truncated.
+CHANGELOG_MAX=20
+build_changelog_json() {
+  local range="$1"
+  local behind_n="${2:-0}"
+  local line count=0 first=true
+  printf '['
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    if [[ ${#line} -gt 120 ]]; then
+      line="${line:0:117}..."
+    fi
+    if $first; then first=false; else printf ','; fi
+    printf '"%s"' "$(json_escape "$line")"
+    count=$((count + 1))
+    if [[ "$count" -ge "$CHANGELOG_MAX" ]]; then
+      break
+    fi
+  done < <(git log --format='%s' "$range" 2>/dev/null || true)
+  if [[ "$behind_n" -gt "$count" && "$count" -gt 0 ]]; then
+    local more=$((behind_n - count))
+    if $first; then first=false; else printf ','; fi
+    printf '"%s"' "$(json_escape "…and ${more} more")"
+  fi
+  printf ']'
+}
+
 write_stamp() {
   mkdir -p "$DATA"
   local ver sha full br ts
@@ -123,7 +162,7 @@ EOF
 }
 
 collect_status() {
-  local ver sha dirty behind ahead remote_sha fetch_note
+  local ver sha dirty behind ahead remote_sha remote_ver fetch_note changelog
   ver="$(read_version)"
   sha="$(git_sha)"
   dirty=false
@@ -133,6 +172,8 @@ collect_status() {
   behind=0
   ahead=0
   remote_sha=""
+  remote_ver=""
+  changelog='[]'
   fetch_note=""
   local fetch_err
   fetch_err="$(mktemp)"
@@ -140,6 +181,10 @@ collect_status() {
     remote_sha="$(git rev-parse --short=12 "origin/${BRANCH}" 2>/dev/null || echo "")"
     behind="$(git rev-list --count "HEAD..origin/${BRANCH}" 2>/dev/null || echo 0)"
     ahead="$(git rev-list --count "origin/${BRANCH}..HEAD" 2>/dev/null || echo 0)"
+    remote_ver="$(normalize_version "$(git show "origin/${BRANCH}:VERSION" 2>/dev/null || true)")"
+    if [[ "${behind:-0}" -gt 0 ]]; then
+      changelog="$(build_changelog_json "HEAD..origin/${BRANCH}" "${behind}")"
+    fi
   else
     fetch_note="$(tr -d '\r' <"$fetch_err" | tail -n 3 | tr '\n' ' ')"
   fi
@@ -149,6 +194,7 @@ collect_status() {
   printf '"ok":true,'
   printf '"action":"status",'
   printf '"version":"%s",' "$(json_escape "$ver")"
+  printf '"remote_version":"%s",' "$(json_escape "$remote_ver")"
   printf '"git_sha":"%s",' "$(json_escape "$sha")"
   printf '"git_branch":"%s",' "$(json_escape "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "$BRANCH")")"
   printf '"update_branch":"%s",' "$(json_escape "$BRANCH")"
@@ -157,6 +203,7 @@ collect_status() {
   printf '"behind":%s,' "${behind:-0}"
   printf '"ahead":%s,' "${ahead:-0}"
   printf '"remote_sha":"%s",' "$(json_escape "$remote_sha")"
+  printf '"changelog":%s,' "$changelog"
   if [[ -n "$fetch_note" ]]; then
     printf '"fetch_warning":"%s",' "$(json_escape "$fetch_note")"
   fi

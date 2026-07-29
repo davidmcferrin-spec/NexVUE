@@ -58,7 +58,7 @@ REQUIRED_FILES=(
   metrics.html index.html multiview.html
   nexvue-ops.php services.html channels.html
   nexvue-auth-lib.php nexvue-auth.php nexvue-jwks.php nexvue-auth-bootstrap.php
-  nexvue-auth-gate.js
+  nexvue-auth-gate.js nexvue-share-ui.js
   nexvue-mediamtx-jwt-patch.py nexvue-jwks-loopback.conf
   login.html forgot.html reset.html users.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
@@ -412,6 +412,7 @@ if [ -d "${WEBROOT}" ]; then
                  "${REPO_DIR}/nexvue-auth.php" \
                  "${REPO_DIR}/nexvue-jwks.php" \
                  "${REPO_DIR}/nexvue-auth-gate.js" \
+                 "${REPO_DIR}/nexvue-share-ui.js" \
                  "${REPO_DIR}/login.html" \
                  "${REPO_DIR}/forgot.html" \
                  "${REPO_DIR}/reset.html" \
@@ -591,7 +592,7 @@ else
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 if [ -d "${WEBROOT}" ]; then
-  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php nexvue-auth.php nexvue-auth-lib.php nexvue-jwks.php nexvue-auth-gate.js login.html forgot.html reset.html users.html; do
+  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-share-ui.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php nexvue-auth.php nexvue-auth-lib.php nexvue-jwks.php nexvue-auth-gate.js login.html forgot.html reset.html users.html; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
   if [ -d /var/lib/nexvue/branding ]; then
