@@ -102,6 +102,18 @@ class TestLoadConfig(unittest.TestCase):
         with self.assertRaises(mod.ConfigError):
             mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "DEINT_FIELDS": "bogus"})
 
+    def test_deint_method_default_and_validation(self) -> None:
+        cfg = mod.load_config({"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0"})
+        self.assertEqual(cfg.deint_method, "yadif")
+        cfg2 = mod.load_config({
+            "DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "DEINT_METHOD": "greedyh",
+        })
+        self.assertEqual(cfg2.deint_method, "greedyh")
+        with self.assertRaises(mod.ConfigError):
+            mod.load_config({
+                "DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "DEINT_METHOD": "weave",
+            })
+
     def test_lo_preset_ladder_resolves_raster_and_bitrate(self) -> None:
         cfg = mod.load_config(
             {"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "LO_ENABLE": "true", "LO_PRESET": "360p"}

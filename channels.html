@@ -565,6 +565,7 @@
     BITRATE_KBPS: "5000",
     GOP_FRAMES: "60",
     DEINT_FIELDS: "all",
+    DEINT_METHOD: "yadif",
     VIDEO_ENCODER: "vah264enc",
     DECKLINK_BUFFER_FRAMES: "2",
     ENABLE_AUDIO: "true",
@@ -608,6 +609,20 @@
         top: "Top field → 1080p29.97",
       },
       tip: "From a 1080i59.94 source: all = full-motion 59.94p (program / director). top = 29.97p at about half encode cost (multiview / prompter). Default: all fields.",
+    },
+    DEINT_METHOD: {
+      label: "Deinterlace method",
+      type: "select",
+      options: ["yadif", "greedyh", "tomsmocomp", "greedyl", "vfir", "linear"],
+      optionLabels: {
+        yadif: "YADIF (best quality)",
+        greedyh: "Greedy H (prior default)",
+        tomsmocomp: "Tom's motion search (heavier)",
+        greedyl: "Greedy L (lighter)",
+        vfir: "Vertical blur (soft)",
+        linear: "Linear interpolate (soft)",
+      },
+      tip: "Software deinterlace algorithm. YADIF is the usual pick for clean 1080i→p. Soft methods (vfir/linear) hide combing but blur vertical detail. tomsmocomp is heavier CPU. Default: yadif.",
     },
     VIDEO_ENCODER: {
       label: "Video encoder",
@@ -732,7 +747,7 @@
       title: "Video",
       blurb: "HI encode from DeckLink SDI. Source connector is the channel slot device number.",
       keys: [
-        "BITRATE_KBPS", "GOP_FRAMES", "DEINT_FIELDS", "VIDEO_ENCODER",
+        "BITRATE_KBPS", "GOP_FRAMES", "DEINT_FIELDS", "DEINT_METHOD", "VIDEO_ENCODER",
         "DECKLINK_BUFFER_FRAMES",
       ],
     },
@@ -1508,7 +1523,7 @@
     // Write concrete built-in defaults (not blank/unset). Identity keys untouched.
     if (!confirm(
       `Reset channel ${selectedId} to factory defaults?\n\n` +
-      "Display name cleared; HI video 5000 kbps / 59.94p deinterlace; " +
+      "Display name cleared; HI video 5000 kbps / 59.94p YADIF deinterlace; " +
       "audio On (8ch Opus @ 384 kbps, all embeds, 5.1+SAP player role); " +
       "LO Off; LO size/bitrate auto; extra encoder args none.\n" +
       "Device number and path are kept. Takes effect on encoder restart."

@@ -148,6 +148,7 @@ class SupervisorConfig:
     srt_uri: str = ""
     srt_latency_ms: int = 120
     deint_fields: str = "all"
+    deint_method: str = "yadif"
     bitrate_kbps: int = 5000
     gop_frames: int = 60
     enable_audio: bool = True
@@ -308,6 +309,15 @@ def load_config(
         raise ConfigError(f"DEINT_FIELDS must be 'all' or 'top', got {deint_fields!r}")
     output_fps = "60000/1001" if deint_fields == "all" else "30000/1001"
 
+    deint_method = opt("DEINT_METHOD", "yadif").lower()
+    if deint_method not in (
+        "yadif", "greedyh", "tomsmocomp", "greedyl", "vfir", "linear",
+    ):
+        raise ConfigError(
+            "DEINT_METHOD must be yadif|greedyh|tomsmocomp|greedyl|vfir|linear, "
+            f"got {deint_method!r}"
+        )
+
     bitrate_kbps = opt_int("BITRATE_KBPS", 5000)
     if bitrate_kbps <= 0:
         raise ConfigError(f"BITRATE_KBPS must be positive, got {bitrate_kbps}")
@@ -442,6 +452,7 @@ def load_config(
         srt_uri=srt_uri,
         srt_latency_ms=srt_latency_ms,
         deint_fields=deint_fields,
+        deint_method=deint_method,
         bitrate_kbps=bitrate_kbps,
         gop_frames=gop_frames,
         enable_audio=enable_audio,
@@ -1061,7 +1072,7 @@ class Supervisor:
         if cfg.watchdog_ms > 0:
             body.append(f"watchdog timeout={cfg.watchdog_ms}")
         body += [
-            f"deinterlace fields={cfg.deint_fields} method=greedyh",
+            f"deinterlace fields={cfg.deint_fields} method={cfg.deint_method}",
             "videoscale",
             "videoconvert",
             caps,
@@ -1151,12 +1162,13 @@ class Supervisor:
             else "false"
         )
         self._log.info(
-            "starting: id=%d type=%s device=%s path=%s deint=%s hi=%dkbps lo=%s audio=%s captions=%s enc=%s",
+            "starting: id=%d type=%s device=%s path=%s deint=%s/%s hi=%dkbps lo=%s audio=%s captions=%s enc=%s",
             self._config.channel_id,
             self._config.input_type,
             self._config.device_number if self._config.input_type == "decklink" else "-",
             self._config.channel_path,
             self._config.deint_fields,
+            self._config.deint_method,
             self._config.bitrate_kbps,
             lo_note,
             self._config.enable_audio,
@@ -1364,7 +1376,7 @@ class Supervisor:
             try:
                 chain = Gst.parse_bin_from_description(
                     "queue name=srtvq0 max-size-buffers=4 leaky=downstream "
-                    f"! deinterlace fields={cfg.deint_fields} method=greedyh "
+                    f"! deinterlace fields={cfg.deint_fields} method={cfg.deint_method} "
                     f"! videoscale ! videoconvert ! {size} "
                     "! queue name=srtvqout max-size-buffers=4 leaky=downstream",
                     False,

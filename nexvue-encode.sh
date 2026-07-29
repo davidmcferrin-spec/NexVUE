@@ -57,6 +57,10 @@ CHANNEL_PATH="$(strip_inline "${CHANNEL_PATH}")"
 # Default 8 keeps existing Quad 2 configs unchanged.
 MAX_DEVICES="$(strip_inline "${MAX_DEVICES:-8}")"
 DEINT_FIELDS="$(strip_inline "${DEINT_FIELDS:-all}")"
+# GStreamer deinterlace method. yadif = best quality (new default); greedyh
+# was the prior hard-coded choice. Soft options (vfir/linear) hide combing
+# at the cost of vertical detail.
+DEINT_METHOD="$(strip_inline "${DEINT_METHOD:-yadif}")"
 BITRATE_KBPS="$(strip_inline "${BITRATE_KBPS:-5000}")"
 GOP_FRAMES="$(strip_inline "${GOP_FRAMES:-60}")"
 ENABLE_AUDIO="$(strip_inline "${ENABLE_AUDIO:-true}")"
@@ -152,6 +156,13 @@ if ! [[ "${DEVICE_NUMBER}" =~ ^[0-9]+$ ]] || [ "${DEVICE_NUMBER}" -ge "${MAX_DEV
 fi
 case "${DEINT_FIELDS}" in all|top) ;; *)
     log "ERROR: DEINT_FIELDS must be 'all' or 'top', got '${DEINT_FIELDS}'"; exit 64 ;;
+esac
+case "${DEINT_METHOD}" in
+  yadif|greedyh|tomsmocomp|greedyl|vfir|linear) ;;
+  *)
+    log "ERROR: DEINT_METHOD must be yadif|greedyh|tomsmocomp|greedyl|vfir|linear, got '${DEINT_METHOD}'"
+    exit 64
+    ;;
 esac
 case "${ENABLE_AUDIO}" in true|false) ;; *)
     log "ERROR: ENABLE_AUDIO must be 'true' or 'false'"; exit 64 ;;
@@ -296,7 +307,7 @@ fi
 if [ "${WATCHDOG_MS}" -gt 0 ] 2>/dev/null; then
   PIPELINE+=" ! watchdog timeout=${WATCHDOG_MS}"
 fi
-PIPELINE+=" ! deinterlace fields=${DEINT_FIELDS} method=greedyh"
+PIPELINE+=" ! deinterlace fields=${DEINT_FIELDS} method=${DEINT_METHOD}"
 PIPELINE+=" ! videorate ! videoscale ! videoconvert"
 PIPELINE+=" ! video/x-raw,format=NV12,width=${OUTPUT_WIDTH},height=${OUTPUT_HEIGHT},framerate=${OUTPUT_FPS},pixel-aspect-ratio=1/1"
 
@@ -375,7 +386,7 @@ if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
   PIPELINE+=" ! filesink location=${CAPTIONS_FIFO} buffer-mode=unbuffered sync=false append=false"
 fi
 
-log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) audio=${ENABLE_AUDIO} layout=${AUDIO_LAYOUT}(8ch@${AUDIO_BITRATE_BPS}bps embeds=${AUDIO_EMBEDS:-1-8}) captions=${CAPTIONS_ACTIVE} enc=${VIDEO_ENCODER}"
+log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS}/${DEINT_METHOD} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) audio=${ENABLE_AUDIO} layout=${AUDIO_LAYOUT}(8ch@${AUDIO_BITRATE_BPS}bps embeds=${AUDIO_EMBEDS:-1-8}) captions=${CAPTIONS_ACTIVE} enc=${VIDEO_ENCODER}"
 log "publishing HI to ${RTSP_URL}$([ "${LO_ENABLE}" = "true" ] && echo ", LO to ${LO_RTSP_URL}")"
 
 # Intentional word-splitting: PIPELINE is a gst-launch description whose

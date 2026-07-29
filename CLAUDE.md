@@ -237,7 +237,8 @@ specifically because this box can't get additional ports opened.
  allowlisted sudo wrappers. Logo upload/delete is www-data direct write
  (no sudo). Settings channel editor (and bulk edit) shows only live encode/player
  knobs with human labels; audio-on / LO-on reveal dependent fields;
- Advanced is collapsed. Field labels show a ~2s hover/focus tip
+ Advanced is collapsed. Per-channel `DEINT_METHOD` (default yadif) sits next
+ to `DEINT_FIELDS` for 1080i→p quality. Field labels show a ~2s hover/focus tip
  (`#field-tip`) with purpose, recommended range, and blank semantics —
   same delay pattern as Player `#stat-tip`. Requires admin/operator session
   (not share links). Services is admin-only.

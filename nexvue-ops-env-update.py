@@ -31,6 +31,7 @@ EDITABLE_KEYS = frozenset({
     "SRT_URI",
     "SRT_LATENCY_MS",
     "DEINT_FIELDS",
+    "DEINT_METHOD",
     "BITRATE_KBPS",
     "GOP_FRAMES",
     "ENABLE_AUDIO",
@@ -78,6 +79,10 @@ AUDIO_LAYOUT_ALLOWED = frozenset({"stereo", "51", "stereo_sap", "51_sap"})
 # 1-based SDI embeds enabled for browser VU / listen (metadata; encode is always 8ch).
 AUDIO_EMBEDS_DEFAULT = "1,2,3,4,5,6,7,8"
 DEINT_ALLOWED = frozenset({"all", "top"})
+# Quality-oriented GStreamer deinterlace methods only (no weave / bob).
+DEINT_METHOD_ALLOWED = frozenset({
+    "yadif", "greedyh", "tomsmocomp", "greedyl", "vfir", "linear",
+})
 VIDEO_ENCODER_ALLOWED = frozenset({"vah264enc", "x264enc"})
 BOOL_ALLOWED = frozenset({"true", "false"})
 
@@ -194,6 +199,15 @@ def sanitize_value(key: str, value: str) -> str:
         if value not in DEINT_ALLOWED:
             raise ValueError("DEINT_FIELDS must be all or top")
         return value
+    if key == "DEINT_METHOD":
+        if value == "":
+            return value
+        low = value.lower()
+        if low not in DEINT_METHOD_ALLOWED:
+            raise ValueError(
+                "DEINT_METHOD must be yadif, greedyh, tomsmocomp, greedyl, vfir, or linear"
+            )
+        return low
     if key == "BITRATE_KBPS":
         return _require_int(key, value, lo=100, hi=50000)
     if key == "GOP_FRAMES":

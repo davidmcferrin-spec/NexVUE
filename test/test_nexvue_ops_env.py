@@ -112,6 +112,15 @@ class TestApplyPatch(unittest.TestCase):
         self.assertEqual(mod.sanitize_value("LO_BITRATE_KBPS", "800"), "800")
         self.assertEqual(mod.sanitize_value("EXTRA_ENC_ARGS", "cpb-size=2000"), "cpb-size=2000")
 
+    def test_deint_method(self):
+        self.assertEqual(mod.sanitize_value("DEINT_METHOD", ""), "")
+        self.assertEqual(mod.sanitize_value("DEINT_METHOD", "YADIF"), "yadif")
+        self.assertEqual(mod.sanitize_value("DEINT_METHOD", "greedyh"), "greedyh")
+        with self.assertRaises(ValueError):
+            mod.sanitize_value("DEINT_METHOD", "weave")
+        out = mod.apply_patch(SAMPLE, {"DEINT_METHOD": "tomsmocomp"})
+        self.assertIn("DEINT_METHOD=tomsmocomp", out)
+
     def test_rejects_shell_metachar(self):
         with self.assertRaises(ValueError):
             mod.apply_patch(SAMPLE, {"EXTRA_ENC_ARGS": "x;rm"})

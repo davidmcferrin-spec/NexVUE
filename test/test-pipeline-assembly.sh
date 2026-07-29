@@ -58,10 +58,18 @@ grep -q "decklinkaudiosrc" <<<"$out" && fail "T3 audiosrc should be absent"
 # T4: top-field mode sets 29.97p normalization
 out=$(DEVICE_NUMBER=2 CHANNEL_PATH=ch2 DEINT_FIELDS=top run_encode)
 grep -q "framerate=30000/1001" <<<"$out" || fail "T4 29.97p caps"
+grep -q "deinterlace fields=top method=yadif" <<<"$out" || fail "T4 default method=yadif"
+
+# T4b: per-channel DEINT_METHOD
+out=$(DEVICE_NUMBER=2 CHANNEL_PATH=ch2 DEINT_METHOD=greedyh run_encode)
+grep -q "deinterlace fields=all method=greedyh" <<<"$out" || fail "T4b method=greedyh"
+out=$(DEVICE_NUMBER=2 CHANNEL_PATH=ch2 DEINT_METHOD=tomsmocomp run_encode)
+grep -q "method=tomsmocomp" <<<"$out" || fail "T4b method=tomsmocomp"
 
 # T5: invalid inputs rejected with usage exit code
 DEVICE_NUMBER=9 CHANNEL_PATH=ch9 expect_usage_64 "T5 accepted device 9"
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 DEINT_FIELDS=bogus expect_usage_64 "T5 accepted bogus deint"
+DEVICE_NUMBER=0 CHANNEL_PATH=ch0 DEINT_METHOD=weave expect_usage_64 "T5 accepted weave method"
 
 # T6: x264 fallback path
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 VIDEO_ENCODER=x264enc run_encode)

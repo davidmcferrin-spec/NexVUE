@@ -52,6 +52,9 @@ still use `MAX_DEVICES=4` and enable only `@0..3`.
 Run motion-critical channels (program, director) at 59.94p (`DEINT_FIELDS=all`)
 and monitoring channels (multiview, prompter) at 29.97p (`DEINT_FIELDS=top`) to
 cut encode load and stay comfortably inside the media-engine budget.
+Deinterlace quality is per-channel via `DEINT_METHOD` (default `yadif`; prior
+hard-coded choice was `greedyh`). Soft options `vfir` / `linear` hide combing
+at the cost of vertical detail.
 
 ## Install
 
@@ -1298,6 +1301,7 @@ and implemented — see the decisions list above the collapsed spec.
   low-bitrate rendition per channel (`ch0lo`) and add a quality toggle in the
   portal player.
 - WebRTC delivers progressive only — 1080i59.94 sources are deinterlaced at
-  ingest (that's the `DEINT_FIELDS` setting; there is no interlaced passthrough).
+  ingest (`DEINT_FIELDS` for 59.94p vs 29.97p, `DEINT_METHOD` for algorithm;
+  there is no interlaced passthrough).
 - JWT-in-query-param (Phase 2) will appear in edge access logs; keep DMZ log
   retention short and TTLs at 60–120 s.
