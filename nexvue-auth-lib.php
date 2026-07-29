@@ -1105,8 +1105,11 @@ function auth_current_user(): ?array {
     $role = $_SESSION['role'] ?? null;
     // Hot path (status/captions/WHEP): trust session snapshot briefly — avoids
     // SQLite on every 2s poll. Revalidate from DB when the cache ages out.
+    // user_channels must be present (null = all-channels ACL); older sessions
+    // without the key fall through to a DB reload.
     if (is_string($role) && $role !== ''
-        && $cacheAt >= (time() - NEXVUE_AUTH_SESSION_CACHE_S)) {
+        && $cacheAt >= (time() - NEXVUE_AUTH_SESSION_CACHE_S)
+        && array_key_exists('user_channels', $_SESSION)) {
         $memo = [
             'id' => $uid,
             'username' => (string)($_SESSION['username'] ?? ''),
@@ -1115,6 +1118,8 @@ function auth_current_user(): ?array {
             'email' => null,
             'must_change_password' => !empty($_SESSION['must_change_password']) ? 1 : 0,
             'disabled_at' => null,
+            // Raw DB value: null (all) or JSON string of base paths.
+            'channels' => $_SESSION['user_channels'],
             'created_at' => '',
             'updated_at' => '',
             'synced_at' => null,
@@ -1129,6 +1134,7 @@ function auth_current_user(): ?array {
             $_SESSION['role'],
             $_SESSION['username'],
             $_SESSION['must_change_password'],
+            $_SESSION['user_channels'],
             $_SESSION['user_cache_at']
         );
         $memoSet = true;
@@ -1138,6 +1144,7 @@ function auth_current_user(): ?array {
     $_SESSION['role'] = $row['role'];
     $_SESSION['username'] = $row['username'];
     $_SESSION['must_change_password'] = ((int)$row['must_change_password']) === 1;
+    $_SESSION['user_channels'] = array_key_exists('channels', $row) ? $row['channels'] : null;
     $_SESSION['user_cache_at'] = time();
     $memo = $row;
     $memoSet = true;
@@ -1228,6 +1235,7 @@ function auth_login_user(array $row): void {
     $_SESSION['role'] = $row['role'];
     $_SESSION['username'] = $row['username'];
     $_SESSION['must_change_password'] = ((int)$row['must_change_password']) === 1;
+    $_SESSION['user_channels'] = array_key_exists('channels', $row) ? $row['channels'] : null;
     $_SESSION['user_cache_at'] = time();
 }
 
@@ -1239,6 +1247,7 @@ function auth_login_share(array $row): void {
         $_SESSION['role'],
         $_SESSION['username'],
         $_SESSION['must_change_password'],
+        $_SESSION['user_channels'],
         $_SESSION['user_cache_at']
     );
     $_SESSION['share_id'] = $row['id'];

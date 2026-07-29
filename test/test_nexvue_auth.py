@@ -285,5 +285,45 @@ echo json_encode([
         self.assertTrue(data["admin_any"])
 
 
+    def test_session_cache_snapshot_keeps_channel_acl(self) -> None:
+        """Hot-path session row must carry channels or ACL falls back to all."""
+        data = self._php(
+            """
+$u = auth_user_create([
+  'username' => 'acluser',
+  'password' => 'password1',
+  'role' => 'viewer',
+  'channels' => ['ch1', 'ch2'],
+]);
+// Simulate pre-fix hot-path snapshot (no channels key).
+$legacy = [
+  'id' => $u['id'],
+  'username' => $u['username'],
+  'role' => $u['role'],
+  'password_hash' => '',
+  'email' => null,
+  'must_change_password' => 0,
+  'disabled_at' => null,
+  'created_at' => '',
+  'updated_at' => '',
+  'synced_at' => null,
+];
+$legacyBases = auth_user_channel_bases($legacy);
+// Fixed snapshot includes raw DB channels.
+$fixed = $legacy;
+$fixed['channels'] = $u['channels'];
+$fixedBases = auth_user_channel_bases($fixed);
+echo json_encode([
+  'legacy_is_all' => count($legacyBases) === 8,
+  'fixed' => $fixedBases,
+  'raw' => $u['channels'],
+]);
+"""
+        )
+        self.assertTrue(data["legacy_is_all"])
+        self.assertEqual(data["fixed"], ["ch1", "ch2"])
+        self.assertIn("ch1", data["raw"])
+
+
 if __name__ == "__main__":
     unittest.main()
