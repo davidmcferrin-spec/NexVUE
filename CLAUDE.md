@@ -9,8 +9,9 @@ README.md current as the project progresses.
 Per-station edge nodes capture 3G-SDI (DeckLink Quad 2 = 8ch, Duo 2 = 4ch;
 card-agnostic via MAX_DEVICES) and/or ingest SRT from Haivision (or other)
 encoders (`INPUT_TYPE=srt`, always decode+re-encode), encode with Intel
-Quick Sync, and serve sub-250ms WebRTC (WHEP) to browsers. A future central
-portal (Phase 2) provides the channel catalog and auth; **video never
+Quick Sync, and serve sub-250ms WebRTC (WHEP) to browsers. Edge local auth
+(bcrypt users, share links, MediaMTX JWT) is on-box today. A future central
+portal provides the channel catalog and fleet sync; **video never
 transits the portal** — viewers connect directly to edge nodes. Sibling
 product to NexAlert.
 
@@ -42,14 +43,13 @@ specifically because this box can't get additional ports opened.
   format changes never renegotiate the encoder or drop viewer sessions.
 - Adaptive bandwidth = per-channel LO rendition (tee in the same pipeline —
   DeckLink sub-devices are exclusive-open, never a second process) plus
-  player-side loss-driven switching. Station-wide floating pool
-  `MAX_LO_RENDITIONS` (default 6): Settings rejects a 7th `LO_ENABLE=true`;
-  supervisor clamps deterministically (ascending channel id among
-  requesters). True simulcast/SFU (Ant Media, Janus) is the deliberate
-  back-pocket option, not the plan.
-- Channel slots `MAX_CHANNELS` (default 10, ids 0–9) are independent of
-  DeckLink `MAX_DEVICES` — SRT-only channels can use `@8`/`@9` without a
-  fake connector index.
+  player-side loss-driven switching. Any channel may set `LO_ENABLE=true`
+  (no station-wide pool cap). True simulcast/SFU (Ant Media, Janus) is the
+  deliberate back-pocket option, not the plan.
+- Channel slots `MAX_CHANNELS` (default 8, ids 0–7) match Quad 2 DeckLink
+  `MAX_DEVICES`. Duo 2 uses `MAX_DEVICES=4` and parks unused `@N`. SRT can
+  still be hand-configured on any slot via `INPUT_TYPE=srt` in the channel
+  `.env` (Settings UI is DeckLink-oriented today).
 - Latency target ~200ms glass-to-glass on LAN; ~120ms is the physics floor
   for 1080i sources. Receiver hints (jitterBufferTarget/playoutDelayHint=0)
   are mandatory in any player.
@@ -123,8 +123,7 @@ specifically because this box can't get additional ports opened.
   Remaining before Phase 1 soak is formally "done" (hardware/operator on
   `dcwasof2nexvue01`): re-deploy (`setup.sh` + `nexvue-phase1-deploy-verify.sh`
   for Temperature schema/API/chart), then a clean 72h closeout window.
-  Station-wide `MAX_DEVICES` / `MAX_CHANNELS` /
-  `MAX_LO_RENDITIONS` live in `/etc/nexvue/nexvue.env`.
+  Station-wide `MAX_DEVICES` / `MAX_CHANNELS` live in `/etc/nexvue/nexvue.env`.
   Glass-to-glass latency photos remain deferred until on-site/bench access.
 - **Phase 1.5: rolled back** — `nexvue-encode@.service` ExecStart is again
   `nexvue-encode.sh`. The script itself was restored to the Phase-1-stable
@@ -133,11 +132,12 @@ specifically because this box can't get additional ports opened.
   the tree unused. Park empty ports via Services Enable/Disable.
   Captions/LO/metrics/ops UI remain. Assembly tests:
   `test/test-pipeline-assembly.sh`.
-- **Phase 2: PHP portal** — channel catalog, local bcrypt + JWT issuance,
-  MediaMTX JWKS auth. Open decision: publisher auth pattern (long-lived
-  publish JWT vs authMethod:http with loopback exemption) — see mediamtx.yml.
-  Real (non-self-signed) TLS cert for 8889/9997/9998 belongs here too, to
-  drop the per-browser self-signed click-through noted in the TLS section.
+- **Phase 2: edge local auth landed** — bcrypt users (admin/operator/viewer),
+  named revocable share links with mandatory expiry, MediaMTX JWT + local
+  JWKS, long-lived publish JWT in `nexvue.env`, sync-shaped export/import
+  on `nexvue-auth.php` for a future portal. Central catalog portal + Entra
+  OIDC remain later. Real (non-self-signed) TLS for 8889/9997/9998 still
+  recommended before wider users.
 - **Phase 3: DMZ** — webrtcAdditionalHosts, bind MediaMTX API and status
   daemon back to loopback (portal relays stats), Entra OIDC, CORS. (TLS
   itself landed early, in Phase 1, ahead of schedule — see README TLS section.)
@@ -194,7 +194,10 @@ specifically because this box can't get additional ports opened.
   (`/var/lib/nexvue/branding`, served by `nexvue-logo.php`). Player and
   Multiview session metric tiles live in a collapsed bottom drawer
   (Multiview shows the audio-focused pane).
-  Top nav: Player / Multiview / Metrics / Services / Settings.
+  Top nav: Player / Multiview / Metrics / Services / Settings / Users.
+  Login at `login.html` (session cookie); share links use `?t=` on Player.
+  Roles: admin (Users+Services+Settings+Metrics), operator (Settings+Metrics),
+  viewer (watch). MediaMTX JWT via local JWKS; encoders use `NEXVUE_PUBLISH_JWT`.
   Player/Multiview **CC** uses `nexvue-captions.js` + SSE (not WHEP text
   tracks). Player/Multiview **VU / audio program** use `nexvue-vu.js`
   (Web Audio on the WHEP MediaStream). Top-bar **VU** toggle (like CC)
@@ -217,11 +220,11 @@ specifically because this box can't get additional ports opened.
  knobs with human labels; audio-on / LO-on reveal dependent fields;
  Advanced is collapsed. Field labels show a ~2s hover/focus tip
  (`#field-tip`) with purpose, recommended range, and blank semantics —
- same delay pattern as Player `#stat-tip`. Phase 1 LAN-trust — not for
- DMZ without auth.
+  same delay pattern as Player `#stat-tip`. Requires admin/operator session
+  (not share links). Services is admin-only.
  Services shows systemd enable state (`nexvue-ops-status.sh` prints
  `<is-active> <is-enabled>`) plus Enable/Disable (`set_enabled`, --now) and
- Start/Stop (`set_running`, runtime-only) toggles for `nexvue-encode@0-9`
+ Start/Stop (`set_running`, runtime-only) toggles for `nexvue-encode@0-7`
  ONLY (`nexvue-ops-enable.sh` verbs enable|disable|start|stop) — never the
  shared units. **Clear journal…** (`journal_clear`) records a per-unit
  watermark via `nexvue-ops-journal.sh clear` so the Services journal view
@@ -235,11 +238,11 @@ specifically because this box can't get additional ports opened.
  (default `main`) using `/etc/nexvue/repo.path`, then `setup.sh`. Semver lives
  in repo `VERSION`; top-nav badge via `nexvue-version.php` +
  `/var/lib/nexvue/version.json`.
- Settings Channel list shows LO yes/no (pool-denied) and
+ Settings Channel list shows LO yes/no and
  **Restart all encoders** (`restart_encoders`: systemd-enabled encode slots
  only); Services has the same bulk restart. Channel editor **Factory
  defaults…** writes concrete built-in defaults via `channel_put` (no
- blank/unset in the form; LO off frees pool slot; identity keys untouched). Disable and Stop both run
+ blank/unset in the form; identity keys untouched). Disable and Stop both run
  `reset-failed` so a parked encoder
  doesn't show stale red "failed"; any disabled + not-running unit (even
  with a stale `failed` from an SSH-side disable) renders neutral

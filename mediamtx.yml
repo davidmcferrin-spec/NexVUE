@@ -68,36 +68,30 @@ webrtcIPsFromInterfaces: yes
 webrtcAdditionalHosts: [nexvue-dc.area51consulting.com]
 
 # --- Authentication -----------------------------------------------------------
-# Phase 1: internal auth, open. Publishing is safe because RTSP is bound to
-# loopback; reading is open by design for LAN testing.
-authMethod: internal
-authInternalUsers:
-  - user: any
-    pass:
-    permissions:
-      - action: publish
-      - action: read
-      - action: api
-
-# Phase 2: switch to JWT issued by the portal.
-# NOTE (design decision deferred): authMethod is global — with `jwt`, the
-# local encoders need tokens too. Two clean options when we get there:
-#   a) portal issues a long-lived publish-scoped JWT baked into each edge's
-#      env files, or
-#   b) authMethod: http -> portal endpoint that allows 127.0.0.1 publishers
-#      unconditionally and validates viewer JWTs.
-# authMethod: jwt
-# authJWTJWKS: https://portal.example.com/.well-known/jwks.json
-# authJWTClaimKey: mediamtx_permissions
+# Local JWT auth (edge issues viewer JWTs; long-lived publish JWT in
+# /etc/nexvue/nexvue.env as NEXVUE_PUBLISH_JWT). JWKS is same-box Apache.
+# Prefer HTTP loopback so MediaMTX can fetch without trusting self-signed TLS;
+# if :80 is unavailable, switch to https://127.0.0.1/nexvue-jwks.php and set
+# authJWTJWKSFingerprint to the TLS cert SHA-256 hex (openssl x509 -fingerprint).
+# Future central portal can replace authJWTJWKS with the portal JWKS URL.
+authMethod: jwt
+authJWTJWKS: http://127.0.0.1/nexvue-jwks.php
+authJWTClaimKey: mediamtx_permissions
+# Allow ?jwt= on WHEP/RTSP (publish from gst + short-lived viewer tokens).
+authJWTInHTTPQuery: yes
+# Keep Control API LAN-open for Player path stats + ops kick (Phase 1 pattern).
+# Phase 3 must bind apiAddress to 127.0.0.1 and drop this exclude.
+authJWTExclude:
+  - action: api
 
 # --- Paths --------------------------------------------------------------------
 pathDefaults:
   source: publisher                # only accept pushed streams
 
 paths:
-  # chN maps 1:1 to a DeckLink connector (device-number N); chNlo is the
-  # optional LO rendition. Regex accepts ch0..ch15(lo) to cover any card
-  # (Duo 2 = ch0-3, Quad 2 = ch0-7); unused paths simply never get published.
+  # chN maps 1:1 to a channel slot (device-number N for DeckLink); chNlo is the
+  # optional LO rendition. Regex accepts ch0..ch15(lo) for forward room;
+  # station MAX_CHANNELS defaults to 8 (Quad 2). Unused paths never publish.
   # Friendly names/descriptions live in the portal catalog (Phase 2), not
   # here — keeps edge config static across the fleet.
   ~^ch([0-9]|1[0-5])(lo)?$:

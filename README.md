@@ -43,11 +43,12 @@ SDI 1080i59.94 (4 or 8) --> [DeckLink card]
 - Ubuntu 24.04 LTS Server
 - Optional: HP Care Pack to 3yr for unattended remote sites (base is 1/1/1)
 
-Capacity guidance: 8x 1080p59.94 HI encodes (plus up to
-`MAX_LO_RENDITIONS=6` floating LO tees) is near the practical ceiling for
+Capacity guidance: 8x 1080p59.94 HI encodes (plus optional LO tees on any
+channel) is near the practical ceiling for
 the Arrow Lake media engine. SRT channels add decode load on the same
 Video engine — prefer HI-only for add-on SRT slots. Channel slots default
-to `MAX_CHANNELS=10` (0–9); DeckLink card size remains `MAX_DEVICES` (4 or 8).
+to `MAX_CHANNELS=8` (0–7), matching Quad 2 `MAX_DEVICES`. Duo 2 stations
+still use `MAX_DEVICES=4` and enable only `@0..3`.
 Run motion-critical channels (program, director) at 59.94p (`DEINT_FIELDS=all`)
 and monitoring channels (multiview, prompter) at 29.97p (`DEINT_FIELDS=top`) to
 cut encode load and stay comfortably inside the media-engine budget.
@@ -136,7 +137,7 @@ sudo cp mediamtx.service nexvue-encode@.service \
        nexvue-status.service nexvue-metrics.service /etc/systemd/system/
 
 # Station-wide card size (install only if absent — setup.sh also migrates):
-sudo cp -n nexvue-example.env /etc/nexvue/nexvue.env   # MAX_DEVICES=8; MAX_CHANNELS=10; MAX_LO_RENDITIONS=6
+sudo cp -n nexvue-example.env /etc/nexvue/nexvue.env   # MAX_DEVICES=8; MAX_CHANNELS=8
 
 # One env file per channel you want live (see channels-example.env):
 sudo cp channels-example.env /etc/nexvue/channels/0.env
@@ -179,9 +180,32 @@ sudo install -m 440 nexvue-ops.sudoers /etc/sudoers.d/nexvue-ops
 sudo visudo -cf /etc/sudoers.d/nexvue-ops
 ```
 
-Then open `http://<edge-ip>/index.html` (top nav → Player / Multiview /
-Metrics / Services / Settings). **Services and Settings are LAN-trust ops
-pages** — do not expose them on a DMZ without Phase 2 auth.
+Then open `https://<edge-ip>/login.html` (default bootstrap `admin` /
+`password` — forced change on first login). Top nav → Player / Multiview /
+Metrics / Services / Settings / Users. **Roles gate ops pages** (admin /
+operator / viewer + named share links). Remove any Apache Basic Auth /
+`.htaccess` AuthType — the app login replaces it. Do not DMZ-expose until
+API ports are loopback-bound (Phase 3).
+
+### Local authentication (edge)
+
+- **Store:** `/var/lib/nexvue/auth.db` + `/var/lib/nexvue/auth/` (RSA keypair + JWKS).
+- **Roles:** `admin` (Users, Services, Settings, Metrics, watch), `operator`
+  (Settings, Metrics, watch), `viewer` (Player/Multiview only).
+- **Share links:** Users page — named, one or more channels, absolute expiry
+  **or** duration (always required; no open-ended), revocable. URL form
+  `/index.html?t=<token>` (token shown once at create).
+- **MediaMTX:** `authMethod: jwt`, JWKS at `http://127.0.0.1/nexvue-jwks.php`,
+  short-lived viewer JWTs on WHEP (`?jwt=`), long-lived `NEXVUE_PUBLISH_JWT`
+  for encoders. Control API remains excluded from JWT (LAN paths/list + kick);
+  bind `:9997` to loopback before DMZ.
+- **Sync-ready API** (no portal client yet): `nexvue-auth.php` actions
+  `users_export` / `users_import` / `shares_export` / `shares_import` with
+  optional `since=` cursor; admin session **or** `Authorization: Bearer`
+  matching `NEXVUE_SYNC_KEY` in `/etc/nexvue/nexvue.env`.
+- **Forgot password:** creates a one-time reset; emails via `mail()` when the
+  user has an email; admins can always copy a reset link from Users.
+- **Tests:** `python3 test/test_nexvue_auth.py`
 
 ### 6. Input status helper (signal/reference display in the player)
 
@@ -306,11 +330,11 @@ Then from a LAN machine:
 - **Settings:** top nav → Settings — optional station **logo** (Branding
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
   shown in the top nav next to **NexVUE** when present) plus channel list
-  (LO column: yes/no/denied; **Restart all encoders** for enabled slots);
+  (LO column: yes/no; **Restart all encoders** for enabled slots);
   click a row (or use Bulk edit) to open a modal editor for
   `/etc/nexvue/channels/<N>.env`. Editor shows only live encode/player knobs
   (human labels): display name, HI video, audio on/off + player role + embed
-  VU checkboxes + **Detect audio…**, LO pool request + preset, and a collapsed
+  VU checkboxes + **Detect audio…**, LO on/off + preset, and a collapsed
   Advanced block. Unused supervisor/SRT/legacy keys are hidden (still wiped by
   **Factory defaults…**). Audio-on and LO-on reveal their dependent fields.
   Encode always publishes all 8 embeds when audio is on. Hover a field label
@@ -739,7 +763,7 @@ Open `http://<edge-ip>/metrics.html` (top nav → Metrics).
 |---|---|
 | `totals` | System-wide time series: bandwidth, viewer count, active-stream count — one row per poll cycle. Powers the three top-line charts. |
 | `channels` | **Per-channel breakdown**, aggregated over the range: avg/peak bandwidth, avg/peak viewers, % of the window the channel was `ready`. "How much bandwidth did ch0 use in the last hour" as one row. |
-| `viewers` | Per-viewer session drill-down: IP, channel, user (blank until Phase 2 auth), first/last seen, duration, bytes served, live/ended. Add `&channel=chN` for an exact channel. Optional column filters (`filter_status`, `filter_ip`, `filter_channel`, `filter_duration`, `filter_data`, `filter_client`) — see below. Response includes `session_total` / `session_count` / `filters`. |
+| `viewers` | Per-viewer session drill-down: IP, channel, user (MediaMTX JWT `sub` when present), first/last seen, duration, bytes served, live/ended. Add `&channel=chN` for an exact channel. Optional column filters (`filter_status`, `filter_ip`, `filter_channel`, `filter_duration`, `filter_data`, `filter_client`) — see below. Response includes `session_total` / `session_count` / `filters`. |
 | `inputs` | Per-DeckLink-input lock/format history as a time series. Powers the input-lock chart. |
 | `weekday_hours` | Mon–Sun × hour-of-day analytical heatmap. Each cell is the equal-weight average of observed calendar dates in the range for that weekday/hour (missing telemetry excluded; `date_count` is the denominator, `sample_count` is diagnostic). Also returns peaks. Timezone: `America/New_York` by default (`NEXVUE_METRICS_TZ` override). |
 | `host` | Host CPU %, memory used/total, load1, CPU package °C / iGPU °C (when sysfs exposes them), and (when available) iGPU Video/Render/VideoEnhance busy % + GPU freq — capacity correlation on the Metrics page, **not** a CheckMK substitute. Engine % requires `intel-gpu-tools` / `intel_gpu_top` + CAP_PERFMON (see setup). The dashboard charts CPU, memory, iGPU Video engine, and a **Temperature** panel (CPU/GPU °C plus a dashed 95 °C sustained-operation limit line — `TEMP_LIMIT_CPU_C` / `TEMP_LIMIT_GPU_C` in `metrics.html`). Render % is still collected/served but not charted. |
@@ -883,9 +907,8 @@ header (MediaMTX API session UUID — not the `Location` WHEP secret) and call
 `kick_check` before self-healing reconnect — kicked viewers see a disconnect
 message and stop auto-retry. Matching is by MediaMTX WebRTC session UUID only
 (safe when many viewers share a NAT IP or the same channel). Manual rejoin
-(pick a channel again) still works;
-real rejoin enforcement is Phase 2 auth. Phase 1 LAN-trust (same as
-Services/Settings).
+(pick a channel again) still works unless their session/share is revoked or
+expired; JWT auth is the lasting gate.
 
 ### Notes
 
@@ -963,7 +986,7 @@ Services/Settings).
   DMZ-expose without auth.
   The Services page also shows each unit's systemd enable state
   (`nexvue-ops-status.sh` prints `<is-active> <is-enabled>`) and offers two
-  toggles for **encoder units only** (`nexvue-encode@0-9`, via
+  toggles for **encoder units only** (`nexvue-encode@0-7`, via
   `nexvue-ops-enable.sh`): Enable/Disable (`set_enabled`, boot config +
   immediate `--now` effect — parking an unpatched Quad port from the UI
   instead of SSH) and Start/Stop (`set_running`, runtime only — boot config
@@ -982,12 +1005,16 @@ Services/Settings).
   simultaneous WHEP sessions). Only one pane is unmuted at a time — click a
   pane to select audio. Switching Dual↔Quad tears down hidden panes so unused
   sessions do not linger.
-- **Mirror/flip persist through fullscreen.** Applied as an inline
+- **Mirror/flip/rotate persist through fullscreen.** Applied as an inline
   `transform` on the video (not a CSS class), and the dedicated "⛶
   Fullscreen" button fullscreens the wrapper `<div>`, not the `<video>`
   element itself — fullscreening the video directly (e.g. via its native
   player-bar control) lets the browser override the transform. Use the ⛶
-  button, not the native control, if mirror/flip need to survive fullscreen.
+  button, not the native control, if mirror/flip/rotate need to survive
+  fullscreen. Player **⟲ 90° / 90° ⟳** rotate the view in 90° steps (CW from
+  upright) for portrait sources or a tilted monitor
+  (`localStorage.nexvue-video-rotate`). 90°/270° swap the video layout box
+  so the frame still fits. Multiview has no rotate controls.
 - **Closed captions are a side channel**, not MediaMTX tracks. Encode writes
   `/run/nexvue/captions/<path>.json`; Apache serves SSE via
   `nexvue-captions.php`. HI/LO reconnect keeps the same channel subscription.
@@ -1005,12 +1032,10 @@ Services/Settings).
   `systemctl enable --now nexvue-status`. Status queries coexist safely with an
   active capture.
 - **LO renditions (adaptive bandwidth):** `LO_ENABLE=true` in a channel env
-  requests a `<path>lo` publish (default 720p29.97 @ 2.5 Mbps, `LO_TARGET_USAGE=7`,
+  publishes a `<path>lo` stream (default 720p29.97 @ 2.5 Mbps, `LO_TARGET_USAGE=7`,
   deeper LO queue, `qos=false` on LO videorate/scale so encoder QoS cannot
   starve the branch) alongside the HI rendition — one live source, two QSV encodes
-  via tee. Station-wide `MAX_LO_RENDITIONS` (default 6 in `/etc/nexvue/nexvue.env`)
-  is a floating pool: Settings refuses a 7th enable; `nexvue-ops-env-update.py`
-  enforces the same pool when writing channel envs (ascending channel id).
+  via tee. Any channel may enable LO; watch iGPU load when many LO tees run at once.
   HI and LO both default to `target-usage=7` for realtime throughput; lower
   `LO_TARGET_USAGE` trades speed for quality. Settings only offers curated `LO_FPS` / `LO_TARGET_USAGE` /
   `LO_QUEUE_BUFFERS` values; ops also map legacy aliases
@@ -1233,8 +1258,8 @@ and implemented — see the decisions list above the collapsed spec.
 |---|---|
 | 1 (this) | Single edge, LAN WHEP, no auth. Prove stability + latency. |
 | 1.5 | **Rolled back** — production encode is `nexvue-encode.sh` again. Supervisor/slate deferred for redesign after field instability. See "Phase 1.5 supervisor" below. |
-| 2 | PHP portal: channel catalog, local bcrypt auth, JWT issuance, MediaMTX JWKS integration. Decide publisher-auth pattern (see comment in `mediamtx.yml`). |
-| 3 | DMZ exposure: TLS on 443, `webrtcAdditionalHosts` = public FQDN, single UDP 8189 rule + ICE-TCP fallback, Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
+| 2 | **Edge local auth landed** (bcrypt users + roles, share links, MediaMTX JWT/JWKS, sync-shaped export/import). Central PHP portal (catalog + fleet sync client) still future; Entra OIDC remains Phase 3. |
+| 3 | DMZ exposure: TLS on 443, `webrtcAdditionalHosts` = public FQDN, single UDP 8189 rule + ICE-TCP fallback, Entra ID OIDC at portal, CORS validation portal-origin -> edge; bind MediaMTX API to loopback. |
 | 4 | Fleet rollout: per-station config management, CheckMK checks (encoder-alive, signal-present, session counts), portal ops dashboard fed by outbound edge heartbeats. |
 
 ## Known limitations (accepted for Phase 1)

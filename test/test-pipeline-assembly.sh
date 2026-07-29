@@ -27,6 +27,14 @@ expect_usage_64() {
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 run_encode)
 grep -q "rtsp://127.0.0.1:8554/ch0" <<<"$out" || fail "T1 default RTSP url"
 grep -q "watchdog" <<<"$out" || fail "T1 watchdog present"
+
+# T1b: publish JWT appended to RTSP URLs when NEXVUE_PUBLISH_JWT is set
+out_jwt=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 NEXVUE_PUBLISH_JWT=test.jwt.token run_encode)
+grep -q 'location=rtsp://127.0.0.1:8554/ch0?jwt=test.jwt.token' <<<"$out_jwt" \
+  || fail "T1b HI RTSP must append ?jwt="
+out_jwt_lo=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true NEXVUE_PUBLISH_JWT=test.jwt.token run_encode)
+grep -q 'location=rtsp://127.0.0.1:8554/ch0lo?jwt=test.jwt.token' <<<"$out_jwt_lo" \
+  || fail "T1b LO RTSP must append ?jwt="
 out_nw=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 WATCHDOG_MS=0 run_encode)
 grep -q "watchdog" <<<"$out_nw" && fail "T1 WATCHDOG_MS=0 must omit watchdog"
 grep -q "width=1920,height=1080,framerate=60000/1001" <<<"$out" || fail "T1 normalization caps"

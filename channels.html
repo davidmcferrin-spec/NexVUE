@@ -57,12 +57,14 @@
   .topnav a.active {
     background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600;
   }
-  .topnav .theme-toggle {
+  .topnav .theme-toggle, .topnav .nav-logout {
     margin-left: auto; background: var(--bg); color: var(--text);
     border: 1px solid var(--edge); border-radius: 4px; padding: 6px 10px;
     font: inherit; font-size: 12px; cursor: pointer;
   }
-  .topnav .theme-toggle:hover { border-color: var(--acc); color: var(--acc); }
+  .topnav .nav-logout { margin-left: 0; }
+  .topnav .theme-toggle:hover, .topnav .nav-logout:hover { border-color: var(--acc); color: var(--acc); }
+  .topnav .nav-who { color: var(--dim); font-size: 12px; margin-left: 8px; }
   .warn { color: var(--muted); font-size: 12px; margin: 0 0 16px; }
   .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
   button, select, input {
@@ -305,7 +307,6 @@
   #field-tip.visible { display: block; }
   td .lo-yes { color: var(--ok); }
   td .lo-no { color: var(--dim); }
-  td .lo-denied { color: #c9a227; }
   .audio-probe {
     margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--edge);
   }
@@ -339,13 +340,16 @@
   <img class="nav-logo" src="nexvue-logo.php" alt="" hidden>
   <a href="/index.html">Player</a>
   <a href="/multiview.html">Multiview</a>
-  <a href="/metrics.html">Metrics</a>
-  <a href="/services.html">Services</a>
-  <a href="/channels.html" class="active">Settings</a>
+  <a href="/metrics.html" data-auth-role="admin,operator">Metrics</a>
+  <a href="/services.html" data-auth-role="admin">Services</a>
+  <a href="/channels.html" class="active" data-auth-role="admin,operator">Settings</a>
+  <a href="/users.html" data-auth-role="admin">Users</a>
   <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
+  <span class="nav-who" id="nav-who" hidden></span>
+  <button type="button" class="nav-logout" id="nav-logout" hidden>Logout</button>
 </nav>
 
-<p class="warn">Edits <code>/etc/nexvue/channels/*.env</code>. Path stays <code>chN</code> (device slot is fixed); set a display name for Player / Multiview. Encode is always DeckLink SDI → 8ch Opus when audio is on. Restart is optional after save. Click a row to edit; select rows for bulk edit.</p>
+<p class="warn">Requires admin or operator. Edits <code>/etc/nexvue/channels/*.env</code>. Path stays <code>chN</code> (device slot is fixed); set a display name for Player / Multiview. Encode is always DeckLink SDI → 8ch Opus when audio is on. Restart is optional after save. Click a row to edit; select rows for bulk edit.</p>
 
 <div class="panel">
   <h2>Channel list</h2>
@@ -361,7 +365,7 @@
     <thead>
       <tr>
         <th></th><th>ID</th><th>Path</th><th>Alias</th><th>Bitrate</th>
-        <th>Output</th><th>Audio</th><th title="Low-res rendition (LO pool)">LO</th><th>Status</th>
+        <th>Output</th><th>Audio</th><th title="Low-res rendition">LO</th><th>Status</th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
@@ -458,9 +462,11 @@
 <div id="field-tip" role="tooltip" aria-hidden="true"></div>
 
 <script src="nexvue-qr.js"></script>
+<script src="nexvue-auth-gate.js"></script>
 <script>
 "use strict";
-(() => {
+(async () => {
+  await NexVueAuth.requirePage({ roles: ["admin", "operator"] });
   const tbody = document.getElementById("tbody");
   const stateEl = document.getElementById("state");
   const editDlg = document.getElementById("edit-dlg");
@@ -663,8 +669,8 @@
       label: "Low-res rendition (LO)",
       type: "select",
       options: ["true", "false"],
-      optionLabels: { true: "On (request pool slot)", false: "Off" },
-      tip: "Second lower-bitrate encode as <path>lo for player auto-switch under loss. Station pool MAX_LO_RENDITIONS (default 6): Settings rejects a 7th enable. Default: Off.",
+      optionLabels: { true: "On", false: "Off" },
+      tip: "Second lower-bitrate encode as <path>lo for player auto-switch under loss. Default: Off.",
     },
     LO_PRESET: {
       label: "LO resolution",
@@ -743,7 +749,7 @@
     {
       id: "lo",
       title: "Low-res rendition",
-      blurb: "Optional second encode for ABR under packet loss. Limited by the station LO pool.",
+      blurb: "Optional second encode for ABR under packet loss.",
       keys: ["LO_ENABLE", "LO_PRESET", "LO_FPS", "LO_BITRATE_KBPS"],
     },
     {
@@ -1030,12 +1036,8 @@
         .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
       let loHtml;
       if (c.LO_ENABLE === "true") {
-        if (c.LO_GRANTED === false) {
-          loHtml = `<span class="lo-denied" title="LO_ENABLE=true but MAX_LO_RENDITIONS pool is full">denied</span>`;
-        } else {
-          const preset = esc(c.LO_PRESET || "on");
-          loHtml = `<span class="lo-yes">yes</span> · ${preset}`;
-        }
+        const preset = esc(c.LO_PRESET || "on");
+        loHtml = `<span class="lo-yes">yes</span> · ${preset}`;
       } else {
         loHtml = `<span class="lo-no">no</span>`;
       }
@@ -1080,11 +1082,7 @@
       channels = data.channels || [];
       editableKeys = data.editable_keys || Object.keys(FIELD_META);
       renderTable();
-      const pool = data.lo_pool;
-      const poolTxt = pool
-        ? ` · LO pool ${pool.used}/${pool.max}`
-        : "";
-      stateEl.textContent = `${channels.length} channel(s)${poolTxt}`;
+      stateEl.textContent = `${channels.length} channel(s)`;
     } catch (err) {
       stateEl.textContent = `error: ${err.message}`;
     }

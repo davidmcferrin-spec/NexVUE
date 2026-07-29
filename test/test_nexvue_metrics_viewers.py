@@ -137,6 +137,7 @@ class TestMetricsViewersFilters(unittest.TestCase):
 declare(strict_types=1);
 $_GET = [{get_php}];
 putenv('NEXVUE_METRICS_DB={db_path}');
+putenv('NEXVUE_AUTH_BYPASS=1');
 $codeFile = '{code_path}';
 register_shutdown_function(static function () use ($codeFile): void {{
     $code = http_response_code();

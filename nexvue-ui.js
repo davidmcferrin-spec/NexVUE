@@ -15,6 +15,77 @@
   var STORAGE_KEY = "nexvue-theme";
   var LOGO_SRC = "nexvue-logo.php";
   var VERSION_URL = "nexvue-version.php";
+  var ROTATE_KEY = "nexvue-video-rotate";
+
+  function normalizeRotate(deg) {
+    var n = Number(deg);
+    if (!Number.isFinite(n)) return 0;
+    n = ((Math.round(n / 90) * 90) % 360 + 360) % 360;
+    return n;
+  }
+
+  function getRotatePref() {
+    try {
+      return normalizeRotate(global.localStorage.getItem(ROTATE_KEY));
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function setRotatePref(deg) {
+    deg = normalizeRotate(deg);
+    try {
+      if (deg === 0) global.localStorage.removeItem(ROTATE_KEY);
+      else global.localStorage.setItem(ROTATE_KEY, String(deg));
+    } catch (e) {
+      /* private mode */
+    }
+    return deg;
+  }
+
+  /**
+   * Orient a <video> inside a sized wrap. rotate is CW degrees (0|90|180|270).
+   * mirror/flip are optional scaleX/scaleY (Player confidence monitor).
+   * For 90/270, swaps layout box so the rotated frame still fits the wrap.
+   */
+  function applyVideoOrient(video, wrap, opts) {
+    if (!video) return;
+    opts = opts || {};
+    var rot = normalizeRotate(opts.rotate);
+    var sx = opts.mirror ? -1 : 1;
+    var sy = opts.flip ? -1 : 1;
+    var parts = [];
+    if (rot) parts.push("rotate(" + rot + "deg)");
+    if (sx !== 1 || sy !== 1) parts.push("scale(" + sx + ", " + sy + ")");
+
+    if (rot === 90 || rot === 270) {
+      var ww = wrap && wrap.clientWidth ? wrap.clientWidth : 0;
+      var wh = wrap && wrap.clientHeight ? wrap.clientHeight : 0;
+      if (ww > 0 && wh > 0) {
+        video.style.position = "absolute";
+        video.style.left = "50%";
+        video.style.top = "50%";
+        video.style.width = wh + "px";
+        video.style.height = ww + "px";
+        video.style.maxWidth = "none";
+        video.style.maxHeight = "none";
+        video.style.objectFit = "contain";
+        parts.unshift("translate(-50%, -50%)");
+        video.style.transform = parts.join(" ");
+        return;
+      }
+    }
+
+    video.style.position = "";
+    video.style.left = "";
+    video.style.top = "";
+    video.style.width = "";
+    video.style.height = "";
+    video.style.maxWidth = "";
+    video.style.maxHeight = "";
+    video.style.objectFit = "";
+    video.style.transform = parts.length ? parts.join(" ") : "";
+  }
 
   function ensureVersionCss() {
     if (global.document.getElementById("nexvue-ui-version-css")) return;
@@ -218,7 +289,11 @@
     toggleTheme: toggleTheme,
     refreshNavLogo: refreshNavLogo,
     refreshVersion: refreshVersion,
+    getRotatePref: getRotatePref,
+    setRotatePref: setRotatePref,
+    applyVideoOrient: applyVideoOrient,
     STORAGE_KEY: STORAGE_KEY,
+    ROTATE_KEY: ROTATE_KEY,
     LOGO_SRC: LOGO_SRC,
   };
 })(typeof window !== "undefined" ? window : globalThis);

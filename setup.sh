@@ -55,6 +55,9 @@ REQUIRED_FILES=(
   nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js
   metrics.html index.html multiview.html
   nexvue-ops.php services.html channels.html
+  nexvue-auth-lib.php nexvue-auth.php nexvue-jwks.php nexvue-auth-bootstrap.php
+  nexvue-auth-gate.js
+  login.html forgot.html reset.html users.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
   nexvue-phase1-closeout.sh
   nexvue-phase1-deploy-verify.sh
@@ -280,6 +283,31 @@ if id www-data >/dev/null 2>&1; then
   chmod 750 /var/lib/nexvue/branding 2>/dev/null || true
 fi
 
+# Local auth store (www-data RW) + keypair / JWKS / bootstrap admin + publish JWT.
+install -d -m 755 /usr/local/share/nexvue
+install -d -m 750 -o www-data -g www-data /var/lib/nexvue/auth 2>/dev/null \
+  || install -d -m 750 /var/lib/nexvue/auth
+if id www-data >/dev/null 2>&1; then
+  chown www-data:www-data /var/lib/nexvue/auth 2>/dev/null || true
+  chmod 750 /var/lib/nexvue/auth 2>/dev/null || true
+fi
+install -m 644 "${REPO_DIR}/nexvue-auth-lib.php" /usr/local/share/nexvue/nexvue-auth-lib.php
+install -m 755 "${REPO_DIR}/nexvue-auth-bootstrap.php" /usr/local/bin/nexvue-auth-bootstrap.php
+if command -v php >/dev/null 2>&1; then
+  if php "${REPO_DIR}/nexvue-auth-bootstrap.php"; then
+    ok "auth bootstrap (auth.db + JWKS + seed admin + NEXVUE_PUBLISH_JWT)"
+    if id www-data >/dev/null 2>&1; then
+      chown www-data:www-data /var/lib/nexvue/auth.db /var/lib/nexvue/auth.db-* 2>/dev/null || true
+      chown -R www-data:www-data /var/lib/nexvue/auth 2>/dev/null || true
+      chmod 640 /var/lib/nexvue/auth/private.pem 2>/dev/null || true
+    fi
+  else
+    warn "auth bootstrap failed — run: sudo php ${REPO_DIR}/nexvue-auth-bootstrap.php"
+  fi
+else
+  warn "php missing — cannot bootstrap auth.db / JWKS"
+fi
+
 # Per-unit Services journal clear watermarks (root writes via sudo journal wrapper).
 install -d -m 755 /var/lib/nexvue/journal-cleared
 
@@ -304,10 +332,18 @@ if [ -d "${WEBROOT}" ]; then
                  "${REPO_DIR}/services.html" \
                  "${REPO_DIR}/channels.html" \
                  "${REPO_DIR}/nexvue-ops.php" \
+                 "${REPO_DIR}/nexvue-auth-lib.php" \
+                 "${REPO_DIR}/nexvue-auth.php" \
+                 "${REPO_DIR}/nexvue-jwks.php" \
+                 "${REPO_DIR}/nexvue-auth-gate.js" \
+                 "${REPO_DIR}/login.html" \
+                 "${REPO_DIR}/forgot.html" \
+                 "${REPO_DIR}/reset.html" \
+                 "${REPO_DIR}/users.html" \
                  "${WEBROOT}/"
-  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / captions / branding)"
+  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / auth / captions / branding)"
 else
-  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php nexvue-version.php VERSION chart.umd.min.js services.html channels.html nexvue-ops.php ${WEBROOT}/"
+  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html … login.html users.html nexvue-auth*.php ${WEBROOT}/"
 fi
 
 step "5/5 DeckLink helpers (status + audio probe)"
@@ -387,7 +423,7 @@ else
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 if [ -d "${WEBROOT}" ]; then
-  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php; do
+  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php nexvue-auth.php nexvue-auth-lib.php nexvue-jwks.php nexvue-auth-gate.js login.html forgot.html reset.html users.html; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
   if [ -d /var/lib/nexvue/branding ]; then
@@ -395,8 +431,24 @@ if [ -d "${WEBROOT}" ]; then
   else
     warn "branding dir missing — Settings logo upload needs /var/lib/nexvue/branding (www-data writable)"
   fi
+  if [ -d /var/lib/nexvue/auth ] && [ -f /var/lib/nexvue/auth.db ]; then
+    ok "auth store: /var/lib/nexvue/auth.db"
+  else
+    warn "auth store missing — run: sudo php /usr/local/bin/nexvue-auth-bootstrap.php"
+  fi
 else
   warn "Apache docroot ${WEBROOT} not present — web UI not deployed yet"
+fi
+
+if [ -f /etc/nexvue/mediamtx.yml ] && grep -qE '^\s*authMethod:\s*jwt\b' /etc/nexvue/mediamtx.yml; then
+  ok "mediamtx.yml authMethod=jwt"
+else
+  warn "mediamtx.yml still open/internal — copy JWT auth block from repo mediamtx.yml (setup leaves existing yml untouched)"
+fi
+if [ -f /etc/nexvue/nexvue.env ] && grep -qE '^\s*NEXVUE_PUBLISH_JWT=' /etc/nexvue/nexvue.env; then
+  ok "NEXVUE_PUBLISH_JWT present in nexvue.env"
+else
+  warn "NEXVUE_PUBLISH_JWT missing — encoders cannot publish under JWT auth until bootstrap runs"
 fi
 
 # Ops wrappers + sudoers
@@ -478,21 +530,23 @@ cat <<'NEXT'
 Next steps:
   1. If a reboot was flagged above: reboot, then  sudo ./setup.sh --check
   2. Install Blackmagic Desktop Video if flagged, reboot, re-check
-  3. Configure channels:
+  3. If /etc/nexvue/mediamtx.yml pre-existed: merge JWT auth from repo mediamtx.yml
+     (authMethod: jwt + authJWTJWKS + authJWTInHTTPQuery), then restart mediamtx
+  4. Configure channels:
        sudo cp channels-example.env /etc/nexvue/channels/0.env
        sudo nano /etc/nexvue/channels/0.env
-  4. Start services:
+  5. Start services:
        sudo systemctl enable --now mediamtx nexvue-status nexvue-metrics nexvue-encode@0
-  5. Firewall (if ufw is in use): open ports with
+  6. Firewall (if ufw is in use): open ports with
        sudo ./setup.sh --firewall     (then: sudo ufw enable, once 22/ssh is allowed)
      or apply the rules manually — see the Firewall section in README.md
-  6. Apache + PHP (if not already serving pages):
+  7. Apache + PHP (if not already serving pages):
        sudo apt install -y libapache2-mod-php   # if PHP module not enabled yet
        sudo a2enmod php8.3                      # adjust version; then: sudo systemctl restart apache2
-       # setup.sh copies web UI + nexvue-ops.php into /var/www/html when present
-       # (override with NEXVUE_WEBROOT=) and installs /etc/sudoers.d/nexvue-ops.
-  7. Verify:  http://<edge-ip>:8889/ch0
-              http://<edge-ip>/index.html  (Player) /multiview.html /metrics.html
-              http://<edge-ip>/services.html  /channels.html
-     Ops pages are LAN-trust — do not DMZ-expose without Phase 2 auth.
+       # Remove any Apache Basic Auth / .htaccess AuthType — app login replaces it.
+       # Ensure http://127.0.0.1/nexvue-jwks.php is reachable (MediaMTX JWKS fetch).
+  8. Login:  https://<edge-ip>/login.html
+     Default bootstrap: admin / password  (forced change on first login)
+     Users + share links: /users.html (admin). Player/Multiview/Metrics/Services/Settings
+     require a session (or a share link ?t=… on Player).
 NEXT

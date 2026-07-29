@@ -111,6 +111,24 @@ if (PHP_SAPI === 'cli' && getenv('NEXVUE_CAPTIONS_HTTP') === false) {
 }
 
 // ---- HTTP entrypoint --------------------------------------------------------
+require_once __DIR__ . '/nexvue-auth-lib.php';
+try {
+    if (!auth_bypass_enabled()) {
+        auth_migrate();
+        auth_require_any();
+    }
+} catch (RuntimeException $e) {
+    http_response_code($e->getMessage() === 'unauthorized' ? 401 : 403);
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'unauthorized']);
+    exit;
+} catch (Throwable $e) {
+    http_response_code(500);
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'auth store unavailable']);
+    exit;
+}
+
 $channel = captions_normalize_channel($_GET['channel'] ?? null);
 if ($channel === null) {
     http_response_code(400);

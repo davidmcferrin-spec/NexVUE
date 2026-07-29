@@ -64,12 +64,14 @@
   .topnav a.active {
     background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600;
   }
-  .topnav .theme-toggle {
-    margin-left: auto; background: var(--bg); color: var(--text);
+  .topnav .theme-toggle, .topnav .nav-logout {
+    background: var(--bg); color: var(--text);
     border: 1px solid var(--edge); border-radius: 4px; padding: 6px 10px;
     font: inherit; font-size: 12px; cursor: pointer;
   }
-  .topnav .theme-toggle:hover { border-color: var(--acc); color: var(--acc); }
+  .topnav .theme-toggle { margin-left: auto; }
+  .topnav .theme-toggle:hover, .topnav .nav-logout:hover { border-color: var(--acc); color: var(--acc); }
+  .topnav .nav-who { color: var(--dim); font-size: 12px; margin-left: 8px; }
   /* Controls share the video column: centered frame, bars full-width inside it. */
   .frame {
     flex: 1; min-height: 0; width: min(1280px, 100%);
@@ -123,6 +125,7 @@
     width: 100%;
     max-height: 100%;
     aspect-ratio: 16 / 9;
+    overflow: hidden;
   }
   video {
     width: 100%; height: 100%; display: block; object-fit: contain;
@@ -157,13 +160,14 @@
     border-radius: 2px;
   }
   #cc-overlay[hidden] { display: none; }
-  /* Mirror/flip transforms are applied inline via JS (not CSS classes) so they
-     survive fullscreen — the browser's fullscreen styling can override a
-     stylesheet `transform`, but not an inline one. Fullscreen targets the
-     wrapper div, not the video, so the video's transform is never touched. */
-  .videowrap:fullscreen { display: flex; align-items: center; background: #000; }
-  .videowrap:-webkit-full-screen { display: flex; align-items: center; background: #000; }
-  .videowrap:fullscreen video, .videowrap:-webkit-full-screen video { max-height: 100vh; }
+  /* Mirror/flip/rotate transforms are applied inline via JS (not CSS classes)
+     so they survive fullscreen — the browser's fullscreen styling can override
+     a stylesheet `transform`, but not an inline one. Fullscreen targets the
+     wrapper div, not the video, so the video's transform is never touched.
+     90/270° also swap the video layout box so the frame still fits. */
+  .videowrap:fullscreen { display: flex; align-items: center; justify-content: center; background: #000; }
+  .videowrap:-webkit-full-screen { display: flex; align-items: center; justify-content: center; background: #000; }
+  .videowrap:fullscreen video, .videowrap:-webkit-full-screen video { max-height: none; border: none; }
   .stats-drawer {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
     background: var(--panel); border-top: 1px solid var(--edge);
@@ -226,10 +230,13 @@
   <img class="nav-logo" src="nexvue-logo.php" alt="" hidden>
   <a href="/index.html" class="active">Player</a>
   <a href="/multiview.html">Multiview</a>
-  <a href="/metrics.html">Metrics</a>
-  <a href="/services.html">Services</a>
-  <a href="/channels.html">Settings</a>
+  <a href="/metrics.html" data-auth-role="admin,operator">Metrics</a>
+  <a href="/services.html" data-auth-role="admin">Services</a>
+  <a href="/channels.html" data-auth-role="admin,operator">Settings</a>
+  <a href="/users.html" data-auth-role="admin">Users</a>
   <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
+  <span class="nav-who" id="nav-who" hidden></span>
+  <button type="button" class="nav-logout" id="nav-logout" hidden>Logout</button>
 </nav>
 
 <div class="frame">
@@ -247,6 +254,8 @@
   <span style="border-left:1px solid var(--edge);height:20px"></span>
   <button id="mirror" class="tgl" title="Reflect left-right (confidence monitor)">Mirror ↔</button>
   <button id="flip" class="tgl" title="Reflect top-bottom (inverted mounts)">Flip ↕</button>
+  <button id="rot-ccw" class="tgl" title="Rotate view 90° counter-clockwise (portrait / tilted sources)">⟲ 90°</button>
+  <button id="rot-cw" class="tgl" title="Rotate view 90° clockwise (portrait / tilted sources)">90° ⟳</button>
   <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
   <button id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
   <button id="mute" class="tgl" title="Mute (this browser only)">Mute</button>
@@ -255,7 +264,7 @@
     <input type="range" id="volume" min="0" max="100" step="1" value="100" aria-label="Volume">
     <span id="vol-pct">100%</span>
   </span>
-  <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip)">⛶ Fullscreen</button>
+  <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip/rotate)">⛶ Fullscreen</button>
 </div>
 
 <div class="stage">
@@ -311,9 +320,11 @@
 <script src="nexvue-qr.js"></script>
 <script src="nexvue-captions.js"></script>
 <script src="nexvue-vu.js"></script>
+<script src="nexvue-auth-gate.js"></script>
 <script>
 "use strict";
-(() => {
+(async () => {
+  const authUser = await NexVueAuth.requirePage({ allowShare: true });
   const $ = id => document.getElementById(id);
   const video = $("video"), stateEl = $("state");
   const videoWrap = document.querySelector(".videowrap");
@@ -607,8 +618,6 @@
     setState(`connecting ${path}…`);
     updateQualityUI();
 
-    const url = `${whepBase()}/${path}/whep`;
-
     pc = new RTCPeerConnection();
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
@@ -649,6 +658,8 @@
     };
 
     try {
+      const jwt = await NexVueAuth.whepJwt(path);
+      const url = `${whepBase()}/${path}/whep?jwt=${encodeURIComponent(jwt)}`;
       const offer = await pc.createOffer();
       // Chrome won't advertise multiopus; MediaMTX rejects >2ch Opus without it.
       const prepared = await NexVueVu.prepareWhepOffer(offer);
@@ -943,17 +954,37 @@
 
   // ---- Video transforms ---------------------------------------------------------------
   // Applied as an INLINE transform on the video (survives fullscreen, which a
-  // CSS-class transform does not). State tracked in these flags.
+  // CSS-class transform does not). Rotation persists per-browser (localStorage).
+  // Fullscreen the WRAPPER (not the video element), so the video's inline
+  // transform is never overridden by the browser's fullscreen video styling.
+  const wrap = document.querySelector(".videowrap");
   let mir = false, flp = false;
+  let rot = NexVueUI.getRotatePref();
+  function paintRotateBtns() {
+    $("rot-cw").classList.toggle("active", rot === 90 || rot === 180);
+    $("rot-ccw").classList.toggle("active", rot === 270 || rot === 180);
+    $("rot-cw").title =
+      "Rotate 90° clockwise (now " + rot + "° CW from upright). Portrait / tilted sources.";
+    $("rot-ccw").title =
+      "Rotate 90° counter-clockwise (now " + rot + "° CW from upright). Portrait / tilted sources.";
+  }
   function applyTransform() {
-    const x = mir ? -1 : 1, y = flp ? -1 : 1;
-    video.style.transform = (x === 1 && y === 1) ? "" : `scale(${x}, ${y})`;
+    NexVueUI.applyVideoOrient(video, wrap, { rotate: rot, mirror: mir, flip: flp });
+    paintRotateBtns();
   }
   $("mirror").addEventListener("click", () => {
     mir = !mir; $("mirror").classList.toggle("active", mir); applyTransform();
   });
   $("flip").addEventListener("click", () => {
     flp = !flp; $("flip").classList.toggle("active", flp); applyTransform();
+  });
+  $("rot-cw").addEventListener("click", () => {
+    rot = NexVueUI.setRotatePref(rot + 90);
+    applyTransform();
+  });
+  $("rot-ccw").addEventListener("click", () => {
+    rot = NexVueUI.setRotatePref(rot - 90);
+    applyTransform();
   });
 
   ccBtn.addEventListener("click", () => {
@@ -989,9 +1020,11 @@
     NexVueVu.resume();
   });
 
-  // Fullscreen the WRAPPER (not the video element), so the video's inline
-  // transform is never overridden by the browser's fullscreen video styling.
-  const wrap = document.querySelector(".videowrap");
+  applyTransform();
+  if (typeof ResizeObserver !== "undefined" && wrap) {
+    new ResizeObserver(() => applyTransform()).observe(wrap);
+  }
+  video.addEventListener("loadedmetadata", applyTransform);
   $("fs").addEventListener("click", () => {
     const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
     if (fsEl) {
@@ -1019,8 +1052,9 @@
   function renderChannelButtons(aliases, devices) {
     const prevActive = currentBase;
     $("channels").innerHTML = "";
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 8; i++) {
       const path = `ch${i}`;
+      if (!NexVueAuth.channelAllowed(path, authUser)) continue;
       const label = aliases[path] || aliases[String(i)] || path;
       const device = (devices && Number.isFinite(devices[path]))
         ? devices[path]

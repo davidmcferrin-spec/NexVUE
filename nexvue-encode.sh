@@ -99,11 +99,27 @@ RTSP_URL="${RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}}"
 VIDEO_ENCODER="${VIDEO_ENCODER:-vah264enc}" # vah264enc (QSV/VA-API) | x264enc
 EXTRA_ENC_ARGS="${EXTRA_ENC_ARGS:-}"
 
+# MediaMTX JWT auth: append long-lived publish token from station env when set.
+# Sourced via nexvue-encode@.service EnvironmentFile=/etc/nexvue/nexvue.env.
+NEXVUE_PUBLISH_JWT="$(strip_inline "${NEXVUE_PUBLISH_JWT:-}")"
+if [ -n "${NEXVUE_PUBLISH_JWT}" ]; then
+  case "${RTSP_URL}" in
+    *\?*) RTSP_URL="${RTSP_URL}&jwt=${NEXVUE_PUBLISH_JWT}" ;;
+    *)    RTSP_URL="${RTSP_URL}?jwt=${NEXVUE_PUBLISH_JWT}" ;;
+  esac
+fi
+
 # LO rendition (adaptive-bandwidth fallback the portal player can switch to)
 LO_ENABLE="${LO_ENABLE:-false}"
 LO_PRESET="${LO_PRESET:-720p}"              # 720p|540p|480p|360p|240p|180p
 LO_FPS="${LO_FPS:-30000/1001}"              # 29.97p default: cellular-friendly
 LO_RTSP_URL="${LO_RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}lo}"
+if [ -n "${NEXVUE_PUBLISH_JWT}" ]; then
+  case "${LO_RTSP_URL}" in
+    *\?*) LO_RTSP_URL="${LO_RTSP_URL}&jwt=${NEXVUE_PUBLISH_JWT}" ;;
+    *)    LO_RTSP_URL="${LO_RTSP_URL}?jwt=${NEXVUE_PUBLISH_JWT}" ;;
+  esac
+fi
 
 # Caption side channel (CEA-608/CC1 → /run/nexvue/captions/<path>.json).
 # Not burned into video; not a second encode. Extract in-pipeline because

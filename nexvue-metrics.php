@@ -52,8 +52,27 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/nexvue-auth-lib.php';
+
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
+
+// Metrics requires admin or operator session (not share links).
+try {
+    if (!auth_bypass_enabled()) {
+        auth_migrate();
+        auth_require_roles(['admin', 'operator']);
+    }
+} catch (RuntimeException $e) {
+    $msg = $e->getMessage();
+    http_response_code($msg === 'unauthorized' ? 401 : 403);
+    echo json_encode(['error' => $msg === 'unauthorized' ? 'unauthorized' : 'forbidden']);
+    exit;
+} catch (Throwable $e) {
+    http_response_code(500);
+    echo json_encode(['error' => 'auth store unavailable']);
+    exit;
+}
 
 $DB_PATH = getenv('NEXVUE_METRICS_DB') ?: '/var/lib/nexvue/metrics.db';
 

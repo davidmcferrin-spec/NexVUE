@@ -68,8 +68,8 @@ echo json_encode([
 """)
         self.assertTrue(data["enc0"])
         self.assertTrue(data["enc7"])
-        self.assertTrue(data["enc8"])
-        self.assertTrue(data["enc9"])
+        self.assertFalse(data["enc8"])
+        self.assertFalse(data["enc9"])
         self.assertFalse(data["enc10"])
         self.assertFalse(data["mediamtx"])
         self.assertFalse(data["status"])
@@ -160,7 +160,8 @@ class TestEnableWrapper(unittest.TestCase):
 
     def test_rejects_core_units_and_bad_instances(self) -> None:
         for unit in ("mediamtx", "nexvue-status", "nexvue-metrics",
-                     "nexvue-encode@10", "nexvue-encode@", "sshd"):
+                     "nexvue-encode@8", "nexvue-encode@9", "nexvue-encode@10",
+                     "nexvue-encode@", "sshd"):
             r = self._run("disable", unit)
             self.assertEqual(r.returncode, 2, f"{unit}: {r.stderr}")
             self.assertIn("disallowed unit", r.stderr)

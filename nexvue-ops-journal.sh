@@ -22,7 +22,7 @@ CLEARED_DIR="${NEXVUE_JOURNAL_CLEARED_DIR:-/var/lib/nexvue/journal-cleared}"
 
 unit_allowed() {
   case "$1" in
-    mediamtx|nexvue-status|nexvue-metrics|nexvue-encode@[0-9]) return 0 ;;
+    mediamtx|nexvue-status|nexvue-metrics|nexvue-encode@[0-7]) return 0 ;;
     *) return 1 ;;
   esac
 }

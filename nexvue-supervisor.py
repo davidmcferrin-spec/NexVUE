@@ -20,9 +20,6 @@ Architecture:
         rtspclientsink(s); audio -> shared opusenc.
         SRT always decode+re-encode so slate / normalize / LO stay valid.
         MediaMTX (H.264 + Opus, no transcoding) is untouched.
-        Station-wide MAX_LO_RENDITIONS (default 6) clamps which channels
-        that request LO_ENABLE actually build the LO tee (deterministic
-        by ascending channel id among requesters).
 
 Stdlib only, no pip (project policy). GStreamer access is via PyGObject
 (python3-gi + gir1.2-gstreamer-1.0 etc., from apt — see setup.sh) and is
@@ -51,10 +48,8 @@ logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format=f"{L
 log = logging.getLogger("nexvue-supervisor")
 
 # Station channel slots are 0..MAX_CHANNELS-1 (independent of DeckLink
-# MAX_DEVICES). SRT-only channels can use ids above the card's connector count.
-DEFAULT_MAX_CHANNELS = 10
-DEFAULT_MAX_LO_RENDITIONS = 6
-DEFAULT_CHANNELS_DIR = Path("/etc/nexvue/channels")
+# MAX_DEVICES when raised). Default matches Quad 2 (8 connectors).
+DEFAULT_MAX_CHANNELS = 8
 # SRT: treat "no decoded video buffer for this long" as signal=false so the
 # existing LIVE→SLATE loss debounce can run (srtsrc has no DeckLink "signal").
 SRT_SIGNAL_STALE_S = 1.0
@@ -172,9 +167,7 @@ class SupervisorConfig:
     rtsp_url: str = ""
     video_encoder: str = "vah264enc"
     extra_enc_args: str = ""
-    lo_requested: bool = False
     lo_enable: bool = False
-    max_lo_renditions: int = DEFAULT_MAX_LO_RENDITIONS
     lo_preset: str = "720p"
     lo_fps: str = "30000/1001"
     lo_rtsp_url: str = ""
@@ -200,82 +193,12 @@ class SupervisorConfig:
     output_fps: str = "60000/1001"
 
 
-def _parse_env_lo_enable(text: str) -> bool:
-    """Last active LO_ENABLE assignment in a channel .env body."""
-    last: Optional[str] = None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        if key.strip() != "LO_ENABLE":
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] in "\"'" and value[0] == value[-1]:
-            value = value[1:-1]
-        elif " #" in value:
-            value = value.split(" #", 1)[0].strip()
-        last = value.lower()
-    return last == "true"
-
-
-def list_lo_requester_ids(channels_dir: Path, max_channels: int = DEFAULT_MAX_CHANNELS) -> List[int]:
-    """Channel ids with LO_ENABLE=true, sorted ascending (deterministic pool order)."""
-    ids: List[int] = []
-    if not channels_dir.is_dir():
-        return ids
-    for path in channels_dir.glob("*.env"):
-        stem = path.stem
-        if not stem.isdigit():
-            continue
-        cid = int(stem)
-        if not (0 <= cid < max_channels):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if _parse_env_lo_enable(text):
-            ids.append(cid)
-    ids.sort()
-    return ids
-
-
-def resolve_lo_enable(
-    channel_id: int,
-    requested: bool,
-    *,
-    channels_dir: Path,
-    max_lo: int,
-    max_channels: int = DEFAULT_MAX_CHANNELS,
-) -> bool:
-    """Floating LO pool: among requesters (ascending id), only the first max_lo win."""
-    if not requested:
-        return False
-    if max_lo <= 0:
-        return False
-    requesters = list_lo_requester_ids(channels_dir, max_channels=max_channels)
-    # Count this process even if the on-disk scan missed our file (unit tests,
-    # or a write that has not hit the directory the supervisor was pointed at).
-    if channel_id not in requesters:
-        requesters = sorted(set(requesters) | {channel_id})
-    winners = requesters[:max_lo]
-    return channel_id in winners
-
-
 def load_config(
     env: Mapping[str, str],
-    *,
-    channels_dir: Optional[Path] = None,
 ) -> SupervisorConfig:
     """Validate os.environ (or any string mapping, for tests) into a
     SupervisorConfig. Raises ConfigError on the first problem found —
     mirrors nexvue-encode.sh's fail-fast validation block.
-
-    channels_dir is used only for the floating LO pool clamp (default
-    /etc/nexvue/channels, overridable via NEXVUE_CHANNELS_DIR).
     """
 
     def raw(name: str) -> Optional[str]:
@@ -437,32 +360,7 @@ def load_config(
 
     extra_enc_args = opt("EXTRA_ENC_ARGS", "")
 
-    lo_requested = opt_bool("LO_ENABLE", False)
-    max_lo_renditions = opt_int("MAX_LO_RENDITIONS", DEFAULT_MAX_LO_RENDITIONS)
-    if max_lo_renditions < 0:
-        raise ConfigError(f"MAX_LO_RENDITIONS must be >= 0, got {max_lo_renditions}")
-
-    pool_dir = channels_dir
-    if pool_dir is None:
-        override = raw("NEXVUE_CHANNELS_DIR")
-        pool_dir = Path(override) if override else DEFAULT_CHANNELS_DIR
-    lo_enable = resolve_lo_enable(
-        channel_id,
-        lo_requested,
-        channels_dir=pool_dir,
-        max_lo=max_lo_renditions,
-        max_channels=max_channels,
-    )
-    if lo_requested and not lo_enable:
-        requesters = list_lo_requester_ids(pool_dir, max_channels=max_channels)
-        log.warning(
-            "LO_ENABLE requested on channel %d but floating pool is full "
-            "(MAX_LO_RENDITIONS=%d; requesters=%s; winners=%s) — running HI-only",
-            channel_id,
-            max_lo_renditions,
-            requesters,
-            requesters[:max_lo_renditions],
-        )
+    lo_enable = opt_bool("LO_ENABLE", False)
 
     lo_preset = opt("LO_PRESET", "720p")
     if lo_preset not in LO_PRESETS:
@@ -471,7 +369,7 @@ def load_config(
     lo_width = opt_int("LO_WIDTH", lo_w_def)
     lo_height = opt_int("LO_HEIGHT", lo_h_def)
     lo_bitrate_kbps = opt_int("LO_BITRATE_KBPS", lo_br_def)
-    if lo_enable or lo_requested:
+    if lo_enable:
         if lo_width <= 0 or lo_width % 2 or lo_height <= 0 or lo_height % 2:
             raise ConfigError(f"LO_WIDTH/LO_HEIGHT must be positive even integers, got {lo_width}x{lo_height}")
         if lo_bitrate_kbps <= 0:
@@ -559,9 +457,7 @@ def load_config(
         rtsp_url=rtsp_url,
         video_encoder=video_encoder,
         extra_enc_args=extra_enc_args,
-        lo_requested=lo_requested,
         lo_enable=lo_enable,
-        max_lo_renditions=max_lo_renditions,
         lo_preset=lo_preset,
         lo_fps=lo_fps,
         lo_rtsp_url=lo_rtsp_url,
@@ -1252,7 +1148,7 @@ class Supervisor:
         lo_note = (
             f"true({self._config.lo_bitrate_kbps}kbps)"
             if self._config.lo_enable
-            else ("requested-denied" if self._config.lo_requested else "false")
+            else "false"
         )
         self._log.info(
             "starting: id=%d type=%s device=%s path=%s deint=%s hi=%dkbps lo=%s audio=%s captions=%s enc=%s",

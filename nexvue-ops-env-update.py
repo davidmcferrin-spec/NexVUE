@@ -21,7 +21,7 @@ from typing import Optional
 
 CHANNELS_DIR = Path("/etc/nexvue/channels")
 STATION_ENV = Path("/etc/nexvue/nexvue.env")
-MAX_CHANNEL_ID = 9  # slots 0..9 (MAX_CHANNELS=10)
+MAX_CHANNEL_ID = 7  # slots 0..7 (MAX_CHANNELS=8)
 
 # Keys the ops UI may change. DEVICE_NUMBER / CHANNEL_PATH / RTSP_URL are
 # identity/derived and stay read-only in the API.

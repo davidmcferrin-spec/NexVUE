@@ -65,12 +65,14 @@
   .topnav a.active {
     background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600;
   }
-  .topnav .theme-toggle {
+  .topnav .theme-toggle, .topnav .nav-logout {
     margin-left: auto; background: var(--bg); color: var(--text);
     border: 1px solid var(--edge); border-radius: 4px; padding: 6px 10px;
     font: inherit; font-size: 12px; cursor: pointer;
   }
-  .topnav .theme-toggle:hover { border-color: var(--acc); color: var(--acc); }
+  .topnav .nav-logout { margin-left: 0; }
+  .topnav .theme-toggle:hover, .topnav .nav-logout:hover { border-color: var(--acc); color: var(--acc); }
+  .topnav .nav-who { color: var(--dim); font-size: 12px; margin-left: 8px; }
   .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
   button, select {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge);
@@ -185,10 +187,13 @@
   <img class="nav-logo" src="nexvue-logo.php" alt="" hidden>
   <a href="/index.html">Player</a>
   <a href="/multiview.html">Multiview</a>
-  <a href="/metrics.html" class="active">Metrics</a>
-  <a href="/services.html">Services</a>
-  <a href="/channels.html">Settings</a>
+  <a href="/metrics.html" class="active" data-auth-role="admin,operator">Metrics</a>
+  <a href="/services.html" data-auth-role="admin">Services</a>
+  <a href="/channels.html" data-auth-role="admin,operator">Settings</a>
+  <a href="/users.html" data-auth-role="admin">Users</a>
   <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
+  <span class="nav-who" id="nav-who" hidden></span>
+  <button type="button" class="nav-logout" id="nav-logout" hidden>Logout</button>
 </nav>
 
 <div class="bar">
@@ -324,9 +329,11 @@
 </div>
 
 <script src="nexvue-qr.js"></script>
+<script src="nexvue-auth-gate.js"></script>
 <script>
 "use strict";
-(() => {
+(async () => {
+  await NexVueAuth.requirePage({ roles: ["admin", "operator"] });
   const stateEl = document.getElementById("state");
   let range = "24h";
   let customFrom = null;  // unix seconds, or null when using presets

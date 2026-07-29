@@ -15,8 +15,25 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/nexvue-auth-lib.php';
+
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
+
+try {
+    if (!auth_bypass_enabled()) {
+        auth_migrate();
+        auth_require_any();
+    }
+} catch (RuntimeException $e) {
+    http_response_code($e->getMessage() === 'unauthorized' ? 401 : 403);
+    echo json_encode(['error' => 'unauthorized']);
+    exit;
+} catch (Throwable $e) {
+    http_response_code(500);
+    echo json_encode(['error' => 'auth store unavailable']);
+    exit;
+}
 
 function status_candidates(): array {
     $env = getenv('NEXVUE_STATUS_URL');

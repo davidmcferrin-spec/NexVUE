@@ -2,7 +2,11 @@
 /**
  * nexvue-ops.php — JSON API for NexVUE Services + Channels ops UI.
  *
- * Phase 1 LAN-trust: no auth. Do not expose on a DMZ without Phase 2 auth.
+ * Phase 2 local auth: session cookie required. Roles:
+ *   admin — Services + Settings + kick + branding + support/update
+ *   operator — Settings + kick + branding
+ *   any auth (user or share) — aliases, kick_check (Player/Multiview)
+ *
  * Privileged work goes through allowlisted sudo wrappers only
  * (see nexvue-ops.sudoers / /usr/local/bin/nexvue-ops-*.sh).
  *
@@ -32,7 +36,7 @@
  * disabled slots are left alone). set_enabled toggles systemd enable/disable
  * (with --now); set_running is
  * runtime start/stop (boot config untouched). Both apply to encoder units
- * ONLY (nexvue-encode@0-9) via nexvue-ops-enable.sh — the LAN-trust ops page
+ * ONLY (nexvue-encode@0-7) via nexvue-ops-enable.sh — the LAN-trust ops page
  * must not be able to disable or stop mediamtx or the shared daemons.
  *
  * kick_viewer POSTs to MediaMTX /v3/webrtcsessions/kick/{id} on loopback
@@ -46,11 +50,11 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/nexvue-auth-lib.php';
+
 const CHANNELS_DIR = '/etc/nexvue/channels';
-const STATION_ENV = '/etc/nexvue/nexvue.env';
-/** Encoder slots 0..MAX_CHANNEL_ID (MAX_CHANNELS=10). Independent of DeckLink MAX_DEVICES. */
-const MAX_CHANNEL_ID = 9;
-const DEFAULT_MAX_LO_RENDITIONS = 6;
+/** Encoder slots 0..MAX_CHANNEL_ID (MAX_CHANNELS=8). Matches Quad 2 DeckLink range. */
+const MAX_CHANNEL_ID = 7;
 const SUDO = '/usr/bin/sudo';
 /** Kick registry TTL — long enough for the 5s player reconnect window + retries. */
 const KICK_REGISTRY_TTL_S = 600;
@@ -255,149 +259,11 @@ function kick_registry_check(?string $sessionId, ?string $clientIp = null): arra
 
 /** Units the ops UI may enable/disable — encoders only, never shared services. */
 function unit_enable_allowed(string $unit): bool {
-    return (bool)preg_match('/^nexvue-encode@[0-9]$/', $unit);
+    return (bool)preg_match('/^nexvue-encode@[0-7]$/', $unit);
 }
 
 function channel_id_ok($id): bool {
     return is_numeric($id) && (int)$id >= 0 && (int)$id <= MAX_CHANNEL_ID;
-}
-
-/** Read KEY=value from station or channel env text (last active wins). */
-function env_text_get(string $text, string $key): string {
-    $last = '';
-    foreach (preg_split("/\r\n|\n|\r/", $text) as $line) {
-        $line = trim($line);
-        if ($line === '' || str_starts_with($line, '#')) {
-            continue;
-        }
-        if (!str_contains($line, '=')) {
-            continue;
-        }
-        [$k, $v] = explode('=', $line, 2);
-        if (trim($k) !== $key) {
-            continue;
-        }
-        $v = trim($v);
-        if (strlen($v) >= 2 && (($v[0] === '"' && str_ends_with($v, '"')) || ($v[0] === "'" && str_ends_with($v, "'")))) {
-            $v = substr($v, 1, -1);
-        } elseif (str_contains($v, ' #')) {
-            $v = trim(explode(' #', $v, 2)[0]);
-        }
-        $last = $v;
-    }
-    return $last;
-}
-
-function station_env_int(string $key, int $default): int {
-    if (!is_readable(STATION_ENV)) {
-        return $default;
-    }
-    $raw = @file_get_contents(STATION_ENV);
-    if (!is_string($raw)) {
-        return $default;
-    }
-    $v = env_text_get($raw, $key);
-    if ($v === '' || !is_numeric($v)) {
-        return $default;
-    }
-    return (int)$v;
-}
-
-function max_lo_renditions(): int {
-    $n = station_env_int('MAX_LO_RENDITIONS', DEFAULT_MAX_LO_RENDITIONS);
-    return max(0, $n);
-}
-
-/**
- * Channel ids with LO_ENABLE=true, ascending (same deterministic order as
- * nexvue-supervisor.resolve_lo_enable).
- *
- * @return list<int>
- */
-function lo_requester_ids(): array {
-    $ids = [];
-    for ($i = 0; $i <= MAX_CHANNEL_ID; $i++) {
-        $path = CHANNELS_DIR . "/{$i}.env";
-        if (!is_readable($path)) {
-            continue;
-        }
-        $raw = @file_get_contents($path);
-        if (!is_string($raw)) {
-            continue;
-        }
-        if (strtolower(env_text_get($raw, 'LO_ENABLE')) === 'true') {
-            $ids[] = $i;
-        }
-    }
-    return $ids;
-}
-
-/**
- * @return array{max:int,used:int,holders:list<int>,requesters:list<int>}
- */
-function lo_pool_status(): array {
-    $max = max_lo_renditions();
-    $requesters = lo_requester_ids();
-    $holders = array_slice($requesters, 0, $max);
-    return [
-        'max' => $max,
-        'used' => count($holders),
-        'holders' => $holders,
-        'requesters' => $requesters,
-    ];
-}
-
-/**
- * Reject enabling LO when the floating pool is already full (UI cap).
- * Turning LO off, or re-saving true on a channel that already holds a seat, is fine.
- */
-function assert_lo_enable_allowed(int $id, array $patch, ?array $bulkIds = null): void {
-    if (!array_key_exists('LO_ENABLE', $patch)) {
-        return;
-    }
-    if (strtolower(trim((string)$patch['LO_ENABLE'])) !== 'true') {
-        return;
-    }
-    $pool = lo_pool_status();
-    $max = $pool['max'];
-    $requesters = $pool['requesters'];
-
-    if ($bulkIds !== null) {
-        // Simulate bulk: all listed ids become requesters; others unchanged.
-        $sim = [];
-        foreach ($requesters as $r) {
-            if (!in_array($r, $bulkIds, true)) {
-                $sim[] = $r;
-            }
-        }
-        foreach ($bulkIds as $bid) {
-            $sim[] = (int)$bid;
-        }
-        $sim = array_values(array_unique($sim));
-        sort($sim);
-        if (count($sim) > $max) {
-            fail(
-                400,
-                "LO floating pool full: enabling LO on channels "
-                . implode(',', $bulkIds)
-                . " would make " . count($sim)
-                . " requesters (MAX_LO_RENDITIONS={$max}). Turn LO off on other channels first."
-            );
-        }
-        return;
-    }
-
-    if (in_array($id, $requesters, true)) {
-        return; // already holds / requests a seat
-    }
-    if (count($requesters) >= $max) {
-        $holders = implode(',', $pool['holders']);
-        fail(
-            400,
-            "LO floating pool full ({$pool['used']}/{$max}). "
-            . "Holders: [{$holders}]. Turn LO off on one channel before enabling here."
-        );
-    }
 }
 
 /**
@@ -798,7 +664,7 @@ function sudo_run(array $argv, ?string $stdin = null): array {
 }
 
 function unit_allowed(string $unit): bool {
-    return (bool)preg_match('/^(mediamtx|nexvue-status|nexvue-metrics|nexvue-encode@[0-9])$/', $unit);
+    return (bool)preg_match('/^(mediamtx|nexvue-status|nexvue-metrics|nexvue-encode@[0-7])$/', $unit);
 }
 
 function list_channel_ids(): array {
@@ -819,8 +685,45 @@ function action_from_request(array $body): string {
     return $action;
 }
 
+/**
+ * Role gate for ops actions. Share sessions may only call aliases + kick_check.
+ */
+function ops_require_auth(string $action): void {
+    if (auth_bypass_enabled()) {
+        return;
+    }
+    try {
+        auth_migrate();
+    } catch (Throwable $e) {
+        fail(500, 'auth store unavailable');
+    }
+    $any = ['aliases', 'kick_check'];
+    $adminOnly = [
+        'services', 'journal', 'journal_clear', 'set_enabled', 'set_running',
+        'support_bundle', 'update_status', 'update_repo',
+    ];
+    try {
+        if (in_array($action, $any, true)) {
+            auth_require_any();
+            return;
+        }
+        if (in_array($action, $adminOnly, true)) {
+            auth_require_roles(['admin']);
+            return;
+        }
+        auth_require_roles(['admin', 'operator']);
+    } catch (RuntimeException $e) {
+        $msg = $e->getMessage();
+        if ($msg === 'unauthorized') {
+            fail(401, 'unauthorized');
+        }
+        fail(403, 'forbidden');
+    }
+}
+
 $body = read_json_body();
 $action = action_from_request($body);
+ops_require_auth($action);
 
 // ---- support_bundle (binary zip — before JSON Content-Type) -------------------
 
@@ -931,7 +834,7 @@ if ($action === 'services') {
     foreach (list_channel_ids() as $id) {
         $units[] = "nexvue-encode@{$id}";
     }
-    // Always show encode@0-9 slots that have env files; if none, still show core.
+    // Always show encode@0-7 slots that have env files; if none, still show core.
     $items = [];
     foreach ($units as $unit) {
         $r = sudo_run(['/usr/local/bin/nexvue-ops-status.sh', $unit]);
@@ -1184,9 +1087,6 @@ if ($action === 'channels_list') {
         $unit = "nexvue-encode@{$id}";
         $st = parse_unit_status(sudo_run(['/usr/local/bin/nexvue-ops-status.sh', $unit])['stdout']);
         $state = $st['state'];
-        $loReq = strtolower((string)($keys['LO_ENABLE'] ?? '')) === 'true';
-        $pool = lo_pool_status();
-        $loGranted = $loReq && in_array($id, $pool['holders'], true);
         $channels[] = [
             'id' => $id,
             'CHANNEL_PATH' => $keys['CHANNEL_PATH'] ?? "ch{$id}",
@@ -1197,7 +1097,6 @@ if ($action === 'channels_list') {
             'BITRATE_KBPS' => $keys['BITRATE_KBPS'] ?? '',
             'ENABLE_AUDIO' => $keys['ENABLE_AUDIO'] ?? '',
             'LO_ENABLE' => $keys['LO_ENABLE'] ?? '',
-            'LO_GRANTED' => $loGranted,
             'LO_PRESET' => $keys['LO_PRESET'] ?? '',
             'unit' => $unit,
             'state' => $state,
@@ -1209,7 +1108,6 @@ if ($action === 'channels_list') {
         'ok' => true,
         'channels' => $channels,
         'editable_keys' => EDITABLE_KEYS,
-        'lo_pool' => lo_pool_status(),
         'max_channel_id' => MAX_CHANNEL_ID,
     ]);
     exit;
@@ -1232,16 +1130,12 @@ if ($action === 'channel_get') {
         fail(500, 'bad helper output');
     }
     $keys = $data['keys'] ?? [];
-    $pool = lo_pool_status();
-    $loReq = strtolower((string)($keys['LO_ENABLE'] ?? '')) === 'true';
     echo json_encode([
         'ok' => true,
         'id' => $id,
         'keys' => $keys,
         'editable_keys' => EDITABLE_KEYS,
         'readonly_keys' => ['DEVICE_NUMBER', 'CHANNEL_PATH', 'RTSP_URL'],
-        'lo_pool' => $pool,
-        'lo_granted' => $loReq && in_array($id, $pool['holders'], true),
     ]);
     exit;
 }
@@ -1268,7 +1162,6 @@ if ($action === 'channel_put') {
         }
         $clean[$k] = (string)$v;
     }
-    assert_lo_enable_allowed($id, $clean, null);
     $r = sudo_run(
         ['/usr/local/bin/nexvue-ops-env-write.sh', (string)$id],
         json_encode($clean, JSON_UNESCAPED_SLASHES)
@@ -1318,7 +1211,6 @@ if ($action === 'channels_bulk') {
         }
         $bulkIds[] = (int)$rawId;
     }
-    assert_lo_enable_allowed(0, $clean, $bulkIds);
     foreach ($bulkIds as $id) {
         $r = sudo_run(
             ['/usr/local/bin/nexvue-ops-env-write.sh', (string)$id],

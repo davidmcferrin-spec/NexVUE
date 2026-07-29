@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""
+Unit tests for nexvue-auth-lib.php — users, shares, JWT, reset, import/export.
+
+Requires `php` on PATH with openssl + sqlite3. Skipped when unavailable.
+
+Run: python3 test/test_nexvue_auth.py
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+LIB = ROOT / "nexvue-auth-lib.php"
+PHP = shutil.which("php")
+
+
+@unittest.skipUnless(PHP and LIB.is_file(), "php CLI or nexvue-auth-lib.php missing")
+class TestNexVueAuth(unittest.TestCase):
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.auth_dir = Path(self._td.name) / "auth"
+        self.auth_dir.mkdir(parents=True, exist_ok=True)
+        self.db = Path(self._td.name) / "auth.db"
+        self.env = Path(self._td.name) / "nexvue.env"
+        self.env.write_text("# test\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    def _php(self, body: str) -> dict:
+        lib = LIB.as_posix()
+        code = f"""
+putenv('NEXVUE_AUTH_DB={self.db.as_posix()}');
+putenv('NEXVUE_AUTH_DIR={self.auth_dir.as_posix()}');
+putenv('NEXVUE_STATION_ENV={self.env.as_posix()}');
+include '{lib}';
+auth_migrate();
+auth_ensure_keys();
+{body}
+"""
+        env = os.environ.copy()
+        env.pop("NEXVUE_AUTH_HTTP", None)
+        r = subprocess.run(
+            [PHP, "-d", "display_errors=stderr", "-r", code],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+        if r.returncode != 0:
+            self.fail(f"php failed ({r.returncode}): {r.stderr or r.stdout}")
+        out = (r.stdout or "").strip()
+        try:
+            return json.loads(out)
+        except json.JSONDecodeError:
+            self.fail(f"expected JSON, got: {out!r}\nstderr={r.stderr!r}")
+
+    def test_bootstrap_admin(self) -> None:
+        data = self._php(
+            "echo json_encode(['user' => auth_user_row_public(auth_user_find_by_username('admin'))]);"
+        )
+        self.assertEqual(data["user"]["username"], "admin")
+        self.assertEqual(data["user"]["role"], "admin")
+        self.assertTrue(data["user"]["must_change_password"])
+
+    def test_password_verify(self) -> None:
+        data = self._php(
+            """
+$ok = auth_user_verify('admin', 'password');
+$bad = auth_user_verify('admin', 'wrongpass');
+echo json_encode(['ok' => $ok !== null, 'bad' => $bad === null]);
+"""
+        )
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["bad"])
+
+    def test_share_requires_expiry(self) -> None:
+        data = self._php(
+            """
+try {
+  auth_parse_expires(null, null);
+  echo json_encode(['error' => 'expected throw']);
+} catch (InvalidArgumentException $e) {
+  echo json_encode(['error' => $e->getMessage()]);
+}
+"""
+        )
+        self.assertIn("expiry", data["error"].lower())
+
+    def test_share_create_revoke(self) -> None:
+        data = self._php(
+            """
+$admin = auth_user_find_by_username('admin');
+$exp = gmdate('Y-m-d\\TH:i:s\\Z', time() + 3600);
+$c = auth_share_create('Bench feed', ['ch0', 'ch2'], $exp, $admin['id']);
+$valid = auth_share_is_valid($c['row']);
+$found = auth_share_find_by_token($c['token']);
+$rev = auth_share_revoke($c['row']['id']);
+$after = auth_share_is_valid($rev);
+echo json_encode([
+  'valid' => $valid,
+  'found' => $found !== null,
+  'channels' => json_decode($c['row']['channels'], true),
+  'status' => auth_share_row_public($rev)['status'],
+  'after' => $after,
+  'has_token' => strlen($c['token']) >= 32,
+]);
+"""
+        )
+        self.assertTrue(data["valid"])
+        self.assertTrue(data["found"])
+        self.assertEqual(data["channels"], ["ch0", "ch2"])
+        self.assertEqual(data["status"], "revoked")
+        self.assertFalse(data["after"])
+        self.assertTrue(data["has_token"])
+
+    def test_jwt_permissions_paths(self) -> None:
+        data = self._php(
+            """
+$jwt = auth_mint_viewer_jwt('user:admin', ['ch1']);
+$parts = explode('.', $jwt);
+$payload = json_decode(auth_b64url_decode($parts[1]), true);
+$paths = array_column($payload['mediamtx_permissions'], 'path');
+sort($paths);
+echo json_encode(['paths' => $paths, 'alg' => json_decode(auth_b64url_decode($parts[0]), true)['alg']]);
+"""
+        )
+        self.assertEqual(data["alg"], "RS256")
+        self.assertEqual(data["paths"], ["ch1", "ch1lo"])
+
+    def test_reset_single_use(self) -> None:
+        data = self._php(
+            """
+$u = auth_user_find_by_username('admin');
+$r = auth_reset_create($u['id']);
+auth_reset_consume($r['token'], 'newpassword1');
+$again = null;
+try {
+  auth_reset_consume($r['token'], 'otherpassword');
+  $again = 'ok';
+} catch (InvalidArgumentException $e) {
+  $again = $e->getMessage();
+}
+$login = auth_user_verify('admin', 'newpassword1');
+echo json_encode(['again' => $again, 'login' => $login !== null]);
+"""
+        )
+        self.assertIn("invalid", data["again"].lower())
+        self.assertTrue(data["login"])
+
+    def test_users_import_export_idempotent(self) -> None:
+        data = self._php(
+            """
+$exported = auth_users_export(null);
+$uid = $exported[0]['id'];
+$r1 = auth_users_import($exported);
+$r2 = auth_users_import($exported);
+$again = auth_users_export(null);
+echo json_encode([
+  'n' => count($exported),
+  'u1' => $r1['upserted'],
+  'u2' => $r2['upserted'],
+  'same_id' => $again[0]['id'] === $uid,
+]);
+"""
+        )
+        self.assertGreaterEqual(data["n"], 1)
+        self.assertEqual(data["u1"], data["n"])
+        self.assertEqual(data["u2"], data["n"])
+        self.assertTrue(data["same_id"])
+
+    def test_publish_jwt_env(self) -> None:
+        data = self._php(
+            """
+$jwt = auth_ensure_publish_jwt_in_env();
+$again = auth_ensure_publish_jwt_in_env();
+$raw = file_get_contents(getenv('NEXVUE_STATION_ENV'));
+echo json_encode([
+  'len' => strlen($jwt),
+  'same' => $jwt === $again,
+  'in_env' => str_contains($raw, 'NEXVUE_PUBLISH_JWT='),
+]);
+"""
+        )
+        self.assertGreater(data["len"], 40)
+        self.assertTrue(data["same"])
+        self.assertTrue(data["in_env"])
+
+
+if __name__ == "__main__":
+    unittest.main()
