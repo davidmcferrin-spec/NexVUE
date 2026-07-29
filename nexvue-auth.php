@@ -5,8 +5,10 @@
  * Public: login, logout, me, forgot, reset, share_redeem
  * Authed: whep_jwt, change_password
  * Admin: users_*, user_reset_link, users_export/import, shares_export/import
- * Admin + sharer: shares_list, share_create, share_revoke, share_delete
- *   (sharer: own only). Admin: share_update (name/channels/expiry; no token rotate).
+ * Admin + sharer: shares_list, share_create, share_revoke, share_delete,
+ *   share_email (sharer: own only). Admin: share_update (name/channels/expiry;
+ *   no token rotate). Share token plaintext is stored so the same URL can be
+ *   re-copied; revoke/delete/expiry remain the controls.
  * Expired shares are hard-deleted 7 days after expires_at (opportunistic on list).
  * Sync: Bearer NEXVUE_SYNC_KEY may call export/import without a browser session.
  *
@@ -284,16 +286,41 @@ try {
                 auth_api_fail(403, 'channel not allowed for your account');
             }
             $expires = auth_parse_expires($absolute, $duration);
-            $created = auth_share_create($name, $normalized, $expires, (string)$actor['id']);
+            $created = auth_share_create($name, $normalized, $expires, (string)$actor['id'], $pageKey);
         } catch (InvalidArgumentException $e) {
             auth_api_fail(400, $e->getMessage());
         }
         $pub = auth_share_row_public($created['row'], true, $created['token']);
-        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-        $page = ($pageKey === 'multiview') ? 'multiview.html' : 'index.html';
-        $pub['url'] = $scheme . '://' . $host . '/' . $page . '?t=' . rawurlencode($created['token']);
         auth_api_ok(['share' => $pub]);
+    }
+
+    if ($action === 'share_email') {
+        $actor = auth_require_roles(['admin', 'sharer']);
+        $id = (string)($body['id'] ?? '');
+        try {
+            $email = auth_normalize_email(isset($body['email']) ? (string)$body['email'] : null);
+        } catch (InvalidArgumentException $e) {
+            auth_api_fail(400, $e->getMessage());
+        }
+        if ($id === '' || $email === null) {
+            auth_api_fail(400, 'id and email required');
+        }
+        $existing = auth_share_find_by_id($id);
+        if ($existing === null) {
+            auth_api_fail(404, 'share not found');
+        }
+        if (!auth_share_can_manage($existing, $actor)) {
+            auth_api_fail(403, 'forbidden');
+        }
+        $pub = auth_share_row_public($existing);
+        if (($pub['status'] ?? '') !== 'active') {
+            auth_api_fail(400, 'share is not active');
+        }
+        if (empty($pub['url'])) {
+            auth_api_fail(400, 'share URL unavailable (created before token storage)');
+        }
+        $sent = auth_try_mail_share($email, (string)$pub['url'], (string)$pub['name'], (string)$pub['expires_at']);
+        auth_api_ok(['sent' => $sent, 'email' => $email, 'url' => $pub['url']]);
     }
 
     if ($action === 'share_revoke') {

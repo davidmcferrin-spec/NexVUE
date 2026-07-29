@@ -101,7 +101,12 @@
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
   .err { color: var(--bad); font-size: 12px; margin-top: 8px; }
   .ok { color: var(--ok); font-size: 12px; margin-top: 8px; word-break: break-all; }
-  .once { background: var(--bg); border: 1px dashed var(--acc); padding: 8px; margin-top: 8px; font-size: 11px; }
+  .once { background: var(--bg); border: 1px dashed var(--acc); padding: 8px; margin-top: 8px; font-size: 11px; word-break: break-all; }
+  .once .share-url { display: block; margin: 6px 0; font-family: ui-monospace, monospace; }
+  .once-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .once-actions button { font-size: 11px; padding: 4px 8px; }
+  .once-ok { color: var(--ok); font-size: 11px; margin-top: 4px; }
+  .share-row-actions button { margin: 0 2px 2px 0; }
 </style>
 </head>
 <body>
@@ -299,6 +304,102 @@
       "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
   }
 
+  function copyText(text) {
+    if (!text) return Promise.reject(new Error("nothing to copy"));
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function (resolve, reject) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        if (!document.execCommand("copy")) reject(new Error("copy failed"));
+        else resolve();
+      } catch (e) {
+        reject(e);
+      } finally {
+        document.body.removeChild(ta);
+      }
+    });
+  }
+
+  function mailtoShare(url, name, expiresAt) {
+    const subject = "NexVUE share link: " + (name || "stream");
+    const body =
+      "You have been sent a NexVUE share link.\n\n" +
+      "Name: " + (name || "") + "\n" +
+      "Expires: " + (expiresAt || "") + "\n\n" +
+      "Open:\n" + url + "\n";
+    location.href =
+      "mailto:?subject=" + encodeURIComponent(subject) +
+      "&body=" + encodeURIComponent(body);
+  }
+
+  function promptEmailShare(share) {
+    if (!share || !share.url) {
+      alert("Share URL unavailable (created before token storage).");
+      return;
+    }
+    let email = prompt("Send share link to email address:");
+    if (email === null) return;
+    email = String(email).trim();
+    if (!email) return;
+    return authApi("share_email", { id: share.id, email: email })
+      .then(function (data) {
+        if (data && data.sent) {
+          alert("Email sent to " + email);
+          return;
+        }
+        mailtoShare(share.url, share.name, share.expires_at);
+        alert("Server mail was not sent (check MTA / NEXVUE_MAIL_FROM). Opened your mail client instead.");
+      })
+      .catch(function (e) {
+        mailtoShare(share.url, share.name, share.expires_at);
+        alert((e && e.message ? e.message + " — " : "") + "Opened your mail client instead.");
+      });
+  }
+
+  function showCreatedUrl(share) {
+    const once = document.getElementById("share-once");
+    const url = share && share.url ? share.url : "";
+    once.hidden = false;
+    once.innerHTML = "";
+    const lab = document.createElement("div");
+    lab.textContent = url ? "Link ready (copied to clipboard when possible):" : "Share created.";
+    once.appendChild(lab);
+    if (!url) return;
+    const code = document.createElement("code");
+    code.className = "share-url";
+    code.textContent = url;
+    once.appendChild(code);
+    const actions = document.createElement("div");
+    actions.className = "once-actions";
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.textContent = "Copy";
+    const ok = document.createElement("div");
+    ok.className = "once-ok";
+    copyBtn.onclick = function () {
+      copyText(url).then(function () { ok.textContent = "Copied."; })
+        .catch(function () { ok.textContent = "Copy failed — select the URL above."; });
+    };
+    const mailBtn = document.createElement("button");
+    mailBtn.type = "button";
+    mailBtn.textContent = "Email…";
+    mailBtn.onclick = function () { promptEmailShare(share); };
+    actions.appendChild(copyBtn);
+    actions.appendChild(mailBtn);
+    once.appendChild(actions);
+    once.appendChild(ok);
+    copyText(url).then(function () { ok.textContent = "Copied to clipboard."; })
+      .catch(function () { ok.textContent = "Could not auto-copy — use Copy."; });
+  }
+
   function openShareEditor(s) {
     const editing = !!(s && s.id);
     document.getElementById("share-dlg-title").textContent =
@@ -344,8 +445,16 @@
     (data.shares || []).forEach(function (s) {
       const tr = document.createElement("tr");
       const who = s.created_by_username || s.created_by || "—";
-      tr.innerHTML = `<td>${esc(s.name)}</td><td>${esc((s.channels || []).join(", "))}</td><td>${esc(s.expires_at)}</td><td>${esc(who)}</td><td class="status-${esc(s.status)}">${esc(s.status)}</td><td></td>`;
+      tr.innerHTML = `<td>${esc(s.name)}</td><td>${esc((s.channels || []).join(", "))}</td><td>${esc(s.expires_at)}</td><td>${esc(who)}</td><td class="status-${esc(s.status)}">${esc(s.status)}</td><td class="share-row-actions"></td>`;
       const td = tr.lastElementChild;
+      if (s.url && s.status === "active") {
+        td.appendChild(btn("Copy", function () {
+          return copyText(s.url).catch(function () { alert("Copy failed"); });
+        }));
+        td.appendChild(document.createTextNode(" "));
+        td.appendChild(btn("Email", function () { return promptEmailShare(s); }));
+        td.appendChild(document.createTextNode(" "));
+      }
       if (s.status === "active" || s.status === "expired") {
         td.appendChild(btn("Edit", function () { openShareEditor(s); }));
         td.appendChild(document.createTextNode(" "));
@@ -544,13 +653,12 @@
         await authApi("share_update", body);
         document.getElementById("share-dlg").close();
         document.getElementById("share-once").hidden = true;
+        document.getElementById("share-once").innerHTML = "";
         loadShares();
       } else {
         const data = await authApi("share_create", body);
         document.getElementById("share-dlg").close();
-        const once = document.getElementById("share-once");
-        once.hidden = false;
-        once.textContent = "Copy now (token shown once): " + (data.share && data.share.url ? data.share.url : "");
+        showCreatedUrl(data.share || {});
         loadShares();
       }
     } catch (e) {

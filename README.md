@@ -211,13 +211,17 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   shares capped at **4**, matching dual/quad panes), absolute expiry **or**
   duration (always required; no open-ended), revocable. Admin sees all tokens
   + creator; sharer sees own. URL form `/index.html?t=<token>` or
-  `/multiview.html?t=<token>` (token shown once). Opening a Multiview share
+  `/multiview.html?t=<token>` — raw token is stored so the **same URL** can be
+  re-copied (or emailed) anytime while active; Create also auto-copies to the
+  clipboard. Share viewers see remaining time next to `share:<name>` in the
+  top nav. Opening a Multiview share
   **auto-tunes** panes from the token's channel list (Dual for 1–2, Quad for
   3–4; order preserved from create). Admin can **Edit** name/channels/expiry
   (token URL unchanged) and **Delete** revoked/expired rows; sharers can
   Delete their own revoked/expired shares. Rows whose `expires_at` is more
   than **7 days** in the past are hard-deleted opportunistically on
-  `shares_list` (no cron).
+  `shares_list` (no cron). Email uses `share_email` / `mail()` when an MTA
+  is available (`NEXVUE_MAIL_FROM`), else falls back to `mailto:`.
 - **Player audio defaults (first visit):** volume 20%, muted, VU meters off
   (`nexvue-vu.js` localStorage). Existing prefs unchanged.
 - **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`

@@ -142,6 +142,33 @@ echo json_encode([
         self.assertFalse(data["after"])
         self.assertTrue(data["has_token"])
 
+    def test_share_token_persisted_same_url(self) -> None:
+        data = self._php(
+            """
+$admin = auth_user_find_by_username('admin');
+$exp = gmdate('Y-m-d\\TH:i:s\\Z', time() + 3600);
+$c = auth_share_create('Persist', ['ch0'], $exp, $admin['id'], 'multiview');
+$row = auth_share_find_by_id($c['row']['id']);
+$pub = auth_share_row_public($row);
+$list = auth_shares_list($admin['id']);
+$found = null;
+foreach ($list as $s) {
+  if ($s['id'] === $c['row']['id']) { $found = $s; break; }
+}
+echo json_encode([
+  'stored_token' => ($row['token'] ?? '') === $c['token'],
+  'page' => $row['page'] ?? null,
+  'url' => $pub['url'] ?? null,
+  'list_url' => $found['url'] ?? null,
+  'same' => ($pub['url'] ?? '') === ($found['url'] ?? '') && str_contains((string)($pub['url'] ?? ''), 'multiview.html?t='),
+]);
+"""
+        )
+        self.assertTrue(data["stored_token"])
+        self.assertEqual(data["page"], "multiview")
+        self.assertTrue(data["same"])
+        self.assertIn("multiview.html?t=", data["url"])
+
     def test_share_update_and_delete(self) -> None:
         data = self._php(
             """
@@ -192,12 +219,13 @@ foreach ([['stale', $old], ['fresh-expired', $recent], ['live', $future]] as $pa
   [$name, $ex] = $pair;
   $id = auth_uuid();
   $st = $db->prepare(
-    'INSERT INTO share_links (id, name, token_hash, channels, expires_at, revoked_at, created_by, created_at, updated_at, synced_at)
-     VALUES (:id, :n, :th, :ch, :ex, NULL, :cb, :c, :up, NULL)'
+    'INSERT INTO share_links (id, name, token_hash, token, page, channels, expires_at, revoked_at, created_by, created_at, updated_at, synced_at)
+     VALUES (:id, :n, :th, NULL, :pg, :ch, :ex, NULL, :cb, :c, :up, NULL)'
   );
   $st->bindValue(':id', $id, SQLITE3_TEXT);
   $st->bindValue(':n', $name, SQLITE3_TEXT);
   $st->bindValue(':th', auth_hash_token(bin2hex(random_bytes(8))), SQLITE3_TEXT);
+  $st->bindValue(':pg', 'player', SQLITE3_TEXT);
   $st->bindValue(':ch', '["ch0"]', SQLITE3_TEXT);
   $st->bindValue(':ex', $ex, SQLITE3_TEXT);
   $st->bindValue(':cb', $admin['id'], SQLITE3_TEXT);

@@ -11,6 +11,7 @@
 
   var AUTH_URL = "nexvue-auth.php";
   var _user = null;
+  var _shareExpTimer = null;
 
   function api(action, body) {
     var opts = {
@@ -119,6 +120,80 @@
     });
   }
 
+  function formatShareRemaining(expiresAt) {
+    var end = Date.parse(expiresAt);
+    if (!Number.isFinite(end)) return "";
+    var ms = end - Date.now();
+    if (ms <= 0) return "expired";
+    var s = Math.floor(ms / 1000);
+    var d = Math.floor(s / 86400);
+    s -= d * 86400;
+    var h = Math.floor(s / 3600);
+    s -= h * 3600;
+    var m = Math.floor(s / 60);
+    if (d > 0) return d + "d " + h + "h left";
+    if (h > 0) return h + "h " + m + "m left";
+    if (m > 0) return m + "m left";
+    return "<1m left";
+  }
+
+  function stopShareExpiryTicker() {
+    if (_shareExpTimer) {
+      clearInterval(_shareExpTimer);
+      _shareExpTimer = null;
+    }
+  }
+
+  function ensureShareNavCss() {
+    if (document.getElementById("nexvue-share-nav-css")) return;
+    var s = document.createElement("style");
+    s.id = "nexvue-share-nav-css";
+    s.textContent =
+      ".topnav .nav-share-left{color:var(--dim);font-weight:400;opacity:.85;}" +
+      ".topnav .nav-who{max-width:min(42vw,320px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}";
+    document.head.appendChild(s);
+  }
+
+  function paintShareWho(who, user) {
+    ensureShareNavCss();
+    var name = user && user.name ? user.name : "";
+    var rem = user && user.expires_at ? formatShareRemaining(user.expires_at) : "";
+    who.textContent = "";
+    var label = document.createElement("span");
+    label.textContent = "share:" + name;
+    who.appendChild(label);
+    if (rem) {
+      who.appendChild(document.createTextNode(" "));
+      var left = document.createElement("span");
+      left.className = "nav-share-left";
+      left.textContent = "· " + rem;
+      left.title = user.expires_at
+        ? "Share expires " + user.expires_at
+        : "Share time remaining";
+      who.appendChild(left);
+    }
+  }
+
+  function startShareExpiryTicker(who, user) {
+    stopShareExpiryTicker();
+    if (!who || !user || user.auth !== "share" || !user.expires_at) return;
+    paintShareWho(who, user);
+    _shareExpTimer = setInterval(function () {
+      if (!_user || _user.auth !== "share") {
+        stopShareExpiryTicker();
+        return;
+      }
+      var rem = formatShareRemaining(_user.expires_at);
+      paintShareWho(who, _user);
+      if (rem === "expired") {
+        stopShareExpiryTicker();
+        // Session is dead server-side; bounce to login on next API call.
+        // Soft nudge here so the viewer notices.
+        who.title = "This share link has expired";
+      }
+    }, 30000);
+  }
+
   function applyNav(user) {
     var role = user && user.role;
     var isShare = user && user.auth === "share";
@@ -134,6 +209,7 @@
       logout.hidden = false;
       logout.onclick = function (ev) {
         ev.preventDefault();
+        stopShareExpiryTicker();
         api("logout", {}).finally(function () {
           global.location.href = "/login.html";
         });
@@ -142,10 +218,13 @@
     var who = document.getElementById("nav-who");
     if (who) {
       if (isShare) {
-        who.textContent = "share:" + (user.name || "");
-      } else if (user && user.username) {
-        var roleLabel = user.role === "sharer" ? "Viewer+Share" : user.role;
-        who.textContent = user.username + " (" + roleLabel + ")";
+        startShareExpiryTicker(who, user);
+      } else {
+        stopShareExpiryTicker();
+        if (user && user.username) {
+          var roleLabel = user.role === "sharer" ? "Viewer+Share" : user.role;
+          who.textContent = user.username + " (" + roleLabel + ")";
+        }
       }
       who.hidden = false;
     }

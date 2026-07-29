@@ -137,7 +137,8 @@ this box can't get additional ports opened.
   (Users admin UI + Player/Multiview Share for admin/sharer; sharer sees own
   tokens only; Multiview shares ≤4 channels and auto-tune panes on open;
   Multiview Fullscreen is frameless (html:fullscreen hides chrome/borders);
-  admin edit + delete revoked/expired;
+  raw share token stored for re-copy/email of the same URL; share viewers see
+  time-left in the top nav; admin edit + delete revoked/expired;
   expired rows purged 7d after expires_at), MediaMTX JWT + local
   JWKS, long-lived publish JWT in `nexvue.env`, sync-shaped export/import
   on `nexvue-auth.php` for a future portal. Auth SQLite + keys live under

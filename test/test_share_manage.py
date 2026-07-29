@@ -24,18 +24,37 @@ class TestShareManage(unittest.TestCase):
         api = (ROOT / "nexvue-auth.php").read_text(encoding="utf-8")
         self.assertIn("share_update", api)
         self.assertIn("share_delete", api)
+        self.assertIn("share_email", api)
         self.assertIn("revoke the share before deleting", api)
+
+    def test_auth_lib_stores_share_token(self) -> None:
+        lib = (ROOT / "nexvue-auth-lib.php").read_text(encoding="utf-8")
+        self.assertIn("NEXVUE_AUTH_SCHEMA_VERSION = 3", lib)
+        self.assertIn("function auth_share_build_url", lib)
+        self.assertIn("auth_try_mail_share", lib)
+        self.assertIn("token, page, channels", lib)
 
     def test_users_ui_edit_delete(self) -> None:
         html = (ROOT / "users.html").read_text(encoding="utf-8")
         self.assertIn("openShareEditor", html)
         self.assertIn('authApi("share_update"', html)
         self.assertIn('authApi("share_delete"', html)
+        self.assertIn("showCreatedUrl", html)
+        self.assertIn("promptEmailShare", html)
+        self.assertIn('authApi("share_email"', html)
 
     def test_share_ui_delete(self) -> None:
         js = (ROOT / "nexvue-share-ui.js").read_text(encoding="utf-8")
         self.assertIn('share_delete', js)
         self.assertIn("Permanently delete share", js)
+        self.assertIn("Copied to clipboard", js)
+        self.assertIn("promptEmailShare", js)
+
+    def test_share_viewer_sees_time_left(self) -> None:
+        js = (ROOT / "nexvue-auth-gate.js").read_text(encoding="utf-8")
+        self.assertIn("formatShareRemaining", js)
+        self.assertIn("nav-share-left", js)
+        self.assertIn("startShareExpiryTicker", js)
 
 
 if __name__ == "__main__":

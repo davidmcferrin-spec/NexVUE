@@ -40,7 +40,7 @@
       ".nv-share-inner input[type=checkbox]{width:auto;margin:0;padding:0;accent-color:var(--acc);}" +
       ".nv-share-ch{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;font-size:12px;}" +
       ".nv-share-ch label{display:flex;gap:4px;align-items:center;margin:0;color:var(--text);}" +
-      ".nv-share-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;}" +
+      ".nv-share-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap;}" +
       ".nv-share-actions button{background:var(--bg);color:var(--text);border:1px solid var(--edge);" +
       "border-radius:4px;padding:6px 10px;font:inherit;font-size:12px;cursor:pointer;}" +
       ".nv-share-actions button.primary{background:var(--acc);color:var(--on-acc);border-color:var(--acc);font-weight:600;}" +
@@ -48,11 +48,20 @@
       ".nv-share-err{color:var(--bad);font-size:12px;margin-top:8px;}" +
       ".nv-share-once{background:var(--bg);border:1px dashed var(--acc);padding:8px;margin-top:8px;" +
       "font-size:11px;word-break:break-all;}" +
+      ".nv-share-once .nv-share-url{display:block;margin:6px 0;}" +
+      ".nv-share-once-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}" +
+      ".nv-share-once-actions button{background:var(--bg);color:var(--text);border:1px solid var(--edge);" +
+      "border-radius:4px;padding:4px 8px;font:inherit;font-size:11px;cursor:pointer;}" +
+      ".nv-share-ok{color:var(--ok);font-size:11px;margin-top:4px;}" +
       ".nv-share-list{margin-top:14px;border-top:1px solid var(--edge);padding-top:10px;}" +
       ".nv-share-list h4{margin:0 0 8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}" +
       ".nv-share-list table{width:100%;border-collapse:collapse;font-size:11px;}" +
       ".nv-share-list th,.nv-share-list td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--edge);vertical-align:top;}" +
-      ".nv-share-list th{color:var(--muted);}";
+      ".nv-share-list th{color:var(--muted);}" +
+      ".nv-share-list td.nv-share-row-actions{white-space:nowrap;}" +
+      ".nv-share-list td.nv-share-row-actions button{margin:0 2px 2px 0;background:var(--bg);color:var(--text);" +
+      "border:1px solid var(--edge);border-radius:4px;padding:3px 6px;font:inherit;font-size:11px;cursor:pointer;}" +
+      ".nv-share-list td.nv-share-row-actions button.danger{color:var(--bad);border-color:var(--bad);}";
     document.head.appendChild(s);
   }
 
@@ -68,6 +77,128 @@
     var p = String(path || "").toLowerCase();
     if (/^ch[0-7]lo$/.test(p)) return p.slice(0, -2);
     return p;
+  }
+
+  function copyText(text) {
+    if (!text) return Promise.reject(new Error("nothing to copy"));
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function (resolve, reject) {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        if (!document.execCommand("copy")) {
+          reject(new Error("copy failed"));
+        } else {
+          resolve();
+        }
+      } catch (e) {
+        reject(e);
+      } finally {
+        document.body.removeChild(ta);
+      }
+    });
+  }
+
+  function mailtoShare(url, name, expiresAt) {
+    var subject = "NexVUE share link: " + (name || "stream");
+    var body =
+      "You have been sent a NexVUE share link.\n\n" +
+      "Name: " +
+      (name || "") +
+      "\n" +
+      "Expires: " +
+      (expiresAt || "") +
+      "\n\n" +
+      "Open:\n" +
+      url +
+      "\n";
+    global.location.href =
+      "mailto:?subject=" +
+      encodeURIComponent(subject) +
+      "&body=" +
+      encodeURIComponent(body);
+  }
+
+  function promptEmailShare(share) {
+    if (!share || !share.url) {
+      alert("Share URL unavailable (created before token storage).");
+      return;
+    }
+    var email = global.prompt("Send share link to email address:");
+    if (email === null) return;
+    email = String(email).trim();
+    if (!email) return;
+    NexVueAuth.api("share_email", { id: share.id, email: email })
+      .then(function (data) {
+        if (data && data.sent) {
+          alert("Email sent to " + email);
+          return;
+        }
+        // Edge boxes often lack a working MTA — fall back to the user's mail client.
+        mailtoShare(share.url, share.name, share.expires_at);
+        alert(
+          "Server mail was not sent (check MTA / NEXVUE_MAIL_FROM). Opened your mail client instead."
+        );
+      })
+      .catch(function (e) {
+        mailtoShare(share.url, share.name, share.expires_at);
+        alert((e && e.message ? e.message + " — " : "") + "Opened your mail client instead.");
+      });
+  }
+
+  function showCreatedUrl(onceEl, share) {
+    var url = share && share.url ? share.url : "";
+    onceEl.hidden = false;
+    onceEl.innerHTML = "";
+    var lab = document.createElement("div");
+    lab.textContent = url ? "Link ready (copied to clipboard when possible):" : "Share created.";
+    onceEl.appendChild(lab);
+    if (url) {
+      var u = document.createElement("code");
+      u.className = "nv-share-url";
+      u.textContent = url;
+      onceEl.appendChild(u);
+      var actions = document.createElement("div");
+      actions.className = "nv-share-once-actions";
+      var copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.textContent = "Copy";
+      copyBtn.onclick = function () {
+        copyText(url)
+          .then(function () {
+            ok.textContent = "Copied.";
+          })
+          .catch(function () {
+            ok.textContent = "Copy failed — select the URL above.";
+          });
+      };
+      var mailBtn = document.createElement("button");
+      mailBtn.type = "button";
+      mailBtn.textContent = "Email…";
+      mailBtn.onclick = function () {
+        promptEmailShare(share);
+      };
+      actions.appendChild(copyBtn);
+      actions.appendChild(mailBtn);
+      onceEl.appendChild(actions);
+      var ok = document.createElement("div");
+      ok.className = "nv-share-ok";
+      onceEl.appendChild(ok);
+      copyText(url)
+        .then(function () {
+          ok.textContent = "Copied to clipboard.";
+        })
+        .catch(function () {
+          ok.textContent = "Could not auto-copy — use Copy.";
+        });
+    }
   }
 
   function mount(opts) {
@@ -243,8 +374,26 @@
               esc(s.expires_at) +
               "</td><td>" +
               esc(s.status) +
-              "</td><td></td>";
+              '</td><td class="nv-share-row-actions"></td>';
             var td = tr.lastElementChild;
+            if (s.url && s.status === "active") {
+              var copy = document.createElement("button");
+              copy.type = "button";
+              copy.textContent = "Copy";
+              copy.onclick = function () {
+                copyText(s.url).catch(function () {
+                  alert("Copy failed");
+                });
+              };
+              td.appendChild(copy);
+              var mail = document.createElement("button");
+              mail.type = "button";
+              mail.textContent = "Email";
+              mail.onclick = function () {
+                promptEmailShare(s);
+              };
+              td.appendChild(mail);
+            }
             if (s.status === "active") {
               var rev = document.createElement("button");
               rev.type = "button";
@@ -311,6 +460,7 @@
       var once = dlg.querySelector("#nv-share-once");
       err.textContent = "";
       once.hidden = true;
+      once.innerHTML = "";
       // Prefer getDefaultChannels order (Multiview pane order) so auto-tune
       // restores the same layout; then any extra checked boxes in DOM order.
       var checkedSet = {};
@@ -366,12 +516,7 @@
       }
       NexVueAuth.api("share_create", body)
         .then(function (data) {
-          var url = data.share && data.share.url ? data.share.url : "";
-          once.hidden = false;
-          once.textContent = "Copy now (token shown once): " + url;
-          if (url && navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(url).catch(function () {});
-          }
+          showCreatedUrl(once, data.share || {});
           loadList();
         })
         .catch(function (e) {
@@ -383,6 +528,7 @@
       dlg.querySelector("#nv-share-name").value = "";
       dlg.querySelector("#nv-share-err").textContent = "";
       dlg.querySelector("#nv-share-once").hidden = true;
+      dlg.querySelector("#nv-share-once").innerHTML = "";
       setDefaults();
       dlg.showModal();
       loadList();

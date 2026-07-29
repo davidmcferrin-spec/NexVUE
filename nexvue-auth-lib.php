@@ -13,6 +13,8 @@
  * Roles: admin | operator | sharer | viewer
  * Share links: named, channel-scoped, mandatory expires_at, revocable,
  * hard-deletable; expired rows purged 7 days after expires_at.
+ * Raw share token is stored (token column) so admins/sharers can re-copy the
+ * same URL; revoke/delete/expiry remain the access controls.
  * User channel ACL: users.channels JSON (NULL = all ch0–ch7).
  */
 
@@ -25,7 +27,7 @@ const NEXVUE_AUTH_RESET_TTL_S = 3600;
 const NEXVUE_AUTH_MAX_CHANNELS = 8; // ch0..ch7 (+ lo)
 /** Keep expired share rows this long after expires_at, then hard-delete. */
 const NEXVUE_AUTH_SHARE_PURGE_GRACE_S = 604800; // 7 days
-const NEXVUE_AUTH_SCHEMA_VERSION = 2;
+const NEXVUE_AUTH_SCHEMA_VERSION = 3;
 
 function auth_dir(): string {
     $o = getenv('NEXVUE_AUTH_DIR');
@@ -153,6 +155,8 @@ CREATE TABLE IF NOT EXISTS share_links (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   token_hash TEXT NOT NULL UNIQUE,
+  token TEXT,
+  page TEXT NOT NULL DEFAULT 'player',
   channels TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   revoked_at TEXT,
@@ -184,9 +188,7 @@ SQL);
                 'must_change_password' => true,
             ]);
         }
-        $db->exec('PRAGMA user_version = ' . (string)NEXVUE_AUTH_SCHEMA_VERSION);
-        $done = true;
-        return;
+        $ver = 1;
     }
     if ($ver < 2) {
         $cols = [];
@@ -199,8 +201,25 @@ SQL);
         if (!isset($cols['channels'])) {
             $db->exec('ALTER TABLE users ADD COLUMN channels TEXT');
         }
-        $db->exec('PRAGMA user_version = 2');
+        $ver = 2;
     }
+    if ($ver < 3) {
+        $cols = [];
+        $info = $db->query('PRAGMA table_info(share_links)');
+        if ($info) {
+            while ($c = $info->fetchArray(SQLITE3_ASSOC)) {
+                $cols[(string)$c['name']] = true;
+            }
+        }
+        if (!isset($cols['token'])) {
+            $db->exec('ALTER TABLE share_links ADD COLUMN token TEXT');
+        }
+        if (!isset($cols['page'])) {
+            $db->exec("ALTER TABLE share_links ADD COLUMN page TEXT NOT NULL DEFAULT 'player'");
+        }
+        $ver = 3;
+    }
+    $db->exec('PRAGMA user_version = ' . (string)NEXVUE_AUTH_SCHEMA_VERSION);
     $done = true;
 }
 
@@ -902,6 +921,28 @@ function auth_users_list(): array {
     return $out;
 }
 
+function auth_share_page_key(?string $page): string {
+    return ($page === 'multiview') ? 'multiview' : 'player';
+}
+
+function auth_share_page_path(string $pageKey): string {
+    return auth_share_page_key($pageKey) === 'multiview' ? 'multiview.html' : 'index.html';
+}
+
+/**
+ * Absolute share URL for a raw token (same URL for the life of the share).
+ */
+function auth_share_build_url(string $token, string $pageKey = 'player', ?string $scheme = null, ?string $host = null): string {
+    if ($scheme === null || $scheme === '') {
+        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    }
+    if ($host === null || $host === '') {
+        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    }
+    return $scheme . '://' . $host . '/' . auth_share_page_path($pageKey)
+        . '?t=' . rawurlencode($token);
+}
+
 function auth_share_row_public(array $row, bool $includeToken = false, ?string $rawToken = null): array {
     $channels = json_decode((string)$row['channels'], true);
     if (!is_array($channels)) {
@@ -921,10 +962,19 @@ function auth_share_row_public(array $row, bool $includeToken = false, ?string $
             $createdByUsername = (string)$owner['username'];
         }
     }
+    $pageKey = auth_share_page_key(isset($row['page']) ? (string)$row['page'] : 'player');
+    $token = $rawToken;
+    if ($token === null || $token === '') {
+        $stored = isset($row['token']) ? (string)$row['token'] : '';
+        if ($stored !== '') {
+            $token = $stored;
+        }
+    }
     $out = [
         'id' => $row['id'],
         'name' => $row['name'],
         'channels' => $channels,
+        'page' => $pageKey,
         'expires_at' => $row['expires_at'],
         'revoked_at' => $row['revoked_at'] ?: null,
         'status' => $status,
@@ -934,13 +984,19 @@ function auth_share_row_public(array $row, bool $includeToken = false, ?string $
         'updated_at' => $row['updated_at'],
         'synced_at' => $row['synced_at'] ?: null,
     ];
-    if ($includeToken && $rawToken !== null) {
-        $out['token'] = $rawToken;
+    if ($token !== null && $token !== '') {
+        $out['url'] = auth_share_build_url($token, $pageKey);
+        if ($includeToken) {
+            $out['token'] = $token;
+        }
     }
     return $out;
 }
 
-function auth_share_create(string $name, array $channels, string $expiresAt, ?string $createdBy): array {
+/**
+ * @param 'player'|'multiview' $pageKey
+ */
+function auth_share_create(string $name, array $channels, string $expiresAt, ?string $createdBy, string $pageKey = 'player'): array {
     $name = trim($name);
     if ($name === '' || strlen($name) > 128) {
         throw new InvalidArgumentException('invalid share name');
@@ -954,17 +1010,20 @@ function auth_share_create(string $name, array $channels, string $expiresAt, ?st
     if (strtotime($expiresAt) <= time()) {
         throw new InvalidArgumentException('expires_at must be in the future');
     }
+    $pageKey = auth_share_page_key($pageKey);
     $raw = bin2hex(random_bytes(32));
     $id = auth_uuid();
     $now = auth_now_iso();
     $db = auth_db();
     $st = $db->prepare(
-        'INSERT INTO share_links (id, name, token_hash, channels, expires_at, revoked_at, created_by, created_at, updated_at, synced_at)
-         VALUES (:id, :n, :th, :ch, :ex, NULL, :cb, :c, :up, NULL)'
+        'INSERT INTO share_links (id, name, token_hash, token, page, channels, expires_at, revoked_at, created_by, created_at, updated_at, synced_at)
+         VALUES (:id, :n, :th, :tok, :pg, :ch, :ex, NULL, :cb, :c, :up, NULL)'
     );
     $st->bindValue(':id', $id, SQLITE3_TEXT);
     $st->bindValue(':n', $name, SQLITE3_TEXT);
     $st->bindValue(':th', auth_hash_token($raw), SQLITE3_TEXT);
+    $st->bindValue(':tok', $raw, SQLITE3_TEXT);
+    $st->bindValue(':pg', $pageKey, SQLITE3_TEXT);
     $st->bindValue(':ch', json_encode($channels, JSON_UNESCAPED_SLASHES), SQLITE3_TEXT);
     $st->bindValue(':ex', $expiresAt, SQLITE3_TEXT);
     $st->bindValue(':cb', $createdBy, $createdBy === null ? SQLITE3_NULL : SQLITE3_TEXT);
@@ -1578,6 +1637,9 @@ function auth_shares_export(?string $since): array {
     while ($row = $r->fetchArray(SQLITE3_ASSOC)) {
         $item = auth_share_row_public($row);
         $item['token_hash'] = $row['token_hash'];
+        if (!empty($row['token'])) {
+            $item['token'] = (string)$row['token'];
+        }
         $out[] = $item;
     }
     return $out;
@@ -1605,22 +1667,26 @@ function auth_shares_import(array $shares): array {
             continue;
         }
         $tokenHash = (string)($s['token_hash'] ?? '');
-        if ($tokenHash === '' && !empty($s['token'])) {
-            $tokenHash = auth_hash_token((string)$s['token']);
+        $rawToken = isset($s['token']) ? (string)$s['token'] : '';
+        if ($tokenHash === '' && $rawToken !== '') {
+            $tokenHash = auth_hash_token($rawToken);
         }
         if ($tokenHash === '') {
             continue;
         }
+        $pageKey = auth_share_page_key(isset($s['page']) ? (string)$s['page'] : 'player');
         $now = auth_now_iso();
         $existing = auth_share_find_by_id($id);
         if ($existing === null) {
             $st = $db->prepare(
-                'INSERT INTO share_links (id, name, token_hash, channels, expires_at, revoked_at, created_by, created_at, updated_at, synced_at)
-                 VALUES (:id, :n, :th, :ch, :ex, :rv, :cb, :c, :up, :sy)'
+                'INSERT INTO share_links (id, name, token_hash, token, page, channels, expires_at, revoked_at, created_by, created_at, updated_at, synced_at)
+                 VALUES (:id, :n, :th, :tok, :pg, :ch, :ex, :rv, :cb, :c, :up, :sy)'
             );
             $st->bindValue(':id', $id, SQLITE3_TEXT);
             $st->bindValue(':n', trim((string)$s['name']), SQLITE3_TEXT);
             $st->bindValue(':th', $tokenHash, SQLITE3_TEXT);
+            $st->bindValue(':tok', $rawToken !== '' ? $rawToken : null, $rawToken !== '' ? SQLITE3_TEXT : SQLITE3_NULL);
+            $st->bindValue(':pg', $pageKey, SQLITE3_TEXT);
             $st->bindValue(':ch', json_encode($channels, JSON_UNESCAPED_SLASHES), SQLITE3_TEXT);
             $st->bindValue(':ex', $expires, SQLITE3_TEXT);
             $st->bindValue(':rv', $s['revoked_at'] ?? null, !empty($s['revoked_at']) ? SQLITE3_TEXT : SQLITE3_NULL);
@@ -1631,11 +1697,13 @@ function auth_shares_import(array $shares): array {
             $st->execute();
         } else {
             $st = $db->prepare(
-                'UPDATE share_links SET name=:n, token_hash=:th, channels=:ch, expires_at=:ex,
+                'UPDATE share_links SET name=:n, token_hash=:th, token=COALESCE(:tok, token), page=:pg, channels=:ch, expires_at=:ex,
                  revoked_at=:rv, updated_at=:up, synced_at=:sy WHERE id=:id'
             );
             $st->bindValue(':n', trim((string)$s['name']), SQLITE3_TEXT);
             $st->bindValue(':th', $tokenHash, SQLITE3_TEXT);
+            $st->bindValue(':tok', $rawToken !== '' ? $rawToken : null, $rawToken !== '' ? SQLITE3_TEXT : SQLITE3_NULL);
+            $st->bindValue(':pg', $pageKey, SQLITE3_TEXT);
             $st->bindValue(':ch', json_encode($channels, JSON_UNESCAPED_SLASHES), SQLITE3_TEXT);
             $st->bindValue(':ex', $expires, SQLITE3_TEXT);
             $st->bindValue(':rv', $s['revoked_at'] ?? null, !empty($s['revoked_at']) ? SQLITE3_TEXT : SQLITE3_NULL);
@@ -1658,6 +1726,25 @@ function auth_try_mail_reset(string $email, string $resetUrl): bool {
     $body = "A password reset was requested for your NexVUE account.\n\n"
         . "Open this link (expires in 1 hour):\n{$resetUrl}\n\n"
         . "If you did not request this, ignore this message.\n";
+    $headers = 'From: ' . $from . "\r\n" . 'Content-Type: text/plain; charset=UTF-8';
+    try {
+        return @mail($email, $subject, $body, $headers);
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function auth_try_mail_share(string $email, string $shareUrl, string $shareName, string $expiresAt): bool {
+    $from = getenv('NEXVUE_MAIL_FROM');
+    if (!is_string($from) || $from === '') {
+        $from = 'nexvue@localhost';
+    }
+    $subject = 'NexVUE share link: ' . $shareName;
+    $body = "You have been sent a NexVUE share link.\n\n"
+        . "Name: {$shareName}\n"
+        . "Expires: {$expiresAt}\n\n"
+        . "Open:\n{$shareUrl}\n\n"
+        . "This link can be revoked by the sender at any time.\n";
     $headers = 'From: ' . $from . "\r\n" . 'Content-Type: text/plain; charset=UTF-8';
     try {
         return @mail($email, $subject, $body, $headers);
