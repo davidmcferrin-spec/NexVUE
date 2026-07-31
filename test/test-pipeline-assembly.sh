@@ -29,7 +29,7 @@ expect_usage_64() {
 	[ "$rc" -eq 64 ] || fail "$1 (expected exit 64, got $rc)"
 }
 
-# T1: single-rendition pipeline (LO explicitly off; stereo fallback on by default)
+# T1: single-rendition pipeline (LO explicitly off)
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false run_encode)
 grep -q "rtsp://127.0.0.1:8554/ch0" <<<"$out" || fail "T1 default RTSP url"
 grep -q "watchdog" <<<"$out" || fail "T1 watchdog present"
@@ -39,40 +39,28 @@ grep -q "deinterlace fields=all method=yadif" <<<"$out" || fail "T1 default meth
 out_jwt=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false NEXVUE_PUBLISH_JWT=test.jwt.token run_encode)
 grep -q 'location=rtsp://127.0.0.1:8554/ch0?jwt=test.jwt.token' <<<"$out_jwt" \
   || fail "T1b HI RTSP must append ?jwt="
-grep -q 'location=rtsp://127.0.0.1:8554/ch0st?jwt=test.jwt.token' <<<"$out_jwt" \
-  || fail "T1b ST RTSP must append ?jwt="
 out_jwt_lo=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true NEXVUE_PUBLISH_JWT=test.jwt.token run_encode)
 grep -q 'location=rtsp://127.0.0.1:8554/ch0lo?jwt=test.jwt.token' <<<"$out_jwt_lo" \
   || fail "T1b LO RTSP must append ?jwt="
-grep -q 'location=rtsp://127.0.0.1:8554/ch0lost?jwt=test.jwt.token' <<<"$out_jwt_lo" \
-  || fail "T1b LOST RTSP must append ?jwt="
 out_nw=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false WATCHDOG_MS=0 run_encode)
 grep -q "watchdog" <<<"$out_nw" && fail "T1 WATCHDOG_MS=0 must omit watchdog"
 grep -q "width=1920,height=1080,framerate=60000/1001" <<<"$out" || fail "T1 normalization caps"
 grep -q "opusenc" <<<"$out" || fail "T1 audio present by default"
 grep -q "audiorate" <<<"$out" || fail "T1 audiorate present (gapless timestamp fix)"
-grep -qE 'tee name=vt([^a-z]|$)' <<<"$out" && fail "T1 no LO video tee when LO disabled"
-grep -q "name=sinkst location=rtsp://127.0.0.1:8554/ch0st" <<<"$out" \
-  || fail "T1 stereo companion sink by default"
-[ "$(grep -o "opusenc" <<<"$out" | wc -l | tr -d ' ')" = "2" ] || fail "T1 8ch+stereo opusenc"
-grep -q "opusenc bitrate=160000" <<<"$out" || fail "T1 default stereo Opus bitrate"
+grep -q "tee" <<<"$out" && fail "T1 no tee when LO disabled"
 
-# T2: LO rendition adds tee, second sink, lo caps, audio tee + stereo companions
+# T2: LO rendition adds tee, second sink, lo caps, audio tee
 out=$(DEVICE_NUMBER=3 CHANNEL_PATH=ch3 LO_ENABLE=true LO_PRESET=720p run_encode)
 grep -q "name=sinklo location=rtsp://127.0.0.1:8554/ch3lo" <<<"$out" || fail "T2 lo sink url"
-grep -q "name=sinkst location=rtsp://127.0.0.1:8554/ch3st" <<<"$out" || fail "T2 st sink url"
-grep -q "name=sinklost location=rtsp://127.0.0.1:8554/ch3lost" <<<"$out" || fail "T2 lost sink url"
 grep -q "tee name=vt" <<<"$out" || fail "T2 video tee"
 grep -q "width=1280,height=720,framerate=30000/1001" <<<"$out" || fail "T2 lo caps"
 grep -q "tee name=at" <<<"$out" || fail "T2 audio tee"
-grep -q "tee name=ast" <<<"$out" || fail "T2 stereo audio tee"
 grep -c "vah264enc" <<<"$out" | grep -q "^2$" || fail "T2 two encoders"
 
-# T3: silent channel drops audio entirely (and stereo companions)
+# T3: silent channel drops audio entirely
 out=$(DEVICE_NUMBER=1 CHANNEL_PATH=ch1 ENABLE_AUDIO=false run_encode)
 grep -q "opusenc" <<<"$out" && fail "T3 audio should be absent"
 grep -q "decklinkaudiosrc" <<<"$out" && fail "T3 audiosrc should be absent"
-grep -q "sinkst" <<<"$out" && fail "T3 no stereo companion without audio"
 
 # T4: top-field mode sets 29.97p normalization
 out=$(DEVICE_NUMBER=2 CHANNEL_PATH=ch2 DEINT_FIELDS=top run_encode)
@@ -195,13 +183,5 @@ done
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 run_encode)
 grep -q "channel-mask=(bitmask)0x400" <<<"$out" || fail "T21 SAP L rides as SL"
 grep -q "channel-mask=(bitmask)0x800" <<<"$out" || fail "T21 SAP R rides as SR"
-
-# T22: STEREO_FALLBACK=false restores 8ch-only publish (no st/lost)
-out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false STEREO_FALLBACK=false run_encode)
-grep -q "sinkst" <<<"$out" && fail "T22 no sinkst when STEREO_FALLBACK=false"
-[ "$(grep -o "opusenc" <<<"$out" | wc -l | tr -d ' ')" = "1" ] || fail "T22 single opusenc when stereo off"
-out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true STEREO_FALLBACK=false run_encode)
-grep -q "sinklost" <<<"$out" && fail "T22 no sinklost when STEREO_FALLBACK=false"
-grep -q "name=sinklo location=rtsp://127.0.0.1:8554/ch0lo" <<<"$out" || fail "T22 LO still present"
 
 echo "All pipeline assembly tests passed."

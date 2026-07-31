@@ -38,11 +38,7 @@
     }
 
     function setChannel(base) {
-      let next = base ? String(base) : null;
-      if (next) {
-        const m = next.toLowerCase().match(/^ch([0-7])(lost|lo|st)?$/);
-        if (m) next = "ch" + m[1];
-      }
+      const next = base && String(base).replace(/lo$/, "");
       if (next === channel && es) return;
       close();
       channel = next || null;

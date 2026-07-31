@@ -16,11 +16,6 @@
 #   encodes: DeckLink sub-devices are exclusive-open, so this CANNOT be a
 #   second service instance; it must live in the same pipeline.
 #
-# v4: stereo fallback companions for Safari/iOS (no multiopus).
-#   STEREO_FALLBACK=true (default) tees the same H.264 + a stereo Opus
-#   (Main L/R) to <CHANNEL_PATH>st and, when LO is on, <CHANNEL_PATH>lost.
-#   Chrome/Edge keep using chN / chNlo (8ch multiopus).
-#
 # Resilience design (v2 carried forward):
 #   - constant output caps (normalization): input format changes never
 #     renegotiate the encoder or drop viewer sessions
@@ -131,7 +126,7 @@ if [ -n "${NEXVUE_PUBLISH_JWT}" ]; then
 fi
 
 # LO rendition (adaptive-bandwidth fallback the portal player can switch to)
-LO_ENABLE="$(strip_inline "${LO_ENABLE:-true}")"
+LO_ENABLE="${LO_ENABLE:-true}"
 LO_PRESET="${LO_PRESET:-360p}"              # 720p|540p|480p|360p|240p|180p
 LO_FPS="${LO_FPS:-30000/1001}"              # 29.97p default: cellular-friendly
 LO_RTSP_URL="${LO_RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}lo}"
@@ -139,23 +134,6 @@ if [ -n "${NEXVUE_PUBLISH_JWT}" ]; then
   case "${LO_RTSP_URL}" in
     *\?*) LO_RTSP_URL="${LO_RTSP_URL}&jwt=${NEXVUE_PUBLISH_JWT}" ;;
     *)    LO_RTSP_URL="${LO_RTSP_URL}?jwt=${NEXVUE_PUBLISH_JWT}" ;;
-  esac
-fi
-
-# Stereo companions for browsers that cannot negotiate 8ch multiopus (Safari).
-# Same HI/LO H.264 bitstream teed after encode; stereo Opus = SDI embeds 1–2.
-STEREO_FALLBACK="$(strip_inline "${STEREO_FALLBACK:-true}")"
-STEREO_AUDIO_BITRATE_BPS="$(strip_inline "${STEREO_AUDIO_BITRATE_BPS:-160000}")"
-ST_RTSP_URL="${ST_RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}st}"
-LOST_RTSP_URL="${LOST_RTSP_URL:-rtsp://127.0.0.1:8554/${CHANNEL_PATH}lost}"
-if [ -n "${NEXVUE_PUBLISH_JWT}" ]; then
-  case "${ST_RTSP_URL}" in
-    *\?*) ST_RTSP_URL="${ST_RTSP_URL}&jwt=${NEXVUE_PUBLISH_JWT}" ;;
-    *)    ST_RTSP_URL="${ST_RTSP_URL}?jwt=${NEXVUE_PUBLISH_JWT}" ;;
-  esac
-  case "${LOST_RTSP_URL}" in
-    *\?*) LOST_RTSP_URL="${LOST_RTSP_URL}&jwt=${NEXVUE_PUBLISH_JWT}" ;;
-    *)    LOST_RTSP_URL="${LOST_RTSP_URL}?jwt=${NEXVUE_PUBLISH_JWT}" ;;
   esac
 fi
 
@@ -204,26 +182,12 @@ esac
 case "${LO_ENABLE}" in true|false) ;; *)
     log "ERROR: LO_ENABLE must be 'true' or 'false'"; exit 64 ;;
 esac
-case "${STEREO_FALLBACK}" in true|false) ;; *)
-    log "ERROR: STEREO_FALLBACK must be 'true' or 'false'"; exit 64 ;;
-esac
 case "${CAPTIONS_ENABLE}" in true|false) ;; *)
     log "ERROR: CAPTIONS_ENABLE must be 'true' or 'false'"; exit 64 ;;
 esac
 case "${AUDIO_FRAME_MS}" in 2|5|10|20|40|60) ;; *)
     log "ERROR: AUDIO_FRAME_MS must be one of 2,5,10,20,40,60"; exit 64 ;;
 esac
-if ! [[ "${STEREO_AUDIO_BITRATE_BPS}" =~ ^[0-9]+$ ]] \
-   || [ "${STEREO_AUDIO_BITRATE_BPS}" -lt 8000 ] \
-   || [ "${STEREO_AUDIO_BITRATE_BPS}" -gt 512000 ]; then
-    log "ERROR: STEREO_AUDIO_BITRATE_BPS must be 8000-512000, got '${STEREO_AUDIO_BITRATE_BPS}'"
-    exit 64
-fi
-# Stereo companions only when audio is on (failure mode is multiopus negotiate).
-STEREO_ACTIVE=false
-if [ "${STEREO_FALLBACK}" = "true" ] && [ "${ENABLE_AUDIO}" = "true" ]; then
-  STEREO_ACTIVE=true
-fi
 # Always ingest + publish all 8 SDI embeds as discrete Opus (no Dolby, no 16ch).
 # Transport channel order (index = embed−1):
 #   0–5: L R C LFE Ls Rs   6–7: SAP_L SAP_R
@@ -371,22 +335,13 @@ fi
 
 # ---- Assemble the pipeline -----------------------------------------------------
 # Video: capture -> [ccextractor] -> watchdog -> deinterlace -> normalize
-#        -> tee -> HI encode -> [vthi tee] -> sink [+ sinkst]
-#           [-> LO scale/rate -> LO encode -> [vtlo tee] -> sinklo [+ sinklost]]
+#        -> tee -> HI encode -> sink   [-> LO scale/rate -> LO encode -> sinklo]
 # Captions (optional): ccextractor.caption -> ccconverter -> FIFO -> decode.py
-# Audio: positioned 8ch PCM -> tee apcm
-#          -> opusenc 8ch -> sink [/ sinklo]
-#          -> audioconvert stereo -> opusenc -> sinkst [/ sinklost]
+# Audio: capture -> Opus once -> tee -> both sinks (same encoded track).
 PIPELINE="rtspclientsink name=sink location=${RTSP_URL} protocols=tcp"
 
 if [ "${LO_ENABLE}" = "true" ]; then
   PIPELINE+=" rtspclientsink name=sinklo location=${LO_RTSP_URL} protocols=tcp"
-fi
-if [ "${STEREO_ACTIVE}" = "true" ]; then
-  PIPELINE+=" rtspclientsink name=sinkst location=${ST_RTSP_URL} protocols=tcp"
-  if [ "${LO_ENABLE}" = "true" ]; then
-    PIPELINE+=" rtspclientsink name=sinklost location=${LOST_RTSP_URL} protocols=tcp"
-  fi
 fi
 
 PIPELINE+=" decklinkvideosrc device-number=${DEVICE_NUMBER} mode=auto"
@@ -410,35 +365,14 @@ PIPELINE+=" ! video/x-raw,format=NV12,width=${OUTPUT_WIDTH},height=${OUTPUT_HEIG
 if [ "${LO_ENABLE}" = "true" ]; then
   PIPELINE+=" ! tee name=vt"
   PIPELINE+=" vt. ! queue max-size-buffers=4 leaky=downstream"
-  PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1"
-  if [ "${STEREO_ACTIVE}" = "true" ]; then
-    PIPELINE+=" ! tee name=vthi"
-    PIPELINE+=" vthi. ! queue max-size-buffers=4 leaky=downstream ! sink."
-    PIPELINE+=" vthi. ! queue max-size-buffers=4 leaky=downstream ! sinkst."
-  else
-    PIPELINE+=" ! sink."
-  fi
+  PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1 ! sink."
   # LO branch: drop to LO_FPS first (cheap), then scale down, then encode.
   PIPELINE+=" vt. ! queue max-size-buffers=4 leaky=downstream"
   PIPELINE+=" ! videorate ! videoscale"
   PIPELINE+=" ! video/x-raw,format=NV12,width=${LO_WIDTH},height=${LO_HEIGHT},framerate=${LO_FPS},pixel-aspect-ratio=1/1"
-  PIPELINE+=" ! ${ENC_LO} ! h264parse config-interval=-1"
-  if [ "${STEREO_ACTIVE}" = "true" ]; then
-    PIPELINE+=" ! tee name=vtlo"
-    PIPELINE+=" vtlo. ! queue max-size-buffers=4 leaky=downstream ! sinklo."
-    PIPELINE+=" vtlo. ! queue max-size-buffers=4 leaky=downstream ! sinklost."
-  else
-    PIPELINE+=" ! sinklo."
-  fi
+  PIPELINE+=" ! ${ENC_LO} ! h264parse config-interval=-1 ! sinklo."
 else
-  PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1"
-  if [ "${STEREO_ACTIVE}" = "true" ]; then
-    PIPELINE+=" ! tee name=vthi"
-    PIPELINE+=" vthi. ! queue max-size-buffers=4 leaky=downstream ! sink."
-    PIPELINE+=" vthi. ! queue max-size-buffers=4 leaky=downstream ! sinkst."
-  else
-    PIPELINE+=" ! sink."
-  fi
+  PIPELINE+=" ! ${ENC_HI} ! h264parse config-interval=-1 ! sink."
 fi
 
 if [ "${ENABLE_AUDIO}" = "true" ]; then
@@ -461,9 +395,7 @@ if [ "${ENABLE_AUDIO}" = "true" ]; then
   # N-ch stream (reorder knob is 1.26+), but CAN position mono — so every
   # embed goes through deinterleave/interleave with a per-branch mono
   # channel-mask. Labels are transport plumbing only; players address by index.
-  # Same 8ch Opus track is teed to HI and LO when LO_ENABLE=true.
-  # Stereo fallback (Safari): tee PCM before opusenc → Main L/R stereo Opus
-  # to sinkst / sinklost.
+  # Same Opus track is teed to HI and LO when LO_ENABLE=true.
   remix_branch() { # $1=deinterleave pad (SDI embed, 0-based)  $2=interleave sink  $3=mono position bitmask
     PIPELINE+=" adl.src_$1 ! queue max-size-buffers=8 leaky=downstream"
     PIPELINE+=" ! audioconvert ! audio/x-raw,channels=1,channel-mask=(bitmask)$3"
@@ -482,38 +414,13 @@ if [ "${ENABLE_AUDIO}" = "true" ]; then
   remix_branch 7 7 0x800  # embed 8 (SAP R) -> SR
   PIPELINE+=" ali. ! audioconvert"
   PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=${OPUS_CHANNELS},channel-mask=(bitmask)0xc3f"
-  if [ "${STEREO_ACTIVE}" = "true" ]; then
-    PIPELINE+=" ! tee name=apcm"
-    PIPELINE+=" apcm. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream"
-    PIPELINE+=" ! opusenc bitrate=${AUDIO_BITRATE_BPS} frame-size=${AUDIO_FRAME_MS}"
-    if [ "${LO_ENABLE}" = "true" ]; then
-      PIPELINE+=" ! tee name=at"
-      PIPELINE+=" at. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream ! sink."
-      PIPELINE+=" at. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream ! sinklo."
-    else
-      PIPELINE+=" ! sink."
-    fi
-    # Stereo Main L/R (FL/FR) for Safari / non-multiopus browsers.
-    PIPELINE+=" apcm. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream"
-    PIPELINE+=" ! audioconvert"
-    PIPELINE+=" ! audio/x-raw,format=S16LE,rate=48000,channels=2,channel-mask=(bitmask)0x3"
-    PIPELINE+=" ! opusenc bitrate=${STEREO_AUDIO_BITRATE_BPS} frame-size=${AUDIO_FRAME_MS}"
-    if [ "${LO_ENABLE}" = "true" ]; then
-      PIPELINE+=" ! tee name=ast"
-      PIPELINE+=" ast. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream ! sinkst."
-      PIPELINE+=" ast. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream ! sinklost."
-    else
-      PIPELINE+=" ! sinkst."
-    fi
+  PIPELINE+=" ! opusenc bitrate=${AUDIO_BITRATE_BPS} frame-size=${AUDIO_FRAME_MS}"
+  if [ "${LO_ENABLE}" = "true" ]; then
+    PIPELINE+=" ! tee name=at"
+    PIPELINE+=" at. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream ! sink."
+    PIPELINE+=" at. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream ! sinklo."
   else
-    PIPELINE+=" ! opusenc bitrate=${AUDIO_BITRATE_BPS} frame-size=${AUDIO_FRAME_MS}"
-    if [ "${LO_ENABLE}" = "true" ]; then
-      PIPELINE+=" ! tee name=at"
-      PIPELINE+=" at. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream ! sink."
-      PIPELINE+=" at. ! queue max-size-buffers=${AUDIO_QUEUE_BUFFERS} leaky=downstream ! sinklo."
-    else
-      PIPELINE+=" ! sink."
-    fi
+    PIPELINE+=" ! sink."
   fi
 fi
 
@@ -530,12 +437,8 @@ if [ "${CAPTIONS_ACTIVE}" = "true" ]; then
   PIPELINE+=" ! filesink location=${CAPTIONS_FIFO} buffer-mode=unbuffered sync=false append=false"
 fi
 
-log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS}/${DEINT_METHOD} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) stereo=${STEREO_ACTIVE} audio=${ENABLE_AUDIO} layout=${AUDIO_LAYOUT}(8ch@${AUDIO_BITRATE_BPS}bps embeds=${AUDIO_EMBEDS:-1-8}) captions=${CAPTIONS_ACTIVE} enc=${VIDEO_ENCODER}"
-_pub="publishing HI to ${RTSP_URL}"
-[ "${LO_ENABLE}" = "true" ] && _pub+=", LO to ${LO_RTSP_URL}"
-[ "${STEREO_ACTIVE}" = "true" ] && _pub+=", ST to ${ST_RTSP_URL}"
-[ "${STEREO_ACTIVE}" = "true" ] && [ "${LO_ENABLE}" = "true" ] && _pub+=", LOST to ${LOST_RTSP_URL}"
-log "${_pub}"
+log "starting: device=${DEVICE_NUMBER} path=${CHANNEL_PATH} deint=${DEINT_FIELDS}/${DEINT_METHOD} hi=${BITRATE_KBPS}kbps lo=${LO_ENABLE}(${LO_BITRATE_KBPS}kbps) audio=${ENABLE_AUDIO} layout=${AUDIO_LAYOUT}(8ch@${AUDIO_BITRATE_BPS}bps embeds=${AUDIO_EMBEDS:-1-8}) captions=${CAPTIONS_ACTIVE} enc=${VIDEO_ENCODER}"
+log "publishing HI to ${RTSP_URL}$([ "${LO_ENABLE}" = "true" ] && echo ", LO to ${LO_RTSP_URL}")"
 
 # Probe DeckLink lock without touching auto-park counters (retry decisions).
 # Prints: locked | unlocked | busy | error | skip

@@ -1002,19 +1002,16 @@ expired; JWT auth is the lasting gate.
   Per-branch mono `channel-mask` through deinterleave/interleave is required:
   decklinkaudiosrc emits `channel-mask=0`, and unpositioned multichannel
   makes opusenc emit mapping family 255 — which has **no RTP payloader**.
-  Positioned input encodes family 1 / MULTIOPUS. With `STEREO_FALLBACK=true`
-  (default), the same H.264 is also published with **stereo Main L/R Opus**
-  as `<path>st` and `<path>lost` (when LO is on) so Safari/iOS can WHEP —
-  those browsers cannot negotiate multiopus. Player / Multiview probe
-  multiopus support and auto-select `st`/`lost` when needed; Chrome/Edge
-  stay on `chN`/`chNlo` with full VU. `AUDIO_LAYOUT`
+  Positioned input encodes family 1 / MULTIOPUS. `AUDIO_LAYOUT`
   (`stereo`|`51`|`stereo_sap`|`51_sap`) is a **player role preset only**
   (Main/SAP/5.1 UI). `AUDIO_EMBEDS` (Settings checkboxes, e.g. `1,2,7,8`)
   chooses which embeds the browser VU offers — metadata only; encode still
   publishes all eight. No 16ch path. Player / Multiview munge the WHEP SDP
-  offer to add `multiopus` (`nexvue-vu.js`, same as MediaMTX `reader.js`)
-  on Chrome/Edge — without that munge MediaMTX returns WHEP **400** on the
-  8ch paths.
+  offer to add `multiopus` (`nexvue-vu.js`, same as MediaMTX `reader.js`) —
+  Chrome does not advertise it in `createOffer()`, and without that munge
+  MediaMTX returns WHEP **400**. Use Chrome/Edge for multichannel Opus.
+  (An experimental Safari stereo companion path in 1.13.0 was rolled back in
+  1.13.1 — it broke playback broadly.)
 - **Ops pages (Services / Settings)** call `nexvue-ops.php`, which uses
   allowlisted sudo wrappers under `/usr/local/bin/nexvue-ops-*` (sudoers drop-in
   `/etc/sudoers.d/nexvue-ops`). Channel saves write env files only; restart is an
