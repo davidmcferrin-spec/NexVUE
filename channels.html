@@ -573,6 +573,7 @@
     AUDIO_EMBEDS: "1,2,3,4,5,6,7,8",
     AUDIO_FRAME_MS: "10",
     AUDIO_BITRATE_BPS: "384000",
+    STEREO_FALLBACK: "true",
     LO_ENABLE: "true",
     LO_PRESET: "360p",
     LO_FPS: "30000/1001",
@@ -681,6 +682,17 @@
       tip: "Bits per second for the 8ch Opus track. Default 384000 (384 kbps). Max 512000 (WebRTC packet-size cliff).",
       depends: { ENABLE_AUDIO: true },
     },
+    STEREO_FALLBACK: {
+      label: "Stereo fallback (Safari)",
+      type: "select",
+      options: ["true", "false"],
+      optionLabels: {
+        true: "On — publish chNst / chNlost",
+        false: "Off — 8ch only (Chrome/Edge)",
+      },
+      tip: "When on (default), also publish the same H.264 with stereo Main L/R Opus as <path>st and <path>lost. Safari/iOS cannot negotiate 8ch multiopus and use these companions automatically. Chrome/Edge stay on chN / chNlo with full VU.",
+      depends: { ENABLE_AUDIO: true },
+    },
     LO_ENABLE: {
       label: "Low-res rendition (LO)",
       type: "select",
@@ -760,10 +772,10 @@
     {
       id: "audio",
       title: "Audio",
-      blurb: "Encode always publishes discrete 8-channel Opus when audio is on. Role and embed checkboxes only change Player / Multiview.",
+      blurb: "Encode always publishes discrete 8-channel Opus when audio is on (plus stereo companions for Safari by default). Role and embed checkboxes only change Player / Multiview on Chrome/Edge.",
       keys: [
         "ENABLE_AUDIO", "AUDIO_LAYOUT", "AUDIO_EMBEDS",
-        "AUDIO_FRAME_MS", "AUDIO_BITRATE_BPS",
+        "AUDIO_FRAME_MS", "AUDIO_BITRATE_BPS", "STEREO_FALLBACK",
       ],
       probe: true,
     },

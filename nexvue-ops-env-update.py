@@ -40,6 +40,8 @@ EDITABLE_KEYS = frozenset({
     "AUDIO_CHANNELS",
     "AUDIO_LAYOUT",
     "AUDIO_EMBEDS",
+    "STEREO_FALLBACK",
+    "STEREO_AUDIO_BITRATE_BPS",
     "DECKLINK_BUFFER_FRAMES",
     "DECKLINK_DROP_NO_SIGNAL_FRAMES",
     "VIDEO_ENCODER",
@@ -213,7 +215,7 @@ def sanitize_value(key: str, value: str) -> str:
         return _require_int(key, value, lo=100, hi=50000)
     if key == "GOP_FRAMES":
         return _require_int(key, value, lo=1, hi=300)
-    if key in ("ENABLE_AUDIO", "LO_ENABLE"):
+    if key in ("ENABLE_AUDIO", "LO_ENABLE", "STEREO_FALLBACK"):
         if value == "":
             return value
         low = value.lower()
@@ -226,7 +228,7 @@ def sanitize_value(key: str, value: str) -> str:
         if value not in AUDIO_FRAME_MS_ALLOWED:
             raise ValueError("AUDIO_FRAME_MS must be one of 2,5,10,20,40,60")
         return value
-    if key == "AUDIO_BITRATE_BPS":
+    if key in ("AUDIO_BITRATE_BPS", "STEREO_AUDIO_BITRATE_BPS"):
         return _require_int(key, value, lo=8000, hi=512000)
     if key == "AUDIO_CHANNELS":
         if value == "":

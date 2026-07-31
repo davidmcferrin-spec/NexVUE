@@ -352,6 +352,12 @@
   let qualityMode = "auto";     // "auto" | "manual"
   let rendition = "hi";         // "hi" | "lo" (current or desired)
   let loAvailable = false;      // does currentBase publish a lo path?
+  // Safari/iOS: no multiopus → WHEP chNst / chNlost (stereo companions).
+  let whepStereoFallback = false;
+  async function refreshWhepPathMode() {
+    whepStereoFallback = !(await NexVueVu.supportsMultiopus());
+    return whepStereoFallback;
+  }
   let prevBytes = 0, prevTs = 0;
   let prevLost = 0, prevRecv = 0, haveLossBaseline = false;
   let badSeconds = 0, goodSeconds = 0, lastSwitchMs = 0;
@@ -435,7 +441,15 @@
   }
 
   function pathFor(rend) {
+    if (!currentBase) return "";
+    if (whepStereoFallback) {
+      return rend === "lo" ? `${currentBase}lost` : `${currentBase}st`;
+    }
     return rend === "lo" ? `${currentBase}lo` : currentBase;
+  }
+
+  function loPathName(base) {
+    return whepStereoFallback ? `${base}lost` : `${base}lo`;
   }
 
   function updateQualityUI() {
@@ -547,7 +561,7 @@
       reconnectTimer = null;
       if (intentionalDisconnect || !currentBase) return;
       setState(`reconnecting… (attempt ${reconnectAttempt})`, "bad");
-      openSession(pathFor(rend));
+      refreshWhepPathMode().then(() => openSession(pathFor(rend)));
     }, RECONNECT_MS);
   }
 
@@ -632,8 +646,13 @@
       if (!video.srcObject) video.srcObject = ev.streams[0];
       // VU takes the MediaStream for meters + optional solo; element stays muted.
       if (vu && ev.streams[0]) {
-        const layout = audioLayoutByPath[currentBase] || "51_sap";
-        const embeds = audioEmbedsByPath[currentBase] || [1, 2, 3, 4, 5, 6, 7, 8];
+        // Stereo companions are Main L/R only — skip 8ch VU role presets.
+        const layout = whepStereoFallback
+          ? "stereo"
+          : (audioLayoutByPath[currentBase] || "51_sap");
+        const embeds = whepStereoFallback
+          ? [1, 2]
+          : (audioEmbedsByPath[currentBase] || [1, 2, 3, 4, 5, 6, 7, 8]);
         vu.setStream(ev.streams[0], layout, embeds);
         // Default audible unless user previously chose Mute (this browser).
         vu.setListen(!NexVueVu.getMutedPref());
@@ -722,6 +741,11 @@
 
   function applyVuForBase(base) {
     if (!vu || !base) return;
+    if (whepStereoFallback) {
+      vu.setLayout("stereo");
+      vu.setEmbeds([1, 2]);
+      return;
+    }
     vu.setLayout(audioLayoutByPath[base] || "51_sap");
     vu.setEmbeds(audioEmbedsByPath[base] || [1, 2, 3, 4, 5, 6, 7, 8]);
   }
@@ -736,17 +760,19 @@
     if (rendition === "lo" && !loAvailable) rendition = "hi";
     captionClient.setChannel(base);
     NexVueVu.resume();
-    // Start WHEP immediately — do not wait on aliases/meta (was blocking tune-in).
+    // Probe multiopus before first WHEP (Safari → chNst / chNlost).
+    await refreshWhepPathMode();
     openSession(pathFor(rendition));
     // Refresh layout/embeds in the background; ontrack also applies current map.
     loadChannelMeta().then(() => applyVuForBase(base)).catch(() => {});
   }
 
-  function switchRendition(newRend, reason) {
+  async function switchRendition(newRend, reason) {
     if (!currentBase || newRend === rendition) return;
     rendition = newRend;
     lastSwitchMs = performance.now();
     console.info(`[player] switching to ${newRend.toUpperCase()} (${reason})`);
+    await refreshWhepPathMode();
     openSession(pathFor(newRend));
   }
 
@@ -820,7 +846,7 @@
       for (const p of data.items || []) {
         perPath[p.name] = p.bytesSent || 0;
         total += p.bytesSent || 0;
-        if (currentBase && p.name === `${currentBase}lo` && p.ready !== false)
+        if (currentBase && p.name === loPathName(currentBase) && p.ready !== false)
           loAvailable = true;
         if (p.name === currentPath)
           $("s-viewers").textContent = (p.readers || []).length;

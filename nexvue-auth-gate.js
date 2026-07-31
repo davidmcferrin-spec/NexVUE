@@ -236,6 +236,12 @@
     });
   }
 
+  function channelBase(path) {
+    var p = String(path || "").toLowerCase();
+    var m = p.match(/^ch([0-7])(lost|lo|st)?$/);
+    return m ? "ch" + m[1] : p;
+  }
+
   function channelAllowed(path, user) {
     user = user || _user;
     if (!user) return true;
@@ -247,11 +253,11 @@
     }
     if (!Array.isArray(channels) || channels.length === 0) return false;
     var p = String(path || "").toLowerCase();
-    var base = /^ch[0-7]lo$/.test(p) ? p.slice(0, -2) : p;
+    var base = channelBase(p);
     for (var i = 0; i < channels.length; i++) {
       var c = String(channels[i] || "").toLowerCase();
       if (c === p || c === base) return true;
-      if (/^ch[0-7]lo$/.test(c) && c.slice(0, -2) === base) return true;
+      if (channelBase(c) === base) return true;
     }
     return false;
   }

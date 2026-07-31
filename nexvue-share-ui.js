@@ -75,8 +75,8 @@
 
   function basePath(path) {
     var p = String(path || "").toLowerCase();
-    if (/^ch[0-7]lo$/.test(p)) return p.slice(0, -2);
-    return p;
+    var m = p.match(/^ch([0-7])(lost|lo|st)?$/);
+    return m ? "ch" + m[1] : p;
   }
 
   function copyText(text) {

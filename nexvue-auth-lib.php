@@ -367,25 +367,33 @@ function auth_jwt_encode(array $claims, ?int $ttlS = null): string {
     return $data . '.' . auth_b64url_encode($sig);
 }
 
-/** Normalize channel path list: chN base ids → include lo companions for WHEP. */
+/**
+ * Strip rendition/companion suffix: ch0lo / ch0st / ch0lost → ch0.
+ * Order matters: "lost" before "lo".
+ */
+function auth_channel_base_from_path(string $path): ?string {
+    $path = strtolower(trim($path));
+    if (preg_match('/^ch([0-7])(lost|lo|st)?$/', $path, $m)) {
+        return 'ch' . $m[1];
+    }
+    return null;
+}
+
+/** Normalize channel path list: chN base ids → include lo/st/lost companions for WHEP. */
 function auth_expand_channel_paths(array $channels): array {
     $out = [];
     foreach ($channels as $c) {
         if (!is_string($c)) {
             continue;
         }
-        $c = strtolower(trim($c));
-        if (!preg_match('/^ch[0-7](lo)?$/', $c)) {
+        $base = auth_channel_base_from_path($c);
+        if ($base === null) {
             continue;
         }
-        if (str_ends_with($c, 'lo')) {
-            $base = substr($c, 0, -2);
-            $out[$base] = true;
-            $out[$c] = true;
-        } else {
-            $out[$c] = true;
-            $out[$c . 'lo'] = true;
-        }
+        $out[$base] = true;
+        $out[$base . 'lo'] = true;
+        $out[$base . 'st'] = true;
+        $out[$base . 'lost'] = true;
     }
     return array_keys($out);
 }
@@ -393,8 +401,11 @@ function auth_expand_channel_paths(array $channels): array {
 function auth_all_channel_paths(): array {
     $out = [];
     for ($i = 0; $i < NEXVUE_AUTH_MAX_CHANNELS; $i++) {
-        $out[] = 'ch' . $i;
-        $out[] = 'ch' . $i . 'lo';
+        $base = 'ch' . $i;
+        $out[] = $base;
+        $out[] = $base . 'lo';
+        $out[] = $base . 'st';
+        $out[] = $base . 'lost';
     }
     return $out;
 }

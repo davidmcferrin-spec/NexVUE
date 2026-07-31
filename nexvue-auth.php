@@ -181,14 +181,17 @@ try {
         auth_require_any();
         $path = (string)($body['path'] ?? $_GET['path'] ?? '');
         $path = strtolower(trim($path));
-        if (!preg_match('/^ch[0-7](lo)?$/', $path)) {
+        if (!preg_match('/^ch[0-7](lost|lo|st)?$/', $path)) {
             auth_api_fail(400, 'invalid path');
         }
         $allowed = auth_allowed_channels_for_session();
         if ($allowed === null || !in_array($path, $allowed, true)) {
             auth_api_fail(403, 'channel not allowed');
         }
-        $base = str_ends_with($path, 'lo') ? substr($path, 0, -2) : $path;
+        $base = auth_channel_base_from_path($path);
+        if ($base === null) {
+            auth_api_fail(400, 'invalid path');
+        }
         $me = auth_me_payload();
         $sub = ($me['auth'] ?? '') === 'share'
             ? ('share:' . ($me['share_id'] ?? 'unknown'))

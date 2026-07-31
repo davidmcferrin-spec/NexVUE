@@ -237,8 +237,11 @@ this box can't get additional ports opened.
   Positioned channels are mandatory: decklinkaudiosrc emits channel-mask=0,
   unpositioned multichannel encodes Opus family 255 (no RTP payloader).
   Fix is per-branch mono channel-masks on deinterleave/interleave → family 1
-  / MULTIOPUS. Player / Multiview WHEP offers are SDP-munged (`nexvue-vu.js`
-  `mungeWhepOfferSdp`) for multiopus 3–8. Settings **Detect audio…**
+  / MULTIOPUS. `STEREO_FALLBACK=true` (default) also publishes stereo Main
+  L/R companions `<path>st` / `<path>lost` (same H.264 tee) for Safari/iOS;
+  Player/Multiview auto-select those when multiopus probe fails. Chrome/Edge
+  WHEP offers are SDP-munged (`nexvue-vu.js` `mungeWhepOfferSdp`) for
+  multiopus 3–8 on `chN`/`chNlo`. Settings **Detect audio…**
   (`audio_probe` → `decklink-audio-probe`) suggests role + embeds for
   operator confirm. Per-browser Main↔SAP and 5.1 fold (`localStorage`) —
   never changes encode or other viewers.

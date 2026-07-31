@@ -378,7 +378,9 @@
         const seen = {};
         for (const p of panes) {
           if (!p.base) continue;
-          const b = String(p.base).toLowerCase().replace(/lo$/, "");
+          let b = String(p.base).toLowerCase();
+          const bm = b.match(/^ch([0-7])(lost|lo|st)?$/);
+          if (bm) b = "ch" + bm[1];
           if (seen[b]) continue;
           seen[b] = true;
           out.push(b);
@@ -409,6 +411,12 @@
   let audioPane = -1;    // index of listening pane, or -1
   let audioLayoutByPath = {};
   let audioEmbedsByPath = {};
+  // Safari/iOS: no multiopus → WHEP chNst / chNlost (stereo companions).
+  let whepStereoFallback = false;
+  async function refreshWhepPathMode() {
+    whepStereoFallback = !(await NexVueVu.supportsMultiopus());
+    return whepStereoFallback;
+  }
   // Declared before VU/volume helpers — applyVolumeAll() runs at init and
   // must not hit the const TDZ (would abort the whole script before panes
   // are created, leaving the dual/quad grid empty).
@@ -546,6 +554,10 @@
   }
 
   function pathFor(base) {
+    if (!base) return "";
+    if (whepStereoFallback) {
+      return rendition === "lo" ? `${base}lost` : `${base}st`;
+    }
     return rendition === "lo" ? `${base}lo` : base;
   }
 
@@ -640,8 +652,13 @@
       openPane(pane);
       loadChannelMeta().then(() => {
         if (pane.vu && pane.base === val) {
-          pane.vu.setLayout(audioLayoutByPath[val] || "51_sap");
-          pane.vu.setEmbeds(audioEmbedsByPath[val] || [1, 2, 3, 4, 5, 6, 7, 8]);
+          if (whepStereoFallback) {
+            pane.vu.setLayout("stereo");
+            pane.vu.setEmbeds([1, 2]);
+          } else {
+            pane.vu.setLayout(audioLayoutByPath[val] || "51_sap");
+            pane.vu.setEmbeds(audioEmbedsByPath[val] || [1, 2, 3, 4, 5, 6, 7, 8]);
+          }
         }
       }).catch(() => {});
     });
@@ -792,6 +809,7 @@
     closePane(pane, false);
     pane.intentionalClose = false;
     hidePaneKicked(pane);
+    await refreshWhepPathMode();
     const path = pathFor(pane.base);
     pane.path = path;
     setPaneStatus(pane, `connecting…`);
@@ -808,8 +826,12 @@
       // Always mute the element — audible pane uses Web Audio (VU solo/mix).
       pane.video.muted = true;
       if (pane.vu && ev.streams[0]) {
-        const layout = audioLayoutByPath[pane.base] || "51_sap";
-        const embeds = audioEmbedsByPath[pane.base] || [1, 2, 3, 4, 5, 6, 7, 8];
+        const layout = whepStereoFallback
+          ? "stereo"
+          : (audioLayoutByPath[pane.base] || "51_sap");
+        const embeds = whepStereoFallback
+          ? [1, 2]
+          : (audioEmbedsByPath[pane.base] || [1, 2, 3, 4, 5, 6, 7, 8]);
         pane.vu.setStream(ev.streams[0], layout, embeds);
         pane.vu.setVolume(NexVueVu.getVolumePref(), { persist: false });
         pane.vu.setListen(!userMuted && audioPane === pane.index, { persist: false });
@@ -1181,7 +1203,8 @@
     const seen = {};
     for (const c of raw) {
       let b = String(c || "").toLowerCase();
-      if (/^ch[0-7]lo$/.test(b)) b = b.slice(0, -2);
+      const bm = b.match(/^ch([0-7])(lost|lo|st)?$/);
+      if (bm) b = "ch" + bm[1];
       if (!/^ch[0-7]$/.test(b) || seen[b]) continue;
       if (!NexVueAuth.channelAllowed(b, authUser)) continue;
       seen[b] = true;
@@ -1315,8 +1338,13 @@
           if (label) opt.textContent = label === opt.value ? opt.value : `${label} (${opt.value})`;
         });
         if (p.base && p.vu) {
-          p.vu.setLayout(audioLayoutByPath[p.base] || "51_sap");
-          p.vu.setEmbeds(audioEmbedsByPath[p.base] || [1, 2, 3, 4, 5, 6, 7, 8]);
+          if (whepStereoFallback) {
+            p.vu.setLayout("stereo");
+            p.vu.setEmbeds([1, 2]);
+          } else {
+            p.vu.setLayout(audioLayoutByPath[p.base] || "51_sap");
+            p.vu.setEmbeds(audioEmbedsByPath[p.base] || [1, 2, 3, 4, 5, 6, 7, 8]);
+          }
         }
       });
     } catch { /* optional */ }

@@ -56,6 +56,17 @@ class TestShareManage(unittest.TestCase):
         self.assertIn("nav-share-left", js)
         self.assertIn("startShareExpiryTicker", js)
 
+    def test_stereo_companion_paths_in_auth(self) -> None:
+        lib = (ROOT / "nexvue-auth-lib.php").read_text(encoding="utf-8")
+        self.assertIn("function auth_channel_base_from_path", lib)
+        self.assertIn("lost|lo|st", lib)
+        api = (ROOT / "nexvue-auth.php").read_text(encoding="utf-8")
+        self.assertIn("ch[0-7](lost|lo|st)?", api)
+        enc = (ROOT / "nexvue-encode.sh").read_text(encoding="utf-8")
+        self.assertIn("STEREO_FALLBACK", enc)
+        self.assertIn("sinkst", enc)
+        self.assertIn("sinklost", enc)
+
 
 if __name__ == "__main__":
     unittest.main()
