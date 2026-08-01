@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NexVUE — Users</title>
-<script src="nexvue-ui.js"></script>
+<script src="/assets/nexvue-ui.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
@@ -113,12 +113,12 @@
 <nav class="topnav" aria-label="NexVUE">
   <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
   <img class="nav-logo" alt="" hidden>
-  <a href="/index.html">Player</a>
-  <a href="/multiview.html">Multiview</a>
-  <a href="/metrics.html" data-auth-role="admin,operator">Metrics</a>
-  <a href="/services.html" data-auth-role="admin">Services</a>
-  <a href="/channels.html" data-auth-role="admin,operator">Settings</a>
-  <a href="/users.html" class="active" data-auth-role="admin">Users</a>
+  <a href="/player">Player</a>
+  <a href="/multiview">Multiview</a>
+  <a href="/metrics" data-auth-role="admin,operator">Metrics</a>
+  <a href="/services" data-auth-role="admin">Services</a>
+  <a href="/settings" data-auth-role="admin,operator">Settings</a>
+  <a href="/users" class="active" data-auth-role="admin">Users</a>
   <button type="button" class="theme-toggle" id="theme-toggle">Light</button>
   <span class="nav-who" id="nav-who" hidden></span>
   <button type="button" class="nav-logout" id="nav-logout" hidden>Logout</button>
@@ -229,8 +229,8 @@
   </div>
 </dialog>
 
-<script src="nexvue-qr.js"></script>
-<script src="nexvue-auth-gate.js"></script>
+<script src="/assets/nexvue-qr.js"></script>
+<script src="/assets/nexvue-auth-gate.js"></script>
 <script>
 (async function () {
   const user = await NexVueAuth.requirePage({ roles: ["admin"] });

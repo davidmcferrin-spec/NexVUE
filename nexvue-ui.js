@@ -13,8 +13,8 @@
   "use strict";
 
   var STORAGE_KEY = "nexvue-theme";
-  var LOGO_SRC = "nexvue-logo.php";
-  var VERSION_URL = "nexvue-version.php";
+  var LOGO_SRC = "/api/logo";
+  var VERSION_URL = "/api/version";
   var ROTATE_KEY = "nexvue-video-rotate";
 
   function normalizeRotate(deg) {

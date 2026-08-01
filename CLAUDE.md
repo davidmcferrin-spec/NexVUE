@@ -150,10 +150,14 @@ this box can't get additional ports opened.
   `mediamtx.yml` and restarts mediamtx + enabled encoders. Auth hot path:
   session snapshot cache + `session_write_close` after checks (captions SSE
   must not hold the session lock), aliases read channel `.env` without sudo,
-  Player/Multiview start WHEP before waiting on aliases. HTML is soft-gated
-  by `nexvue-auth-gate.js`; APIs + WHEP JWT enforce access. Central catalog
-  portal + Entra OIDC remain later. Real (non-self-signed) TLS for
-  Apache + WHEP `:8889` still recommended before wider users.
+  Player/Multiview start WHEP before waiting on aliases. **2.0 front door:**
+  Apache DocumentRoot `{webroot}/public` → `index.php` /
+  `nexvue-web-router.php` (server-side session/share gate); pages in
+  `pages/`; JSON under `/api/*`; station key `NEXVUE_API_KEY` (alias
+  `NEXVUE_SYNC_KEY`) for Bearer/`X-NexVUE-Key` sync + `api_ping`. Client gate
+  JS remains for nav roles + WHEP JWT. Central catalog portal + Entra OIDC
+  remain later. Real (non-self-signed) TLS for Apache + WHEP `:8889` still
+  recommended before wider users.
 - **Phase 3: DMZ** — MediaMTX API (`127.0.0.1:9997`) and status
   (`NEXVUE_STATUS_BIND=127.0.0.1:9998`) are loopback-bound; Player uses
   `nexvue-mediamtx-api.php` + `nexvue-status.php`. Remaining: Entra OIDC,
@@ -217,14 +221,14 @@ this box can't get additional ports opened.
   Multiview session metric tiles live in a collapsed bottom drawer
   (Multiview shows the audio-focused pane).
   Top nav: Player / Multiview / Metrics / Services / Settings / Users.
-  Login at `login.html` (session cookie); share links use `?t=` on Player /
-  Multiview (Multiview shares ≤4 channels, auto-tune panes; Fullscreen
-  near-frameless; admin edit name/channels/expiry; delete after revoke/expiry;
-  purge 7d post-expiry). Roles: admin (Users+Services+Settings+Metrics+all shares),
-  operator (Settings+Metrics), sharer / UI **Viewer+Share** (watch + own share
-  links via Player/Multiview Share), viewer (watch). Per-user channel ACL on Users
-  (`users.channels`; null = all). MediaMTX JWT via local JWKS; encoders use
-  `NEXVUE_PUBLISH_JWT`.
+  Login at `/login` (session cookie); share links use `/player?t=` /
+  `/multiview?t=` or `/s/<token>` (Multiview shares ≤4 channels, auto-tune
+  panes; Fullscreen near-frameless; admin edit name/channels/expiry; delete
+  after revoke/expiry; purge 7d post-expiry). Roles: admin
+  (Users+Services+Settings+Metrics+all shares), operator (Settings+Metrics),
+  sharer / UI **Viewer+Share** (watch + own share links via Player/Multiview
+  Share), viewer (watch). Per-user channel ACL on Users (`users.channels`;
+  null = all). MediaMTX JWT via local JWKS; encoders use `NEXVUE_PUBLISH_JWT`.
   Player/Multiview **CC** uses `nexvue-captions.js` + SSE (not WHEP text
   tracks). Player/Multiview **VU / audio program** use `nexvue-vu.js`
   (Web Audio on the WHEP MediaStream). Top-bar **VU** toggle (like CC)

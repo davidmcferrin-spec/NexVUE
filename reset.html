@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NexVUE — Reset password</title>
-<script src="nexvue-ui.js"></script>
+<script src="/assets/nexvue-ui.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
@@ -61,9 +61,9 @@
     <div class="err" id="err"></div>
     <div class="ok" id="ok"></div>
   </form>
-  <div class="links"><a href="/login.html">Back to login</a></div>
+  <div class="links"><a href="/login">Back to login</a></div>
 </div>
-<script src="nexvue-auth-gate.js"></script>
+<script src="/assets/nexvue-auth-gate.js"></script>
 <script>
 (function () {
   const token = new URLSearchParams(location.search).get("token") || "";
@@ -82,7 +82,7 @@
     try {
       await NexVueAuth.api("reset", { token: token, password: a });
       ok.textContent = "Password updated. You can sign in.";
-      setTimeout(function () { location.href = "/login.html"; }, 1200);
+      setTimeout(function () { location.href = "/login"; }, 1200);
     } catch (e) {
       err.textContent = e.message || "reset failed";
     }

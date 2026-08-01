@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NexVUE — Login</title>
-<script src="nexvue-ui.js"></script>
+<script src="/assets/nexvue-ui.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
@@ -68,7 +68,7 @@
       <button type="submit" class="primary">Sign in</button>
       <div class="err" id="login-err"></div>
     </form>
-    <div class="links"><a href="/forgot.html">Forgot password?</a></div>
+    <div class="links"><a href="/forgot">Forgot password?</a></div>
   </div>
 
   <div id="change-box">
@@ -84,11 +84,11 @@
     </form>
   </div>
 </div>
-<script src="nexvue-auth-gate.js"></script>
+<script src="/assets/nexvue-auth-gate.js"></script>
 <script>
 (function () {
   const params = new URLSearchParams(location.search);
-  const next = params.get("next") || "/index.html";
+  const next = params.get("next") || "/player";
   const forceChange = params.get("change") === "1";
 
   function showChange(msg) {

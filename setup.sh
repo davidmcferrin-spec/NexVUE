@@ -61,6 +61,7 @@ REQUIRED_FILES=(
   nexvue-ops.php services.html channels.html
   nexvue-auth-lib.php nexvue-auth.php nexvue-jwks.php nexvue-auth-bootstrap.php
   nexvue-auth-gate.js nexvue-share-ui.js
+  nexvue-web-router.php nexvue-web-apache.conf public/index.php
   nexvue-mediamtx-jwt-patch.py nexvue-jwks-loopback.conf
   login.html forgot.html reset.html users.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
@@ -128,8 +129,10 @@ if command -v a2enmod >/dev/null 2>&1; then
   else
     systemctl enable --now apache2 >/dev/null 2>&1 \
       && ok "apache2 enabled and started" \
-      || warn "could not start apache2 — start it before using /login.html"
+      || warn "could not start apache2 — start it before using /login"
   fi
+  a2enmod rewrite >/dev/null 2>&1 && ok "Apache module enabled: rewrite" \
+    || warn "a2enmod rewrite failed — front-door FallbackResource needs mod_rewrite"
 else
   warn "a2enmod missing — install apache2 + libapache2-mod-php for the web UI"
 fi
@@ -396,41 +399,108 @@ fi
 # Per-unit Services journal clear watermarks (root writes via sudo journal wrapper).
 install -d -m 755 /var/lib/nexvue/journal-cleared
 
-# Apache docroot: player, multiviewer, metrics, ops pages + PHP.
+# App root (pages + PHP APIs). Public front door is ${WEBROOT}/public.
 # Override with NEXVUE_WEBROOT if the site isn't under /var/www/html.
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
-if [ -d "${WEBROOT}" ]; then
+PUBLIC="${WEBROOT}/public"
+PAGES="${WEBROOT}/pages"
+ASSETS="${PUBLIC}/assets"
+if [ -d "${WEBROOT}" ] || mkdir -p "${WEBROOT}" 2>/dev/null; then
+  install -d -m 755 "${PUBLIC}" "${PAGES}" "${ASSETS}"
+  # Front controller
+  install -m 644 "${REPO_DIR}/public/index.php" "${PUBLIC}/index.php"
+  install -m 644 "${REPO_DIR}/nexvue-web-router.php" "${WEBROOT}/nexvue-web-router.php"
+  # HTML pages (not web-enumerable — DocumentRoot is public/)
   install -m 644 "${REPO_DIR}/index.html" \
                  "${REPO_DIR}/multiview.html" \
                  "${REPO_DIR}/metrics.html" \
-                 "${REPO_DIR}/nexvue-metrics.php" \
-                 "${REPO_DIR}/nexvue-status.php" \
-                 "${REPO_DIR}/nexvue-mediamtx-api.php" \
-                 "${REPO_DIR}/nexvue-captions.php" \
-                 "${REPO_DIR}/nexvue-captions.js" \
-                 "${REPO_DIR}/nexvue-qr.js" \
-                 "${REPO_DIR}/nexvue-ui.js" \
-                 "${REPO_DIR}/nexvue-vu.js" \
-                 "${REPO_DIR}/nexvue-logo.php" \
-                 "${REPO_DIR}/nexvue-version.php" \
-                 "${REPO_DIR}/VERSION" \
-                 "${REPO_DIR}/chart.umd.min.js" \
                  "${REPO_DIR}/services.html" \
                  "${REPO_DIR}/channels.html" \
-                 "${REPO_DIR}/nexvue-ops.php" \
-                 "${REPO_DIR}/nexvue-auth-lib.php" \
-                 "${REPO_DIR}/nexvue-auth.php" \
-                 "${REPO_DIR}/nexvue-jwks.php" \
-                 "${REPO_DIR}/nexvue-auth-gate.js" \
-                 "${REPO_DIR}/nexvue-share-ui.js" \
                  "${REPO_DIR}/login.html" \
                  "${REPO_DIR}/forgot.html" \
                  "${REPO_DIR}/reset.html" \
                  "${REPO_DIR}/users.html" \
+                 "${PAGES}/"
+  # Browser assets
+  install -m 644 "${REPO_DIR}/nexvue-captions.js" \
+                 "${REPO_DIR}/nexvue-qr.js" \
+                 "${REPO_DIR}/nexvue-ui.js" \
+                 "${REPO_DIR}/nexvue-vu.js" \
+                 "${REPO_DIR}/nexvue-auth-gate.js" \
+                 "${REPO_DIR}/nexvue-share-ui.js" \
+                 "${REPO_DIR}/chart.umd.min.js" \
+                 "${ASSETS}/"
+  # PHP APIs + lib (served only via /api/* front door; JWKS vhost can reach them)
+  install -m 644 "${REPO_DIR}/nexvue-metrics.php" \
+                 "${REPO_DIR}/nexvue-status.php" \
+                 "${REPO_DIR}/nexvue-mediamtx-api.php" \
+                 "${REPO_DIR}/nexvue-captions.php" \
+                 "${REPO_DIR}/nexvue-logo.php" \
+                 "${REPO_DIR}/nexvue-version.php" \
+                 "${REPO_DIR}/nexvue-ops.php" \
+                 "${REPO_DIR}/nexvue-auth-lib.php" \
+                 "${REPO_DIR}/nexvue-auth.php" \
+                 "${REPO_DIR}/nexvue-jwks.php" \
+                 "${REPO_DIR}/VERSION" \
                  "${WEBROOT}/"
-  ok "web UI installed to ${WEBROOT} (player / multiview / metrics / services / channels / auth / captions / branding)"
+  # Remove legacy flat copies left from pre-2.0 installs (safe allowlist only).
+  for legacy in index.html multiview.html metrics.html services.html channels.html \
+      login.html forgot.html reset.html users.html \
+      nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js \
+      nexvue-auth-gate.js nexvue-share-ui.js chart.umd.min.js; do
+    rm -f "${WEBROOT}/${legacy}"
+  done
+  ok "web UI installed under ${WEBROOT} (public/ front door + pages/ + /api handlers)"
+
+  # Apache: DocumentRoot → public/, FallbackResource → index.php
+  if [ -d /etc/apache2/conf-available ]; then
+    sed "s|@@APP_ROOT@@|${WEBROOT}|g" "${REPO_DIR}/nexvue-web-apache.conf" \
+      > /etc/apache2/conf-available/nexvue-web.conf
+    chmod 644 /etc/apache2/conf-available/nexvue-web.conf
+    if command -v a2enconf >/dev/null 2>&1; then
+      a2enconf nexvue-web >/dev/null 2>&1 || true
+    fi
+    # Point enabled vhosts that still use ${WEBROOT} at ${PUBLIC}.
+    if command -v python3 >/dev/null 2>&1; then
+      python3 - "${WEBROOT}" "${PUBLIC}" <<'PY'
+import pathlib, re, sys
+app, pub = sys.argv[1], sys.argv[2]
+sites = pathlib.Path("/etc/apache2/sites-enabled")
+if not sites.is_dir():
+    raise SystemExit(0)
+pat = re.compile(r'(DocumentRoot\s+)"?' + re.escape(app) + r'"?\s*$')
+for p in sites.iterdir():
+    if not p.is_file() and not p.is_symlink():
+        continue
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError:
+        continue
+    new, n = pat.subn(rf'\1"{pub}"', text, count=0)
+    # Also rewrite DocumentRoot /var/www/html → .../public when exact app root
+    if n == 0:
+        continue
+    try:
+        p.write_text(new, encoding="utf-8")
+        print(f"patched DocumentRoot in {p}")
+    except OSError as e:
+        print(f"warn: could not patch {p}: {e}", file=sys.stderr)
+PY
+    fi
+    if systemctl is-active --quiet apache2 2>/dev/null; then
+      if apache2ctl configtest >/dev/null 2>&1; then
+        systemctl reload apache2 >/dev/null 2>&1 \
+          && ok "apache2 reloaded (front door DocumentRoot ${PUBLIC})" \
+          || warn "apache2 reload failed after nexvue-web conf — restart manually"
+      else
+        warn "apache2ctl configtest failed after nexvue-web conf — not reloading; fix sites-enabled DocumentRoot → ${PUBLIC}"
+      fi
+    fi
+  else
+    warn "Apache conf-available missing — set DocumentRoot to ${PUBLIC} manually"
+  fi
 else
-  warn "Apache docroot ${WEBROOT} missing — after Apache is up: sudo cp index.html multiview.html metrics.html … login.html users.html nexvue-auth*.php ${WEBROOT}/"
+  warn "Apache app root ${WEBROOT} missing — create it and re-run setup.sh"
 fi
 
 install -m 644 "${REPO_DIR}/nexvue-mediamtx-jwt-patch.py" /usr/local/share/nexvue/nexvue-mediamtx-jwt-patch.py
@@ -604,10 +674,21 @@ else
   warn "apache2 not running — sudo systemctl enable --now apache2"
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
+PUBLIC="${WEBROOT}/public"
 if [ -d "${WEBROOT}" ]; then
-  for f in index.html multiview.html metrics.html nexvue-metrics.php nexvue-status.php nexvue-mediamtx-api.php nexvue-captions.php nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-share-ui.js nexvue-logo.php chart.umd.min.js services.html channels.html nexvue-ops.php nexvue-auth.php nexvue-auth-lib.php nexvue-jwks.php nexvue-auth-gate.js login.html forgot.html reset.html users.html; do
+  for f in \
+      public/index.php nexvue-web-router.php \
+      pages/index.html pages/multiview.html pages/metrics.html pages/services.html \
+      pages/channels.html pages/login.html pages/users.html \
+      public/assets/nexvue-ui.js public/assets/nexvue-auth-gate.js \
+      nexvue-auth.php nexvue-ops.php nexvue-jwks.php nexvue-metrics.php VERSION; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
+  if [ -f /etc/apache2/conf-available/nexvue-web.conf ]; then
+    ok "apache front-door conf: nexvue-web.conf (DocumentRoot should be ${PUBLIC})"
+  else
+    warn "nexvue-web.conf missing — UI may still be on a flat docroot"
+  fi
   if [ -d /var/lib/nexvue/branding ]; then
     ok "branding dir: /var/lib/nexvue/branding"
   else

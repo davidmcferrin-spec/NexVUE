@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NexVUE — Forgot password</title>
-<script src="nexvue-ui.js"></script>
+<script src="/assets/nexvue-ui.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
@@ -57,9 +57,9 @@
     <button type="submit" class="primary">Request reset</button>
     <div class="msg" id="msg"></div>
   </form>
-  <div class="links"><a href="/login.html">Back to login</a></div>
+  <div class="links"><a href="/login">Back to login</a></div>
 </div>
-<script src="nexvue-auth-gate.js"></script>
+<script src="/assets/nexvue-auth-gate.js"></script>
 <script>
 document.getElementById("form").addEventListener("submit", async function (ev) {
   ev.preventDefault();

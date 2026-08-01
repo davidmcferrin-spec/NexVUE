@@ -10,7 +10,8 @@
  *   no token rotate). Share token plaintext is stored so the same URL can be
  *   re-copied; revoke/delete/expiry remain the controls.
  * Expired shares are hard-deleted 7 days after expires_at (opportunistic on list).
- * Sync: Bearer NEXVUE_SYNC_KEY may call export/import without a browser session.
+ * API key: Bearer NEXVUE_API_KEY (or legacy NEXVUE_SYNC_KEY) / X-NexVUE-Key
+ *   may call export/import and api_ping without a browser session.
  *
  * CLI include: when PHP_SAPI is cli and NEXVUE_AUTH_HTTP is unset, returns
  * after loading the lib (unit tests).
@@ -76,7 +77,7 @@ if ($action === '') {
 
 // Hot paths (me / whep_jwt / logout): skip migrate — session cache + existing DB.
 try {
-    if (!in_array($action, ['me', 'whep_jwt', 'logout'], true)) {
+    if (!in_array($action, ['me', 'whep_jwt', 'logout', 'api_ping'], true)) {
         auth_migrate();
     }
 } catch (Throwable $e) {
@@ -106,6 +107,23 @@ try {
             auth_api_fail(401, 'unauthorized');
         }
         auth_api_ok(['user' => $me]);
+    }
+
+    // Portal / fleet discovery — requires station API key (not a browser session).
+    if ($action === 'api_ping') {
+        if (!auth_bearer_api_ok()) {
+            auth_api_fail(401, 'unauthorized');
+        }
+        $ver = '';
+        $vp = __DIR__ . '/VERSION';
+        if (is_readable($vp)) {
+            $ver = trim((string)file_get_contents($vp));
+        }
+        auth_api_ok([
+            'service' => 'nexvue-edge',
+            'version' => $ver !== '' ? $ver : null,
+            'api' => 'v1',
+        ]);
     }
 
     if ($action === 'change_password') {
@@ -148,7 +166,7 @@ try {
             $reset = auth_reset_create($row['id']);
             $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
             $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-            $url = $scheme . '://' . $host . '/reset.html?token=' . rawurlencode($reset['token']);
+            $url = $scheme . '://' . $host . '/reset?token=' . rawurlencode($reset['token']);
             if (!empty($row['email'])) {
                 auth_try_mail_reset((string)$row['email'], $url);
             }
@@ -252,7 +270,7 @@ try {
         $reset = auth_reset_create($row['id']);
         $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-        $url = $scheme . '://' . $host . '/reset.html?token=' . rawurlencode($reset['token']);
+        $url = $scheme . '://' . $host . '/reset?token=' . rawurlencode($reset['token']);
         auth_api_ok([
             'user_id' => $row['id'],
             'username' => $row['username'],

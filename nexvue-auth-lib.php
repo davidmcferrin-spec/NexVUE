@@ -428,8 +428,11 @@ function auth_mint_publish_jwt(): string {
     ], NEXVUE_AUTH_PUBLISH_TTL_S);
 }
 
-function auth_read_sync_key(): string {
-    $env = getenv('NEXVUE_SYNC_KEY');
+/**
+ * Read a KEY=value from nexvue.env (unquoted / simple quotes).
+ */
+function auth_read_env_key(string $name): string {
+    $env = getenv($name);
     if (is_string($env) && $env !== '') {
         return $env;
     }
@@ -438,7 +441,8 @@ function auth_read_sync_key(): string {
         return '';
     }
     $raw = (string)file_get_contents($path);
-    if (preg_match('/^\s*NEXVUE_SYNC_KEY=(.*)$/m', $raw, $m)) {
+    $re = '/^\s*' . preg_quote($name, '/') . '=(.*)$/m';
+    if (preg_match($re, $raw, $m)) {
         $v = trim($m[1]);
         if (
             (str_starts_with($v, '"') && str_ends_with($v, '"'))
@@ -449,6 +453,23 @@ function auth_read_sync_key(): string {
         return $v;
     }
     return '';
+}
+
+/**
+ * Station API / sync key. Prefers NEXVUE_API_KEY; falls back to NEXVUE_SYNC_KEY
+ * (legacy name — same credential for portal sync and edge API Bearer auth).
+ */
+function auth_read_api_key(): string {
+    $k = auth_read_env_key('NEXVUE_API_KEY');
+    if ($k !== '') {
+        return $k;
+    }
+    return auth_read_env_key('NEXVUE_SYNC_KEY');
+}
+
+/** @deprecated use auth_read_api_key() */
+function auth_read_sync_key(): string {
+    return auth_read_api_key();
 }
 
 function auth_read_publish_jwt_from_env(): string {
@@ -926,7 +947,8 @@ function auth_share_page_key(?string $page): string {
 }
 
 function auth_share_page_path(string $pageKey): string {
-    return auth_share_page_key($pageKey) === 'multiview' ? 'multiview.html' : 'index.html';
+    // Path front door (legacy *.html redirects still work).
+    return auth_share_page_key($pageKey) === 'multiview' ? 'multiview' : 'player';
 }
 
 /**
@@ -1545,16 +1567,31 @@ function auth_require_any(): array {
     return $me;
 }
 
-function auth_bearer_sync_ok(): bool {
-    $key = auth_read_sync_key();
+/**
+ * True when Authorization: Bearer <NEXVUE_API_KEY|NEXVUE_SYNC_KEY> matches,
+ * or X-NexVUE-Key: <key> (for clients that cannot set Authorization).
+ */
+function auth_bearer_api_ok(): bool {
+    $key = auth_read_api_key();
     if ($key === '') {
         return false;
     }
     $hdr = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-    if (!is_string($hdr) || !preg_match('/^Bearer\s+(.+)$/i', $hdr, $m)) {
-        return false;
+    if (is_string($hdr) && preg_match('/^Bearer\s+(.+)$/i', $hdr, $m)) {
+        if (hash_equals($key, trim($m[1]))) {
+            return true;
+        }
     }
-    return hash_equals($key, trim($m[1]));
+    $x = $_SERVER['HTTP_X_NEXVUE_KEY'] ?? '';
+    if (is_string($x) && $x !== '' && hash_equals($key, trim($x))) {
+        return true;
+    }
+    return false;
+}
+
+/** @deprecated use auth_bearer_api_ok() */
+function auth_bearer_sync_ok(): bool {
+    return auth_bearer_api_ok();
 }
 
 function auth_users_export(?string $since): array {

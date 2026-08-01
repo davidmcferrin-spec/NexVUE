@@ -19,7 +19,7 @@
   Chart.js: prefer vendored chart.umd.min.js (LAN/offline); fall back to
   jsDelivr if the local file is missing. (cdnjs Chart.js/4.4.4 UMD path 404s.)
 -->
-<script src="nexvue-ui.js"></script>
+<script src="/assets/nexvue-ui.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
@@ -185,12 +185,12 @@
 <nav class="topnav" aria-label="NexVUE">
   <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
   <img class="nav-logo" alt="" hidden>
-  <a href="/index.html">Player</a>
-  <a href="/multiview.html">Multiview</a>
-  <a href="/metrics.html" class="active" data-auth-role="admin,operator">Metrics</a>
-  <a href="/services.html" data-auth-role="admin">Services</a>
-  <a href="/channels.html" data-auth-role="admin,operator">Settings</a>
-  <a href="/users.html" data-auth-role="admin">Users</a>
+  <a href="/player">Player</a>
+  <a href="/multiview">Multiview</a>
+  <a href="/metrics" class="active" data-auth-role="admin,operator">Metrics</a>
+  <a href="/services" data-auth-role="admin">Services</a>
+  <a href="/settings" data-auth-role="admin,operator">Settings</a>
+  <a href="/users" data-auth-role="admin">Users</a>
   <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
   <span class="nav-who" id="nav-who" hidden></span>
   <button type="button" class="nav-logout" id="nav-logout" hidden>Logout</button>
@@ -328,8 +328,8 @@
   </div>
 </div>
 
-<script src="nexvue-qr.js"></script>
-<script src="nexvue-auth-gate.js"></script>
+<script src="/assets/nexvue-qr.js"></script>
+<script src="/assets/nexvue-auth-gate.js"></script>
 <script>
 "use strict";
 (async () => {
@@ -379,12 +379,6 @@
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
-  // #region agent log
-  function dbg(hypothesisId, location, message, data) {
-    fetch('http://127.0.0.1:7806/ingest/69e7d629-d3ec-4a1c-8011-9b8c69c866b9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'96b70a'},body:JSON.stringify({sessionId:'96b70a',runId:'post-fix2',hypothesisId,location,message,data,timestamp:Date.now()})}).catch(()=>{});
-  }
-  // #endregion
-
   function loadScript(src) {
     return new Promise((resolve, reject) => {
       const s = document.createElement("script");
@@ -402,7 +396,7 @@
       return "already";
     }
     const candidates = [
-      "chart.umd.min.js",
+      "/assets/chart.umd.min.js",
       "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js",
     ];
     const errors = [];
@@ -411,9 +405,6 @@
         await loadScript(src);
         if (typeof Chart === "function") {
           window.__nexvueChartJsLoad = "ok:" + src;
-          // #region agent log
-          dbg("fix", "metrics.html:ensureChart", "Chart loaded", { src, typeofChart: typeof Chart });
-          // #endregion
           return src;
         }
         errors.push(src + ": loaded but Chart global missing");
@@ -422,9 +413,6 @@
       }
     }
     window.__nexvueChartJsLoad = "error";
-    // #region agent log
-    dbg("A-B", "metrics.html:ensureChart", "Chart load failed", { errors, typeofChart: typeof Chart });
-    // #endregion
     throw new Error("Chart is not defined — tried local chart.umd.min.js and jsDelivr; " + errors.join("; "));
   }
 
@@ -558,9 +546,6 @@
     };
   }
   function makeChart(canvasId, datasets, yScaleConfig) {
-    // #region agent log
-    dbg("A-D-E", "metrics.html:makeChart", "makeChart invoked", { canvasId, typeofChart: typeof Chart, chartJsLoadFlag: window.__nexvueChartJsLoad || "unset" });
-    // #endregion
     const ctx = document.getElementById(canvasId).getContext("2d");
     if (charts[canvasId]) charts[canvasId].destroy();
     charts[canvasId] = new Chart(ctx, { type: "line", data: { datasets }, options: chartOptions(yScaleConfig) });
@@ -586,7 +571,7 @@
     } else {
       params.set("range", range);
     }
-    const res = await fetch(`nexvue-metrics.php?${params}`);
+    const res = await fetch(`/api/metrics?${params}`);
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || `${view} HTTP ${res.status}`);
@@ -622,9 +607,6 @@
       applyViewersResponse(viewers);
       renderHeatmap(weekday.weekday_hours || [], weekday.timezone || reportTz);
       renderHost(host.host || []);
-      // #region agent log
-      dbg("verify", "metrics.html:load-ok", "load() succeeded", { typeofChart: typeof Chart, chartJsLoadFlag: window.__nexvueChartJsLoad || "unset", chartCount: Object.keys(charts).length });
-      // #endregion
       const fromTs = totals.from ?? weekday.from;
       const toTs = totals.to ?? weekday.to;
       const windowLabel = (fromTs != null && toTs != null)
@@ -635,9 +617,6 @@
       });
       setState(`${windowLabel} · ${reportTz} · updated ${updated}`);
     } catch (err) {
-      // #region agent log
-      dbg("A-B", "metrics.html:load-catch", "load() failed", { errMessage: String(err && err.message || err), typeofChart: typeof Chart, chartJsLoadFlag: window.__nexvueChartJsLoad || "unset", online: navigator.onLine });
-      // #endregion
       setState(`error: ${err.message}`, "bad");
     }
   }
@@ -1092,7 +1071,7 @@
     try {
       const body = { action: "kick_viewer", session_id: sessionId };
       if (reason) body.reason = reason;
-      const res = await fetch("nexvue-ops.php", {
+      const res = await fetch("/api/ops", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

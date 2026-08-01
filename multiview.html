@@ -14,7 +14,7 @@
   frameless wall; collapsed stats drawer hides unless already open.
   Reuses the same WHEP + latency-hint pattern as index.html.
 -->
-<script src="nexvue-ui.js"></script>
+<script src="/assets/nexvue-ui.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
@@ -286,12 +286,12 @@
 <nav class="topnav" aria-label="NexVUE">
   <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
   <img class="nav-logo" alt="" hidden>
-  <a href="/index.html">Player</a>
-  <a href="/multiview.html" class="active">Multiview</a>
-  <a href="/metrics.html" data-auth-role="admin,operator">Metrics</a>
-  <a href="/services.html" data-auth-role="admin">Services</a>
-  <a href="/channels.html" data-auth-role="admin,operator">Settings</a>
-  <a href="/users.html" data-auth-role="admin">Users</a>
+  <a href="/player">Player</a>
+  <a href="/multiview" class="active">Multiview</a>
+  <a href="/metrics" data-auth-role="admin,operator">Metrics</a>
+  <a href="/services" data-auth-role="admin">Services</a>
+  <a href="/settings" data-auth-role="admin,operator">Settings</a>
+  <a href="/users" data-auth-role="admin">Users</a>
   <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
   <span class="nav-who" id="nav-who" hidden></span>
   <button type="button" class="nav-logout" id="nav-logout" hidden>Logout</button>
@@ -361,11 +361,11 @@
   </div>
 </div>
 
-<script src="nexvue-qr.js"></script>
-<script src="nexvue-captions.js"></script>
-<script src="nexvue-vu.js"></script>
-<script src="nexvue-auth-gate.js"></script>
-<script src="nexvue-share-ui.js"></script>
+<script src="/assets/nexvue-qr.js"></script>
+<script src="/assets/nexvue-captions.js"></script>
+<script src="/assets/nexvue-vu.js"></script>
+<script src="/assets/nexvue-auth-gate.js"></script>
+<script src="/assets/nexvue-share-ui.js"></script>
 <script>
 "use strict";
 (async () => {
@@ -717,7 +717,7 @@
   async function checkKicked(sessionId) {
     const q = new URLSearchParams({ action: "kick_check" });
     if (sessionId) q.set("session_id", sessionId);
-    const res = await fetch(`nexvue-ops.php?${q}`);
+    const res = await fetch(`/api/ops?${q}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return { kicked: !!data.kicked, reason: data.reason || "" };
@@ -1004,7 +1004,7 @@
   async function pollApiStats() {
     const pane = focusedPane();
     try {
-      const res = await fetch("nexvue-mediamtx-api.php");
+      const res = await fetch("/api/mediamtx");
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
       const now = performance.now();
@@ -1044,7 +1044,7 @@
   async function pollInputStatus() {
     const pane = focusedPane();
     try {
-      const res = await fetch("nexvue-status.php");
+      const res = await fetch("/api/status");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const byIndex = {};
@@ -1293,7 +1293,7 @@
   // Friendly labels + AUDIO_LAYOUT / AUDIO_EMBEDS from ops API when available.
   async function loadChannelMeta() {
     try {
-      const res = await fetch("nexvue-ops.php?action=aliases", {
+      const res = await fetch("/api/ops?action=aliases", {
         cache: "no-store",
         credentials: "same-origin",
       });

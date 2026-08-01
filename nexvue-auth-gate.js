@@ -9,7 +9,7 @@
 (function (global) {
   "use strict";
 
-  var AUTH_URL = "nexvue-auth.php";
+  var AUTH_URL = "/api/auth";
   var _user = null;
   var _shareExpTimer = null;
 
@@ -40,7 +40,7 @@
 
   function redirectLogin(next) {
     var q = next ? ("?next=" + encodeURIComponent(next)) : "";
-    global.location.href = "/login.html" + q;
+    global.location.href = "/login" + q;
   }
 
   function shareTokenFromLocation() {
@@ -100,7 +100,7 @@
         return Promise.reject(new Error("unauthorized"));
       }
       if (user.must_change_password) {
-        global.location.href = "/login.html?change=1&next=" + encodeURIComponent(next);
+        global.location.href = "/login?change=1&next=" + encodeURIComponent(next);
         return Promise.reject(new Error("must_change_password"));
       }
       if (user.auth === "share") {
@@ -112,7 +112,7 @@
         return user;
       }
       if (roles && roles.length && roles.indexOf(user.role) < 0) {
-        global.location.href = "/index.html";
+        global.location.href = "/player";
         return Promise.reject(new Error("forbidden"));
       }
       applyNav(user);
@@ -211,7 +211,7 @@
         ev.preventDefault();
         stopShareExpiryTicker();
         api("logout", {}).finally(function () {
-          global.location.href = "/login.html";
+          global.location.href = "/login";
         });
       };
     }

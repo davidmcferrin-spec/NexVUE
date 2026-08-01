@@ -15,7 +15,7 @@
   WebRTC has no rendition manifest — the browser cannot do this itself; every
   switch is a deliberate reconnect to the other MediaMTX path.
 -->
-<script src="nexvue-ui.js"></script>
+<script src="/assets/nexvue-ui.js"></script>
 <style>
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
@@ -230,12 +230,12 @@
 <nav class="topnav" aria-label="NexVUE">
   <button type="button" class="brand" id="brand" title="Show page URL as QR code">NexVUE</button>
   <img class="nav-logo" alt="" hidden>
-  <a href="/index.html" class="active">Player</a>
-  <a href="/multiview.html">Multiview</a>
-  <a href="/metrics.html" data-auth-role="admin,operator">Metrics</a>
-  <a href="/services.html" data-auth-role="admin">Services</a>
-  <a href="/channels.html" data-auth-role="admin,operator">Settings</a>
-  <a href="/users.html" data-auth-role="admin">Users</a>
+  <a href="/player" class="active">Player</a>
+  <a href="/multiview">Multiview</a>
+  <a href="/metrics" data-auth-role="admin,operator">Metrics</a>
+  <a href="/services" data-auth-role="admin">Services</a>
+  <a href="/settings" data-auth-role="admin,operator">Settings</a>
+  <a href="/users" data-auth-role="admin">Users</a>
   <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
   <span class="nav-who" id="nav-who" hidden></span>
   <button type="button" class="nav-logout" id="nav-logout" hidden>Logout</button>
@@ -319,11 +319,11 @@
   </div>
 </div>
 
-<script src="nexvue-qr.js"></script>
-<script src="nexvue-captions.js"></script>
-<script src="nexvue-vu.js"></script>
-<script src="nexvue-auth-gate.js"></script>
-<script src="nexvue-share-ui.js"></script>
+<script src="/assets/nexvue-qr.js"></script>
+<script src="/assets/nexvue-captions.js"></script>
+<script src="/assets/nexvue-vu.js"></script>
+<script src="/assets/nexvue-auth-gate.js"></script>
+<script src="/assets/nexvue-share-ui.js"></script>
 <script>
 "use strict";
 (async () => {
@@ -522,7 +522,7 @@
   async function checkKicked(sessionId) {
     const q = new URLSearchParams({ action: "kick_check" });
     if (sessionId) q.set("session_id", sessionId);
-    const res = await fetch(`nexvue-ops.php?${q}`);
+    const res = await fetch(`/api/ops?${q}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return { kicked: !!data.kicked, reason: data.reason || "" };
@@ -809,7 +809,7 @@
   // Same-origin proxy → loopback :9997 (apiAddress is not public).
   async function pollApiStats() {
     try {
-      const res = await fetch("nexvue-mediamtx-api.php");
+      const res = await fetch("/api/mediamtx");
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
       const now = performance.now();
@@ -851,7 +851,7 @@
   // Prefer same-origin nexvue-status.php (Apache → loopback :9998) so HTTPS
   // pages are not blocked by mixed content or a second untrusted cert on :9998.
   function statusPollUrl() {
-    return "nexvue-status.php";
+    return "/api/status";
   }
 
   function clearSignalDots() {
@@ -1083,7 +1083,7 @@
     let aliases = {};
     let devices = {};
     try {
-      const res = await fetch("nexvue-ops.php?action=aliases", {
+      const res = await fetch("/api/ops?action=aliases", {
         cache: "no-store",
         credentials: "same-origin",
       });
@@ -1193,7 +1193,7 @@
 
   // ---- Brand QR share ---------------------------------------------------------------
   function sharePageUrl() {
-    const path = location.pathname || "/index.html";
+    const path = location.pathname || "/player";
     const search = location.search || "";
     return `${location.origin}${path}${search}`;
   }

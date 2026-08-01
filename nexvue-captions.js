@@ -46,7 +46,7 @@
         onCue({ text: "", clear: true, seq: 0, service: "CC1" });
         return;
       }
-      const url = "nexvue-captions.php?channel=" + encodeURIComponent(channel);
+      const url = "/api/captions?channel=" + encodeURIComponent(channel);
       es = new EventSource(url);
       es.onmessage = (ev) => {
         let data;

@@ -179,7 +179,7 @@ sudo cp index.html multiview.html metrics.html login.html users.html \
 sudo systemctl restart apache2
 ```
 
-Then open `https://<edge-ip>/login.html` (default bootstrap `admin` /
+Then open `https://<edge-ip>/login` (default bootstrap `admin` /
 `password` — forced change on first login). Top nav → Player / Multiview /
 Metrics / Services / Settings / Users. **Roles gate ops pages** (admin /
 operator / sharer / viewer + named share links). Remove any Apache Basic Auth /
@@ -194,14 +194,23 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   `/var/lib/nexvue/auth.db` is migrated by `setup.sh`). Login error
   `auth store unavailable` almost always means ownership/path — re-run
   `sudo ./setup.sh`.
-- **Page gate:** static HTML is still served by Apache; `nexvue-auth-gate.js`
-  redirects unauthenticated browsers to `/login.html`. APIs
-  (`nexvue-ops.php`, `nexvue-metrics.php`, …) and WHEP JWTs enforce the real
-  access control. Player/Multiview channel pickers honor each user's channel
-  ACL (Users checkboxes; `null`/unset = all ch0–ch7). Share links (`?t=`)
-  remain channel-scoped. After login, hot paths release the PHP session lock
+- **Front door (2.0):** Apache `DocumentRoot` is `{webroot}/public` with
+  `FallbackResource /index.php`. HTML is served only after a **server-side**
+  session/share check (`nexvue-web-router.php`); pages live under `pages/`
+  (not web-enumerable). Path UI: `/player`, `/multiview`, `/metrics`,
+  `/settings`, `/services`, `/users`, `/login`. APIs: `/api/auth`,
+  `/api/ops`, `/api/metrics`, `/api/status`, `/api/mediamtx`, `/api/captions`,
+  `/api/logo`, `/api/version`. Legacy `*.html` / `nexvue-*.php` URLs 301/307
+  to the new paths. `nexvue-auth-gate.js` remains for role chrome + WHEP JWT.
+  WHEP JWTs still enforce media access. Player/Multiview channel pickers honor
+  each user's channel ACL. Share links use `/player?t=` / `/multiview?t=`
+  (or `/s/<token>`). After login, hot paths release the PHP session lock
   immediately (captions SSE must not block status/WHEP) and aliases read
   channel `.env` without sudo.
+- **Station API key:** set `NEXVUE_API_KEY` (or legacy `NEXVUE_SYNC_KEY`) in
+  `/etc/nexvue/nexvue.env`. Callers send `Authorization: Bearer <key>` or
+  `X-NexVUE-Key: <key>` for `users_export` / `shares_export` / import and
+  `api_ping` (portal discovery).
 - **Roles:** `admin` (Users, Services, Settings, Metrics, watch, all shares),
   `operator` (Settings, Metrics, watch), `sharer` (UI label **Viewer+Share** —
   watch + create/revoke own shares from Player/Multiview Share), `viewer`
@@ -210,18 +219,18 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   (`nexvue-share-ui.js`, admin/sharer). Named, one or more channels (Multiview
   shares capped at **4**, matching dual/quad panes), absolute expiry **or**
   duration (always required; no open-ended), revocable. Admin sees all tokens
-  + creator; sharer sees own. URL form `/index.html?t=<token>` or
-  `/multiview.html?t=<token>` — raw token is stored so the **same URL** can be
-  re-copied (or emailed) anytime while active; Create also auto-copies to the
-  clipboard. Share viewers see remaining time next to `share:<name>` in the
-  top nav. Opening a Multiview share
-  **auto-tunes** panes from the token's channel list (Dual for 1–2, Quad for
-  3–4; order preserved from create). Admin can **Edit** name/channels/expiry
-  (token URL unchanged) and **Delete** revoked/expired rows; sharers can
-  Delete their own revoked/expired shares. Rows whose `expires_at` is more
-  than **7 days** in the past are hard-deleted opportunistically on
-  `shares_list` (no cron). Email uses `share_email` / `mail()` when an MTA
-  is available (`NEXVUE_MAIL_FROM`), else falls back to `mailto:`.
+  + creator; sharer sees own. URL form `/player?t=<token>` or
+  `/multiview?t=<token>` (also `/s/<token>`) — raw token is stored so the
+  **same URL** can be re-copied (or emailed) anytime while active; Create also
+  auto-copies to the clipboard. Share viewers see remaining time next to
+  `share:<name>` in the top nav. Opening a Multiview share **auto-tunes**
+  panes from the token's channel list (Dual for 1–2, Quad for 3–4; order
+  preserved from create). Admin can **Edit** name/channels/expiry (token URL
+  unchanged) and **Delete** revoked/expired rows; sharers can Delete their own
+  revoked/expired shares. Rows whose `expires_at` is more than **7 days** in
+  the past are hard-deleted opportunistically on `shares_list` (no cron).
+  Email uses `share_email` / `mail()` when an MTA is available
+  (`NEXVUE_MAIL_FROM`), else falls back to `mailto:`.
 - **Player audio defaults (first visit):** volume 20%, muted, VU meters off
   (`nexvue-vu.js` localStorage). Existing prefs unchanged.
 - **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`
@@ -232,10 +241,11 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   on WHEP (`?jwt=`), long-lived `NEXVUE_PUBLISH_JWT` for encoders. Control
   API remains JWT-excluded for same-box callers (ops kick, metrics,
   `nexvue-mediamtx-api.php`) and is bound to `127.0.0.1:9997`.
-- **Sync-ready API** (no portal client yet): `nexvue-auth.php` actions
-  `users_export` / `users_import` / `shares_export` / `shares_import` with
-  optional `since=` cursor; admin session **or** `Authorization: Bearer`
-  matching `NEXVUE_SYNC_KEY` in `/etc/nexvue/nexvue.env`.
+- **Sync-ready API** (no portal client yet): `/api/auth` actions
+  `users_export` / `users_import` / `shares_export` / `shares_import` /
+  `api_ping` with optional `since=` cursor; admin session **or**
+  `Authorization: Bearer` / `X-NexVUE-Key` matching `NEXVUE_API_KEY`
+  (or legacy `NEXVUE_SYNC_KEY`) in `/etc/nexvue/nexvue.env`.
 - **Forgot password:** creates a one-time reset; emails via `mail()` when the
   user has an email; admins can always copy a reset link from Users.
 - **Tests:** `python3 test/test_nexvue_auth.py`
@@ -317,14 +327,14 @@ journalctl -fu nexvue-encode@0
 Then from a LAN machine:
 
 - **Built-in player:** `http://<edge-ip>:8889/ch0`
-- **Test player with stats:** open `index.html` via Apache (top nav → Player),
+- **Test player with stats:** open `/player` via Apache (top nav → Player),
   click a channel. Session tiles (resolution/fps, bitrate, RTT, loss, SDI
   input, …) live in a bottom drawer — click **Session metrics** to expand
   (collapsed by default). Hover a tile title for ~2s for a short explainer.
   Click the **NexVUE** brand for a QR code of the page URL (phone scan).
   **CC** toggles a selectable closed-caption overlay (CEA-608/CC1 side
   channel — not burned into video; preference in `localStorage`).
-- **Multiviewer:** open `multiview.html` (top nav → Multiview). Dual or quad
+- **Multiviewer:** open `/multiview` (top nav → Multiview). Dual or quad
   layout with a channel dropdown per pane; defaults to LO with a global HI/LO
   toggle; click a pane for audio (one unmuted at a time) and to focus the
   **Session metrics** bottom drawer on that pane. Same NexVUE brand → QR
@@ -332,7 +342,7 @@ Then from a LAN machine:
   **⛶ Fullscreen** hides nav, control bar, pane borders, and per-pane
   channel selectors for a frameless wall; the session-metrics drawer stays
   hidden unless it was already open (Esc / button to exit).
-- **Usage metrics:** top nav → Metrics (`/metrics.html` + `nexvue-metrics.php`
+- **Usage metrics:** top nav → Metrics (`/metrics` + `/api/metrics`
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
   (Follow / Clear view) plus **Clear journal…** for the selected unit
