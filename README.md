@@ -194,19 +194,19 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   `/var/lib/nexvue/auth.db` is migrated by `setup.sh`). Login error
   `auth store unavailable` almost always means ownership/path — re-run
   `sudo ./setup.sh`.
-- **Front door (2.0):** Apache `DocumentRoot` is `{webroot}/public` with
-  `FallbackResource /index.php`. HTML is served only after a **server-side**
-  session/share check (`nexvue-web-router.php`); pages live under `pages/`
-  (not web-enumerable). Path UI: `/player`, `/multiview`, `/metrics`,
-  `/settings`, `/services`, `/users`, `/login`. APIs: `/api/auth`,
-  `/api/ops`, `/api/metrics`, `/api/status`, `/api/mediamtx`, `/api/captions`,
-  `/api/logo`, `/api/version`. Legacy `*.html` / `nexvue-*.php` URLs 301/307
-  to the new paths. `nexvue-auth-gate.js` remains for role chrome + WHEP JWT.
-  WHEP JWTs still enforce media access. Player/Multiview channel pickers honor
-  each user's channel ACL. Share links use `/player?t=` / `/multiview?t=`
-  (or `/s/<token>`). After login, hot paths release the PHP session lock
-  immediately (captions SSE must not block status/WHEP) and aliases read
-  channel `.env` without sudo.
+- **Front door (2.0):** Apache `DocumentRoot` is `{webroot}/public`.
+  `setup.sh` enables `mod_rewrite`, installs `nexvue-web.conf` (`RewriteRule`
+  → `index.php` + `FallbackResource`), patches site `DocumentRoot` to
+  `…/public`, reloads Apache, and smokes `/login` + `/api/version`. HTML is
+  served only after a **server-side** session/share check
+  (`nexvue-web-router.php`); pages live under `pages/` (not web-enumerable).
+  Path UI: `/player`, `/multiview`, `/metrics`, `/settings`, `/services`,
+  `/users`, `/login`. APIs: `/api/auth`, `/api/ops`, `/api/metrics`,
+  `/api/status`, `/api/mediamtx`, `/api/captions`, `/api/logo`, `/api/version`.
+  Legacy `*.html` / `nexvue-*.php` URLs 301/307 to the new paths.
+  `nexvue-auth-gate.js` remains for role chrome + WHEP JWT. WHEP JWTs still
+  enforce media access. Share links use `/player?t=` / `/multiview?t=` (or
+  `/s/<token>`).
 - **Station API key:** set `NEXVUE_API_KEY` (or legacy `NEXVUE_SYNC_KEY`) in
   `/etc/nexvue/nexvue.env`. Callers send `Authorization: Bearer <key>` or
   `X-NexVUE-Key: <key>` for `users_export` / `shares_export` / import and

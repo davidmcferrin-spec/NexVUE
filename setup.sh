@@ -452,52 +452,155 @@ if [ -d "${WEBROOT}" ] || mkdir -p "${WEBROOT}" 2>/dev/null; then
   done
   ok "web UI installed under ${WEBROOT} (public/ front door + pages/ + /api handlers)"
 
-  # Apache: DocumentRoot → public/, FallbackResource → index.php
-  if [ -d /etc/apache2/conf-available ]; then
+  # ---- Apache front door: rewrite + DocumentRoot → public/ --------------------
+  if [ -d /etc/apache2/conf-available ] && command -v a2enmod >/dev/null 2>&1; then
+    a2enmod rewrite >/dev/null 2>&1 \
+      && ok "Apache mod_rewrite enabled (path front door)" \
+      || warn "a2enmod rewrite failed — /player /api/* routing will 404 without it"
+
     sed "s|@@APP_ROOT@@|${WEBROOT}|g" "${REPO_DIR}/nexvue-web-apache.conf" \
       > /etc/apache2/conf-available/nexvue-web.conf
     chmod 644 /etc/apache2/conf-available/nexvue-web.conf
-    if command -v a2enconf >/dev/null 2>&1; then
-      a2enconf nexvue-web >/dev/null 2>&1 || true
-    fi
-    # Point enabled vhosts that still use ${WEBROOT} at ${PUBLIC}.
+    a2enconf nexvue-web >/dev/null 2>&1 \
+      && ok "Apache conf enabled: nexvue-web (RewriteRule → index.php)" \
+      || warn "a2enconf nexvue-web failed"
+
+    # Point vhosts at ${PUBLIC}. Prefer rewriting the real files under
+    # sites-available (sites-enabled is usually a symlink).
     if command -v python3 >/dev/null 2>&1; then
-      python3 - "${WEBROOT}" "${PUBLIC}" <<'PY'
+      PATCH_OUT="$(python3 - "${WEBROOT}" "${PUBLIC}" <<'PY'
 import pathlib, re, sys
-app, pub = sys.argv[1], sys.argv[2]
-sites = pathlib.Path("/etc/apache2/sites-enabled")
-if not sites.is_dir():
-    raise SystemExit(0)
-pat = re.compile(r'(DocumentRoot\s+)"?' + re.escape(app) + r'"?\s*$')
-for p in sites.iterdir():
-    if not p.is_file() and not p.is_symlink():
-        continue
-    try:
-        text = p.read_text(encoding="utf-8")
-    except OSError:
-        continue
-    new, n = pat.subn(rf'\1"{pub}"', text, count=0)
-    # Also rewrite DocumentRoot /var/www/html → .../public when exact app root
-    if n == 0:
-        continue
-    try:
-        p.write_text(new, encoding="utf-8")
-        print(f"patched DocumentRoot in {p}")
-    except OSError as e:
-        print(f"warn: could not patch {p}: {e}", file=sys.stderr)
+app, pub = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+app_s, pub_s = str(app), str(pub)
+# Match DocumentRoot /var/www/html  or  DocumentRoot "/var/www/html"
+# but not already .../public (unless it equals app somehow).
+pat = re.compile(
+    r'^(?P<prefix>\s*DocumentRoot\s+)"?(?P<path>'
+    + re.escape(app_s)
+    + r')/?("?)(?P<suffix>\s*(?:#.*)?)$',
+    re.MULTILINE,
+)
+roots = []
+for dname in ("sites-available", "sites-enabled"):
+    d = pathlib.Path("/etc/apache2") / dname
+    if d.is_dir():
+        roots.append(d)
+seen = set()
+patched = 0
+already = 0
+for d in roots:
+    for p in sorted(d.iterdir()):
+        # Resolve symlinks once so we don't double-write.
+        try:
+            real = p.resolve()
+        except OSError:
+            continue
+        if real in seen or not real.is_file():
+            continue
+        seen.add(real)
+        try:
+            text = real.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        # Skip JWKS loopback conf (must stay on app root for nexvue-jwks.php).
+        if "jwks" in real.name.lower():
+            continue
+        if re.search(
+            r'^\s*DocumentRoot\s+"?' + re.escape(pub_s) + r'/?("|\s|$)',
+            text,
+            re.MULTILINE,
+        ):
+            already += 1
+            continue
+
+        def repl(m: re.Match) -> str:
+            # Preserve quoting style when quotes were used.
+            if '"' in m.group(0):
+                return f'{m.group("prefix")}"{pub_s}"{m.group("suffix")}'
+            return f'{m.group("prefix")}{pub_s}{m.group("suffix")}'
+
+        new, n = pat.subn(repl, text)
+        if n == 0:
+            continue
+        try:
+            real.write_text(new, encoding="utf-8")
+            print(f"patched DocumentRoot → {pub_s} in {real}")
+            patched += n
+        except OSError as e:
+            print(f"warn: could not patch {real}: {e}", file=sys.stderr)
+print(f"SUMMARY {patched} {already}")
 PY
+)"
+      while IFS= read -r line; do
+        case "$line" in
+          patched\ *) ok "$line" ;;
+          SUMMARY\ *)
+            set -- ${line#SUMMARY }
+            _patched="${1:-0}"
+            _already="${2:-0}"
+            if [ "${_patched}" -gt 0 ] 2>/dev/null; then
+              ok "DocumentRoot now ${PUBLIC} (${_patched} replacement(s))"
+            elif [ "${_already}" -gt 0 ] 2>/dev/null; then
+              ok "DocumentRoot already ${PUBLIC}"
+            else
+              warn "no DocumentRoot matched ${WEBROOT} — set DocumentRoot ${PUBLIC} in your SSL/default site manually"
+            fi
+            ;;
+          warn:*) warn "${line#warn: }" ;;
+        esac
+      done <<EOF
+${PATCH_OUT}
+EOF
+    else
+      warn "python3 missing — cannot auto-patch DocumentRoot; set DocumentRoot ${PUBLIC} manually"
     fi
-    if systemctl is-active --quiet apache2 2>/dev/null; then
-      if apache2ctl configtest >/dev/null 2>&1; then
-        systemctl reload apache2 >/dev/null 2>&1 \
-          && ok "apache2 reloaded (front door DocumentRoot ${PUBLIC})" \
-          || warn "apache2 reload failed after nexvue-web conf — restart manually"
+
+    if command -v apache2ctl >/dev/null 2>&1; then
+      if apache2ctl -M 2>/dev/null | grep -q rewrite_module; then
+        ok "apache2ctl: rewrite_module loaded"
       else
-        warn "apache2ctl configtest failed after nexvue-web conf — not reloading; fix sites-enabled DocumentRoot → ${PUBLIC}"
+        warn "rewrite_module not loaded — run: sudo a2enmod rewrite && sudo systemctl reload apache2"
+      fi
+      if apache2ctl configtest >/dev/null 2>&1; then
+        if systemctl is-active --quiet apache2 2>/dev/null; then
+          systemctl reload apache2 >/dev/null 2>&1 \
+            && ok "apache2 reloaded (front door)" \
+            || warn "apache2 reload failed — sudo systemctl restart apache2"
+        fi
+      else
+        warn "apache2ctl configtest failed — not reloading; fix sites and re-run setup.sh"
+        apache2ctl configtest 2>&1 | head -n 20 || true
       fi
     fi
+
+    # Smoke: path rewrite reaches the front controller (login is public HTML).
+    if systemctl is-active --quiet apache2 2>/dev/null; then
+      smoke_ok=false
+      for smoke_url in \
+          "http://127.0.0.1/login" \
+          "https://127.0.0.1/login"; do
+        if curl -fskS --max-time 3 "$smoke_url" 2>/dev/null | grep -qi 'NexVUE'; then
+          ok "front-door smoke OK: $smoke_url"
+          smoke_ok=true
+          break
+        fi
+      done
+      if ! $smoke_ok; then
+        warn "front-door smoke failed (curl /login) — check DocumentRoot is ${PUBLIC} and mod_rewrite is on"
+      fi
+      if curl -fskS --max-time 3 "http://127.0.0.1/api/version" 2>/dev/null \
+          | grep -q '"version"' \
+        || curl -fskS --max-time 3 "https://127.0.0.1/api/version" 2>/dev/null \
+          | grep -q '"version"'; then
+        ok "front-door API smoke OK: /api/version"
+      else
+        warn "front-door API smoke failed (/api/version) — rewrite may not be routing to index.php"
+      fi
+    fi
+  elif [ -d /etc/apache2 ]; then
+    warn "Apache present but conf-available/a2enmod missing — enable rewrite and DocumentRoot ${PUBLIC} manually"
   else
-    warn "Apache conf-available missing — set DocumentRoot to ${PUBLIC} manually"
+    warn "Apache conf-available missing — set DocumentRoot to ${PUBLIC} and enable mod_rewrite manually"
   fi
 else
   warn "Apache app root ${WEBROOT} missing — create it and re-run setup.sh"
@@ -684,10 +787,25 @@ if [ -d "${WEBROOT}" ]; then
       nexvue-auth.php nexvue-ops.php nexvue-jwks.php nexvue-metrics.php VERSION; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
-  if [ -f /etc/apache2/conf-available/nexvue-web.conf ]; then
-    ok "apache front-door conf: nexvue-web.conf (DocumentRoot should be ${PUBLIC})"
+  if [ -f /etc/apache2/conf-enabled/nexvue-web.conf ] || [ -L /etc/apache2/conf-enabled/nexvue-web.conf ]; then
+    ok "apache front-door conf enabled: nexvue-web"
+  elif [ -f /etc/apache2/conf-available/nexvue-web.conf ]; then
+    warn "nexvue-web.conf installed but not enabled — sudo a2enconf nexvue-web && sudo systemctl reload apache2"
   else
     warn "nexvue-web.conf missing — UI may still be on a flat docroot"
+  fi
+  if command -v apache2ctl >/dev/null 2>&1 && apache2ctl -M 2>/dev/null | grep -q rewrite_module; then
+    ok "Apache mod_rewrite loaded"
+  else
+    warn "Apache mod_rewrite not loaded — sudo a2enmod rewrite && sudo systemctl reload apache2"
+  fi
+  if command -v apache2ctl >/dev/null 2>&1 \
+      && apache2ctl -S 2>/dev/null | grep -q "DocumentRoot: ${PUBLIC}"; then
+    ok "Apache DocumentRoot is ${PUBLIC}"
+  elif grep -RqsE "DocumentRoot[[:space:]]+\"?${PUBLIC}" /etc/apache2/sites-enabled 2>/dev/null; then
+    ok "sites-enabled DocumentRoot points at ${PUBLIC}"
+  else
+    warn "DocumentRoot may not be ${PUBLIC} — path UI (/login, /api/*) will fail until fixed"
   fi
   if [ -d /var/lib/nexvue/branding ]; then
     ok "branding dir: /var/lib/nexvue/branding"

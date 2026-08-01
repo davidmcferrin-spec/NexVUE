@@ -25,7 +25,12 @@ class TestWebRouterFiles(unittest.TestCase):
         self.assertTrue(PUBLIC_INDEX.is_file())
         conf = (ROOT / "nexvue-web-apache.conf").read_text(encoding="utf-8")
         self.assertIn("@@APP_ROOT@@", conf)
+        self.assertIn("RewriteEngine On", conf)
+        self.assertIn("RewriteRule ^ index.php", conf)
         self.assertIn("FallbackResource", conf)
+        setup = (ROOT / "setup.sh").read_text(encoding="utf-8")
+        self.assertIn("a2enmod rewrite", setup)
+        self.assertIn("front-door smoke", setup)
 
     def test_html_uses_path_nav_and_assets(self) -> None:
         player = (ROOT / "index.html").read_text(encoding="utf-8")
