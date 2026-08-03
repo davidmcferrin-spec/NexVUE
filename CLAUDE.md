@@ -182,11 +182,14 @@ this box can't get additional ports opened.
   deployment — no co-located source monitor). RTT-based estimate recorded in
   README; re-measure on bench when possible. Duo 2 connector-direction notes
   in README remain useful reference if a Duo is ever reinstalled.
-- Self-signed TLS cert (Apache's `ssl-cert-snakeoil` or similar) on
-  `:8889` requires a one-time per-browser click-through — fine for
-  bench testing, plan a real cert before this reaches other users.
-  Player stats/dots use same-origin proxies (`nexvue-mediamtx-api.php`,
-  `nexvue-status.php`); `:9997`/`:9998` are loopback-only.
+- `setup.sh` ensures `/etc/nexvue/tls/{fullchain,privkey}.pem` (creates a
+  self-signed pair if missing; never overwrites existing), points Apache
+  HTTPS + MediaMTX WHEP/API at those paths (`root:ssl-cert`, key 640).
+  Self-signed still needs a one-time per-browser click-through on `:8889`
+  (trust on `:443` does not extend to other ports). Replace the PEMs with
+  a real cert before wider users. Player stats/dots use same-origin
+  proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`); `:9997`/`:9998`
+  are loopback-only.
 - `decklink-status.cpp`'s active-detection probe takes ~0.7s per IDLE input
   it has to open and test; status daemon poll interval was raised to 5s
   (from 2s) to accommodate, and `STALE_AFTER_S` is set above the helper

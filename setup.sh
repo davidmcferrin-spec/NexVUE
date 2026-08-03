@@ -62,6 +62,85 @@ nexvue_max_channels() {
   printf '%s' "$n"
 }
 
+# Self-signed (or leave existing) certs for Apache HTTPS + MediaMTX WHEP/API.
+# Paths are fixed: /etc/nexvue/tls/{fullchain,privkey}.pem
+ensure_nexvue_tls() {
+  local tls_dir=/etc/nexvue/tls
+  local cert="${tls_dir}/fullchain.pem"
+  local key="${tls_dir}/privkey.pem"
+  local cn host short ip i san_dns san_ip tmpcnf
+  install -d -m 755 "${tls_dir}"
+
+  if ! getent group ssl-cert >/dev/null 2>&1; then
+    groupadd --system ssl-cert 2>/dev/null \
+      || warn "could not create ssl-cert group — TLS key permissions may need a manual fix"
+  fi
+  if id nexvue >/dev/null 2>&1; then
+    usermod -aG ssl-cert nexvue 2>/dev/null || true
+  fi
+  if id www-data >/dev/null 2>&1; then
+    usermod -aG ssl-cert www-data 2>/dev/null || true
+  fi
+
+  if [ -f "${cert}" ] && [ -f "${key}" ]; then
+    ok "TLS certs present: ${cert} + ${key} (left untouched)"
+  else
+    if [ -f "${cert}" ] || [ -f "${key}" ]; then
+      warn "incomplete TLS pair under ${tls_dir} — regenerating both"
+      rm -f "${cert}" "${key}"
+    fi
+    if ! command -v openssl >/dev/null 2>&1; then
+      fail "openssl required to create /etc/nexvue/tls certs"
+    fi
+    host="$(hostname -f 2>/dev/null || true)"
+    short="$(hostname 2>/dev/null || true)"
+    cn="${host:-${short:-nexvue}}"
+    [[ "$cn" == "(none)" || -z "$cn" ]] && cn="nexvue"
+    san_dns="DNS:${cn}"
+    if [ -n "${short}" ] && [ "${short}" != "${cn}" ]; then
+      san_dns="${san_dns},DNS:${short}"
+    fi
+    san_dns="${san_dns},DNS:localhost"
+    san_ip="IP:127.0.0.1"
+    i=2
+    for ip in $(hostname -I 2>/dev/null || true); do
+      [ -n "$ip" ] || continue
+      san_ip="${san_ip},IP:${ip}"
+      i=$((i + 1))
+      [ "$i" -le 8 ] || break
+    done
+    tmpcnf="$(mktemp)"
+    cat > "${tmpcnf}" <<EOF
+[req]
+default_bits = 4096
+prompt = no
+default_md = sha256
+distinguished_name = dn
+x509_extensions = v3_req
+
+[dn]
+CN = ${cn}
+O = NexVUE
+OU = edge
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = ${san_dns},${san_ip}
+EOF
+    openssl req -x509 -newkey rsa:4096 -sha256 -days 825 -nodes \
+      -keyout "${key}" -out "${cert}" -config "${tmpcnf}" >/dev/null 2>&1 \
+      || { rm -f "${tmpcnf}"; fail "openssl failed creating ${cert}"; }
+    rm -f "${tmpcnf}"
+    ok "created self-signed TLS certs in ${tls_dir} (CN=${cn}; replace with a real cert when ready)"
+  fi
+
+  chown root:ssl-cert "${cert}" "${key}" 2>/dev/null || chown root:root "${cert}" "${key}"
+  chmod 644 "${cert}"
+  chmod 640 "${key}"
+}
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_ONLY=false
 APPLY_FIREWALL=false
@@ -90,8 +169,10 @@ REQUIRED_FILES=(
   nexvue-ops.php services.html channels.html
   nexvue-auth-lib.php nexvue-auth.php nexvue-jwks.php nexvue-auth-bootstrap.php
   nexvue-auth-gate.js nexvue-share-ui.js
-  nexvue-web-router.php nexvue-web-apache.conf public/index.php
-  nexvue-mediamtx-jwt-patch.py nexvue-jwks-loopback.conf
+  nexvue-web-router.php nexvue-web-apache.conf nexvue-ssl-apache.conf
+  public/index.php
+  nexvue-mediamtx-jwt-patch.py nexvue-mediamtx-tls-patch.py
+  nexvue-jwks-loopback.conf
   login.html forgot.html reset.html users.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
   nexvue-phase1-closeout.sh
@@ -131,7 +212,7 @@ apt-get install -y -qq \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
   intel-media-va-driver-non-free vainfo intel-gpu-tools \
-  build-essential curl ca-certificates jq openssl \
+  build-essential curl ca-certificates jq openssl ssl-cert \
   apache2 libapache2-mod-php php-cli php-sqlite3 \
   python3-gi python3-gst-1.0 gir1.2-glib-2.0 gir1.2-gstreamer-1.0 \
   gir1.2-gst-plugins-base-1.0
@@ -260,6 +341,18 @@ else
   install -m 644 "${REPO_DIR}/mediamtx.yml" /etc/nexvue/mediamtx.yml
   ok "installed mediamtx.yml"
 fi
+
+# TLS for Apache HTTPS + MediaMTX WHEP/API — before any enable --now of mediamtx.
+ensure_nexvue_tls
+if [ -f /etc/nexvue/mediamtx.yml ]; then
+  _mtx_tls="$(python3 "${REPO_DIR}/nexvue-mediamtx-tls-patch.py" /etc/nexvue/mediamtx.yml)"
+  if [ "${_mtx_tls}" = "patched" ]; then
+    ok "mediamtx.yml TLS paths → /etc/nexvue/tls/{fullchain,privkey}.pem"
+  else
+    ok "mediamtx.yml already points at /etc/nexvue/tls"
+  fi
+fi
+
 install -m 755 "${REPO_DIR}/nexvue-encode.sh" /usr/local/bin/nexvue-encode.sh
 install -m 755 "${REPO_DIR}/nexvue-encode-auto-park.sh" /usr/local/bin/nexvue-encode-auto-park.sh
 install -m 755 "${REPO_DIR}/nexvue-supervisor.py" /usr/local/bin/nexvue-supervisor.py
@@ -549,6 +642,83 @@ if [ -d "${WEBROOT}" ] || mkdir -p "${WEBROOT}" 2>/dev/null; then
     a2enconf nexvue-web >/dev/null 2>&1 \
       && ok "Apache conf enabled: nexvue-web (RewriteRule → index.php)" \
       || warn "a2enconf nexvue-web failed"
+
+    # HTTPS: mod_ssl + station certs under /etc/nexvue/tls (same as MediaMTX).
+    a2enmod ssl >/dev/null 2>&1 \
+      && ok "Apache mod_ssl enabled" \
+      || warn "a2enmod ssl failed — enable manually for HTTPS"
+    install -m 644 "${REPO_DIR}/nexvue-ssl-apache.conf" \
+      /etc/apache2/conf-available/nexvue-ssl-certs.conf
+    a2enconf nexvue-ssl-certs >/dev/null 2>&1 \
+      && ok "Apache conf enabled: nexvue-ssl-certs → /etc/nexvue/tls" \
+      || warn "a2enconf nexvue-ssl-certs failed"
+    if command -v python3 >/dev/null 2>&1; then
+      SSL_PATCH="$(python3 <<'PY'
+import pathlib, re
+cert = "/etc/nexvue/tls/fullchain.pem"
+key = "/etc/nexvue/tls/privkey.pem"
+roots = []
+for dname in ("sites-available", "sites-enabled"):
+    d = pathlib.Path("/etc/apache2") / dname
+    if d.is_dir():
+        roots.append(d)
+seen = set()
+n_file = n_key = 0
+for d in roots:
+    for p in sorted(d.iterdir()):
+        try:
+            real = p.resolve()
+        except OSError:
+            continue
+        if real in seen or not real.is_file():
+            continue
+        seen.add(real)
+        try:
+            text = real.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        orig = text
+        text, a = re.subn(
+            r"^(\s*SSLCertificateFile\s+)\S+",
+            rf"\1{cert}",
+            text,
+            flags=re.M,
+        )
+        text, b = re.subn(
+            r"^(\s*SSLCertificateKeyFile\s+)\S+",
+            rf"\1{key}",
+            text,
+            flags=re.M,
+        )
+        if text != orig:
+            real.write_text(text, encoding="utf-8")
+            n_file += a
+            n_key += b
+            print(f"patched SSL cert paths in {real}")
+print(f"SUMMARY {n_file} {n_key}")
+PY
+)"
+      _ssl_sum="$(echo "${SSL_PATCH}" | grep '^SUMMARY' | awk '{print $2" "$3}')"
+      echo "${SSL_PATCH}" | grep -v '^SUMMARY' | while read -r line; do
+        [ -n "$line" ] && ok "$line"
+      done
+      if [ -n "${_ssl_sum}" ] && [ "${_ssl_sum}" != "0 0" ]; then
+        ok "Apache SSLCertificate* → /etc/nexvue/tls (${_ssl_sum} replacements)"
+      else
+        ok "Apache SSLCertificate* already at /etc/nexvue/tls (or no SSL vhost lines yet)"
+      fi
+    fi
+    # Ensure at least one SSL site (Ubuntu default-ssl) when none is enabled.
+    if [ -f /etc/apache2/sites-available/default-ssl.conf ]; then
+      if ! ls /etc/apache2/sites-enabled/*ssl* >/dev/null 2>&1 \
+          && ! grep -RqsE '^\s*SSLEngine\s+on' /etc/apache2/sites-enabled 2>/dev/null; then
+        a2ensite default-ssl >/dev/null 2>&1 \
+          && ok "enabled Apache site default-ssl (HTTPS :443)" \
+          || warn "a2ensite default-ssl failed — enable an SSL vhost manually"
+      else
+        ok "Apache SSL site already enabled"
+      fi
+    fi
 
     # Point vhosts at ${PUBLIC}. Prefer rewriting the real files under
     # sites-available (sites-enabled is usually a symlink).
@@ -915,6 +1085,22 @@ else
   warn "Apache docroot ${WEBROOT} not present — web UI not deployed yet"
 fi
 
+if [ -f /etc/nexvue/tls/fullchain.pem ] && [ -f /etc/nexvue/tls/privkey.pem ]; then
+  ok "TLS certs: /etc/nexvue/tls/{fullchain,privkey}.pem"
+else
+  warn "TLS certs missing under /etc/nexvue/tls — re-run sudo ./setup.sh (creates self-signed if absent)"
+fi
+if [ -f /etc/nexvue/mediamtx.yml ] && grep -qE '^\s*webrtcServerCert:\s*/etc/nexvue/tls/fullchain\.pem\b' /etc/nexvue/mediamtx.yml \
+    && grep -qE '^\s*webrtcServerKey:\s*/etc/nexvue/tls/privkey\.pem\b' /etc/nexvue/mediamtx.yml; then
+  ok "mediamtx.yml WHEP TLS → /etc/nexvue/tls"
+else
+  warn "mediamtx.yml WHEP cert paths not /etc/nexvue/tls — re-run setup.sh"
+fi
+if [ -f /etc/apache2/conf-enabled/nexvue-ssl-certs.conf ] || [ -L /etc/apache2/conf-enabled/nexvue-ssl-certs.conf ]; then
+  ok "Apache nexvue-ssl-certs.conf enabled"
+elif [ -d /etc/apache2 ]; then
+  warn "Apache nexvue-ssl-certs.conf not enabled — re-run setup.sh for HTTPS → /etc/nexvue/tls"
+fi
 if [ -f /etc/nexvue/mediamtx.yml ] && grep -qE '^\s*authMethod:\s*jwt\b' /etc/nexvue/mediamtx.yml; then
   ok "mediamtx.yml authMethod=jwt"
 else
@@ -1039,12 +1225,15 @@ Next steps:
   4. Services are enabled by setup: mediamtx, nexvue-status, nexvue-metrics,
      nexvue-decklink-configure, and nexvue-encode@0..(MAX_CHANNELS-1).
      Empty SDI ports auto-park; re-enable from Services when patched.
-  5. Firewall (if ufw is in use): open ports with
+  5. TLS: /etc/nexvue/tls/{fullchain,privkey}.pem (self-signed if setup created
+     them). Replace with a real cert when ready; Apache + MediaMTX already
+     point there. Trust click-through once on https://<edge>:8889/ if self-signed.
+  6. Firewall (if ufw is in use): open ports with
        sudo ./setup.sh --firewall     (then: sudo ufw enable, once 22/ssh is allowed)
      or apply the rules manually — see the Firewall section in README.md
-  6. Remove any Apache Basic Auth / .htaccess AuthType — app login replaces it.
+  7. Remove any Apache Basic Auth / .htaccess AuthType — app login replaces it.
      Confirm JWKS (MediaMTX): curl -fsS http://127.0.0.1:9080/nexvue-jwks.php | head
-  7. Login:  https://<edge-ip>/login
+  8. Login:  https://<edge-ip>/login
      Default bootstrap: admin / password  (forced change on first login)
      Path UI: /player /multiview /metrics /settings /services /users
      If login shows "auth store unavailable": sudo ./setup.sh  (repairs

@@ -13,6 +13,9 @@ StartLimitIntervalSec=0
 Type=exec
 User=nexvue
 Group=nexvue
+# Read /etc/nexvue/tls/privkey.pem (root:ssl-cert 640). setup.sh adds nexvue
+# to ssl-cert; SupplementaryGroups makes the membership stick for this unit.
+SupplementaryGroups=ssl-cert
 ExecStart=/usr/local/bin/mediamtx /etc/nexvue/mediamtx.yml
 
 Restart=always

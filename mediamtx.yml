@@ -2,12 +2,12 @@
 # MediaMTX configuration — NexVUE edge node (Phase 1)
 #
 # Ingest:  local GStreamer encoders publish RTSP to 127.0.0.1:8554 (ch0..ch7)
-# Egress:  browsers read via WHEP  ->  http://<edge>:8889/<path>/whep
-#          built-in test player    ->  http://<edge>:8889/<path>
+# Egress:  browsers read via WHEP  ->  https://<edge>:8889/<path>/whep
+#          built-in test player    ->  https://<edge>:8889/<path>
 #
-# Phase 1 = LAN test, no TLS, no auth.
-# Phase 2/3 items are present but commented, so this file is the single
-# source of truth as the project moves forward.
+# TLS: setup.sh ensures /etc/nexvue/tls/{fullchain,privkey}.pem (self-signed
+# if missing) and points webrtcServer* / apiServer* here. Replace those PEMs
+# with a real cert when ready — paths stay the same.
 ###############################################################################
 
 logLevel: info

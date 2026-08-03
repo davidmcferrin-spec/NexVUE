@@ -61,12 +61,14 @@ at the cost of vertical detail.
 
 **Preferred:** from the repo root as root, `sudo ./setup.sh` installs packages,
 MediaMTX, systemd units, ops sudo wrappers + `/etc/sudoers.d/nexvue-ops`,
-seeds missing `/etc/nexvue/channels/N.env` for each `MAX_CHANNELS` slot, and
-`enable --now`s `mediamtx`, `nexvue-status`, `nexvue-metrics`,
-`nexvue-decklink-configure`, and `nexvue-encode@0..(MAX_CHANNELS-1)` (default
-8 → `@0`–`@7`; Duo: set `MAX_CHANNELS=4` in `nexvue.env`). Empty SDI ports
-auto-park. When `/var/www/html` exists, it also installs the Apache path UI
-(`/login`, `/player`, …). Use `sudo ./setup.sh --check` after a reboot;
+seeds missing `/etc/nexvue/channels/N.env` for each `MAX_CHANNELS` slot,
+creates self-signed TLS under `/etc/nexvue/tls/` when absent (Apache HTTPS +
+MediaMTX WHEP/API share the same PEMs), and `enable --now`s `mediamtx`,
+`nexvue-status`, `nexvue-metrics`, `nexvue-decklink-configure`, and
+`nexvue-encode@0..(MAX_CHANNELS-1)` (default 8 → `@0`–`@7`; Duo: set
+`MAX_CHANNELS=4` in `nexvue.env`). Empty SDI ports auto-park. When
+`/var/www/html` exists, it also installs the Apache path UI (`/login`,
+`/player`, …). Use `sudo ./setup.sh --check` after a reboot;
 `sudo ./setup.sh --firewall` for Phase 1 ufw rules.
 
 Manual steps below match what `setup.sh` does if you prefer to run them by hand.
@@ -631,67 +633,30 @@ dots stay gray and **SDI input** shows `status unreachable`, check that
 `nexvue-status` is running. A `stale` suffix means the daemon answered but
 `decklink-status` is lagging — not a fetch failure.
 
-### Steps (assumes Apache's TLS is already working)
+### Steps
 
-1. **Locate Apache's cert/key:**
+1. **`sudo ./setup.sh`** creates `/etc/nexvue/tls/{fullchain,privkey}.pem`
+   when missing (self-signed, 825 days, SAN = hostname + primary IPs),
+   sets ownership `root:ssl-cert` (`privkey` 640 / `fullchain` 644), adds
+   `nexvue` + `www-data` to `ssl-cert`, points MediaMTX
+   (`webrtcServer*` / `apiServer*`) and Apache (`SSLCertificate*` +
+   `nexvue-ssl-certs.conf`) at those paths, enables `mod_ssl` / `default-ssl`
+   when needed, then starts services. Existing PEM files are never
+   overwritten — drop a real cert there before or after setup.
+2. **Replace the self-signed pair when you have a real cert** (same paths;
+   keep `root:ssl-cert` + modes above), then:
    ```bash
-   sudo grep -ri "SSLCertificateFile\|SSLCertificateKeyFile" /etc/apache2/sites-enabled/*.conf
+   sudo systemctl restart mediamtx apache2
    ```
-2. **Copy them somewhere the `nexvue` user can read** (Apache's key is
-   normally root-only or `ssl-cert`-group-only; don't loosen Apache's own
-   permissions — copy instead):
-   ```bash
-   sudo mkdir -p /etc/nexvue/tls
-   sudo cp /path/to/fullchain.pem /etc/nexvue/tls/fullchain.pem
-   sudo cp /path/to/privkey.pem   /etc/nexvue/tls/privkey.pem
-   sudo chown nexvue:nexvue /etc/nexvue/tls/*.pem
-   sudo chmod 600 /etc/nexvue/tls/privkey.pem
-   sudo chmod 644 /etc/nexvue/tls/fullchain.pem
-   ```
-3. **`mediamtx.yml`** already has both `webrtcEncryption` and `apiEncryption`
-   blocks pointed at `/etc/nexvue/tls/` — confirm they're uncommented/set to
-   `yes` and paths match, then:
-   ```bash
-   sudo cp mediamtx.yml /etc/nexvue/mediamtx.yml   # only if not hand-edited live
-   sudo systemctl restart mediamtx
-   journalctl -u mediamtx -n 15 --no-pager   # confirm clean start, no cert errors
-   ```
-4. **Status daemon** — edit the LIVE unit (not just the repo copy) and
-   uncomment the two `Environment=NEXVUE_STATUS_TLS_*` lines:
-   ```bash
-   sudo systemctl edit --full nexvue-status
-   # uncomment the two Environment= lines, save
-   sudo systemctl daemon-reload && sudo systemctl restart nexvue-status
-   journalctl -u nexvue-status -n 5 --no-pager   # want "serving https", not "serving http"
-   ```
-   `systemctl cat nexvue-status` shows what's actually LIVE — use it to verify
-   an edit really landed, since a repo-file edit alone changes nothing until
-   copied to `/etc/systemd/system/` and reloaded.
-5. **Deploy the current web UI to Apache's docroot** (`index.html`,
-   `multiview.html`, `metrics.html`, `nexvue-metrics.php`,
-   `nexvue-status.php`, `nexvue-mediamtx-api.php`, `nexvue-qr.js`,
-   `nexvue-ui.js`, `nexvue-logo.php`, `chart.umd.min.js`, `services.html`,
-   `channels.html`, `nexvue-ops.php`) — player pages auto-detect
-   `https:`/`http:` from `location.protocol`. Input-status dots use
-   `nexvue-status.php`; viewer/egress stats use `nexvue-mediamtx-api.php`
-   (both same-origin → loopback). Ops pages need the sudoers drop-in from
-   `setup.sh` as well; logo upload needs `/var/lib/nexvue/branding`
-   (www-data writable).
-6. **Self-signed cert (e.g. Ubuntu's `ssl-cert-snakeoil`, or any cert issued
-   for a hostname while you're testing via bare IP): trust it on each
-   browser-facing port individually** — visiting `https://<ip>/` does NOT
-   extend trust to `https://<ip>:8889/`:
-   ```
-   https://<edge-ip>:8889/
-   ```
-   (`:9997` / `:9998` are loopback-only; Player stats/dots use Apache
-   proxies. Metrics rides entirely on Apache's existing cert.)
-   Click through "Advanced -> Proceed" on `:8889`. Skipping this step causes
-   silent failures that look identical to a misconfiguration.
-
-A real cert (internal CA, or a hostname + Let's Encrypt) removes the
-per-browser click-through in step 6 and is worth doing before this goes
-beyond bench testing — self-signed is fine for Phase 1 validation only.
+3. **Status daemon TLS** is optional (PHP tries HTTP then HTTPS on loopback).
+   To enable direct HTTPS on `:9998`, uncomment the two
+   `Environment=NEXVUE_STATUS_TLS_*` lines in the live unit
+   (`sudo systemctl edit --full nexvue-status`) pointing at the same
+   `/etc/nexvue/tls/` files, then `daemon-reload` + restart.
+4. **Self-signed click-through:** visiting `https://<ip>/` does **not** trust
+   `https://<ip>:8889/` — browsers treat each port separately. Open
+   `https://<edge-ip>:8889/` once and proceed past the warning, or install a
+   real cert (internal CA / Let's Encrypt) before wider users.
 
 ## DeckLink Duo 2 / Quad 2 connector mapping (read this before patching)
 
