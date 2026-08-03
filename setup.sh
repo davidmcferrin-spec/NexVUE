@@ -211,6 +211,7 @@ apt-get install -y -qq \
   linux-generic-hwe-24.04 \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+  gstreamer1.0-rtsp \
   intel-media-va-driver-non-free vainfo intel-gpu-tools \
   build-essential curl ca-certificates jq openssl ssl-cert \
   apache2 libapache2-mod-php php-cli php-sqlite3 \
@@ -287,12 +288,14 @@ chmod 644 /etc/nexvue/channels/*.env 2>/dev/null || true
 chmod 644 /etc/nexvue/nexvue.env 2>/dev/null || true
 ok "/etc/nexvue/channels ready (644 .env for www-data alias reads)"
 
-# Station-wide /etc/nexvue/nexvue.env (MAX_DEVICES etc.). Never overwrite a live
-# file. When absent, migrate a consistent legacy MAX_DEVICES from channel envs,
-# or install the example default (8). Conflicting legacy values → warn and
-# leave absent so legacy channel copies keep working until the operator picks.
+# Station-wide /etc/nexvue/nexvue.env. Never overwrite existing key values.
+# Fresh install → Quad 2 defaults MAX_DEVICES=8 and MAX_CHANNELS=8.
+# When absent: migrate a consistent legacy MAX_DEVICES from channel envs, or
+# install the example. Conflicting legacy values → warn and leave absent.
+# When present but a key is missing: append the Quad 2 default (or match the
+# other key) so encode@ enable and Settings slot counts stay aligned.
 if [ -f /etc/nexvue/nexvue.env ]; then
-  ok "/etc/nexvue/nexvue.env exists — left untouched"
+  ok "/etc/nexvue/nexvue.env exists — not overwriting values"
 else
   migrate_val=""
   migrate_conflict=false
@@ -317,19 +320,40 @@ else
     fi
   done
   if $migrate_conflict; then
-    warn "conflicting legacy MAX_DEVICES across channel envs — not creating /etc/nexvue/nexvue.env; set MAX_DEVICES=N there manually (1–8)"
+    warn "conflicting legacy MAX_DEVICES across channel envs — not creating /etc/nexvue/nexvue.env; set MAX_DEVICES=N and MAX_CHANNELS=N there manually (1–8; Quad 2 = 8)"
   else
     if [ -z "$migrate_val" ]; then
       install -m 644 "${REPO_DIR}/nexvue-example.env" /etc/nexvue/nexvue.env
-      ok "installed /etc/nexvue/nexvue.env (MAX_DEVICES=8 default)"
+      ok "installed /etc/nexvue/nexvue.env (Quad 2 defaults MAX_DEVICES=8 MAX_CHANNELS=8)"
     else
       {
         echo "# Migrated from channel .env by setup.sh ($(date -Is))"
+        echo "# Duo 2 = 4; Quad 2 = 8"
         echo "MAX_DEVICES=${migrate_val}"
+        echo "MAX_CHANNELS=${migrate_val}"
       } > /etc/nexvue/nexvue.env
       chmod 644 /etc/nexvue/nexvue.env
-      ok "migrated MAX_DEVICES=${migrate_val} into /etc/nexvue/nexvue.env"
+      ok "migrated MAX_DEVICES=${migrate_val} MAX_CHANNELS=${migrate_val} into /etc/nexvue/nexvue.env"
     fi
+  fi
+fi
+# Fill missing slot-count keys only (never change an existing value).
+if [ -f /etc/nexvue/nexvue.env ]; then
+  _md="$(nexvue_env_get MAX_DEVICES "")"
+  _mc="$(nexvue_env_get MAX_CHANNELS "")"
+  if [ -z "${_md}" ]; then
+    _fill="${_mc:-8}"
+    [[ "${_fill}" =~ ^[1-8]$ ]] || _fill=8
+    printf '\n# Added by setup.sh (was unset; Quad 2 default is 8)\nMAX_DEVICES=%s\n' "${_fill}" \
+      >> /etc/nexvue/nexvue.env
+    ok "appended MAX_DEVICES=${_fill} to /etc/nexvue/nexvue.env"
+  fi
+  if [ -z "${_mc}" ]; then
+    _fill="$(nexvue_env_get MAX_DEVICES "8")"
+    [[ "${_fill}" =~ ^[1-8]$ ]] || _fill=8
+    printf '\n# Added by setup.sh (was unset; Quad 2 default is 8)\nMAX_CHANNELS=%s\n' "${_fill}" \
+      >> /etc/nexvue/nexvue.env
+    ok "appended MAX_CHANNELS=${_fill} to /etc/nexvue/nexvue.env"
   fi
 fi
 
@@ -534,13 +558,17 @@ if [ -f /var/lib/nexvue/auth.db ] && [ ! -f /var/lib/nexvue/auth/auth.db ]; then
 fi
 install -m 644 "${REPO_DIR}/nexvue-auth-lib.php" /usr/local/share/nexvue/nexvue-auth-lib.php
 install -m 755 "${REPO_DIR}/nexvue-auth-bootstrap.php" /usr/local/bin/nexvue-auth-bootstrap.php
+# Smoke must use the installed lib — www-data often cannot read REPO_DIR under /home.
+AUTH_LIB_INSTALLED=/usr/local/share/nexvue/nexvue-auth-lib.php
 if command -v php >/dev/null 2>&1; then
-  if php "${REPO_DIR}/nexvue-auth-bootstrap.php"; then
+  if php /usr/local/bin/nexvue-auth-bootstrap.php; then
     ok "auth bootstrap (auth.db + JWKS + seed admin + NEXVUE_PUBLISH_JWT)"
   else
-    warn "auth bootstrap failed — run: sudo php ${REPO_DIR}/nexvue-auth-bootstrap.php"
+    warn "auth bootstrap failed — run: sudo php /usr/local/bin/nexvue-auth-bootstrap.php"
   fi
   if id www-data >/dev/null 2>&1; then
+    # Parent must stay world-traversable (metrics StateDirectory=nexvue is 0755).
+    chmod 755 /var/lib/nexvue 2>/dev/null || true
     chown -R www-data:www-data /var/lib/nexvue/auth 2>/dev/null || true
     chmod 750 /var/lib/nexvue/auth 2>/dev/null || true
     chmod 640 /var/lib/nexvue/auth/private.pem 2>/dev/null || true
@@ -550,7 +578,7 @@ if command -v php >/dev/null 2>&1; then
     chmod 644 /var/lib/nexvue/auth/auth.db-* 2>/dev/null || true
     # Smoke: Apache user must open/migrate/write the store (login uses this path).
     AUTH_SMOKE_PHP='
-      require "'"${REPO_DIR}"'/nexvue-auth-lib.php";
+      require "'"${AUTH_LIB_INSTALLED}"'";
       auth_migrate();
       auth_ensure_keys();
       $n = (int)auth_db()->querySingle("SELECT COUNT(*) FROM users");
@@ -558,17 +586,27 @@ if command -v php >/dev/null 2>&1; then
       echo "users=$n\n";
     '
     auth_smoke_ok=false
+    AUTH_SMOKE_ERR="$(mktemp)"
     if command -v runuser >/dev/null 2>&1; then
-      runuser -u www-data -- php -r "${AUTH_SMOKE_PHP}" >/dev/null 2>&1 && auth_smoke_ok=true
+      if runuser -u www-data -- php -r "${AUTH_SMOKE_PHP}" >"${AUTH_SMOKE_ERR}" 2>&1; then
+        auth_smoke_ok=true
+      fi
     fi
     if ! $auth_smoke_ok; then
-      sudo -u www-data php -r "${AUTH_SMOKE_PHP}" >/dev/null 2>&1 && auth_smoke_ok=true
+      if sudo -u www-data php -r "${AUTH_SMOKE_PHP}" >"${AUTH_SMOKE_ERR}" 2>&1; then
+        auth_smoke_ok=true
+      fi
     fi
     if $auth_smoke_ok; then
       ok "auth store writable by www-data (/var/lib/nexvue/auth)"
     else
-      warn "auth store NOT usable as www-data — login will show 'auth store unavailable'; fix ownership on /var/lib/nexvue/auth and re-run setup"
+      warn "auth store NOT usable as www-data — login will show 'auth store unavailable'"
+      if [ -s "${AUTH_SMOKE_ERR}" ]; then
+        warn "auth smoke (www-data): $(tr '\n' ' ' <"${AUTH_SMOKE_ERR}" | head -c 240)"
+      fi
+      warn "check: ls -la /var/lib/nexvue /var/lib/nexvue/auth; php-sqlite3 + openssl; re-run setup.sh"
     fi
+    rm -f "${AUTH_SMOKE_ERR}"
   fi
 else
   warn "php missing — cannot bootstrap auth.db / JWKS"
@@ -986,6 +1024,7 @@ for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc \
     case "$el" in
       decklinkvideosrc) warn "missing $el — install Blackmagic Desktop Video (deb) and reboot" ;;
       vah264enc)        warn "missing $el — VA driver issue (see vainfo above); x264enc fallback works for 1-2 channels only" ;;
+      rtspclientsink)   warn "missing $el — install gstreamer1.0-rtsp (setup apt step); encode publish will fail" ;;
       ccextractor|ccconverter) warn "missing $el — caption side channel needs gstreamer1.0-plugins-bad" ;;
       input-selector|videotestsrc|audiotestsrc|textoverlay|valve|identity)
         warn "missing $el — Phase 1.5 supervisor needs gstreamer1.0-plugins-base / good" ;;

@@ -72,6 +72,7 @@ class TestLegacyMaxDevicesMigration(unittest.TestCase):
     def test_example_env_defaults_to_eight(self) -> None:
         text = (ROOT / "nexvue-example.env").read_text(encoding="utf-8")
         self.assertRegex(text, r"(?m)^MAX_DEVICES=8\s*$")
+        self.assertRegex(text, r"(?m)^MAX_CHANNELS=8\s*$")
 
 
 if __name__ == "__main__":

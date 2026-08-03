@@ -90,12 +90,14 @@ sudo apt update
 sudo apt install -y \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+  gstreamer1.0-rtsp \
   intel-media-va-driver-non-free vainfo \
   apache2 libapache2-mod-php php-cli php-sqlite3
 ```
 
-(`setup.sh` installs these automatically — Apache + PHP for login/auth,
-metrics, and ops; `php-sqlite3` for SQLite readers.)
+(`setup.sh` installs these automatically — including `gstreamer1.0-rtsp`
+for `rtspclientsink`; Apache + PHP for login/auth, metrics, and ops;
+`php-sqlite3` for SQLite readers.)
 
 Verify Quick Sync is visible (expect H264 encode entrypoints under iHD driver):
 
