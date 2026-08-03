@@ -33,6 +33,35 @@ fail() { echo "${RED}[FAIL]${RESET} $*"; exit 1; }
 step() { echo; echo "=== $* ==="; }
 WARNINGS=()
 
+# Read KEY=value from /etc/nexvue/nexvue.env (strip comments/quotes/whitespace).
+nexvue_env_get() {
+  local key="$1" def="${2:-}" path="${3:-/etc/nexvue/nexvue.env}"
+  local line v
+  [ -f "$path" ] || { printf '%s' "$def"; return; }
+  line="$(grep -E "^[[:space:]]*${key}=" "$path" 2>/dev/null | tail -1 || true)"
+  [ -n "$line" ] || { printf '%s' "$def"; return; }
+  v="${line#*=}"
+  v="${v%%#*}"
+  v="${v//\"/}"
+  v="${v//\'/}"
+  v="${v// /}"
+  v="${v//$'\t'/}"
+  printf '%s' "${v:-$def}"
+}
+
+# Station encode slot count (0 .. N-1). Prefer MAX_CHANNELS; fall back to MAX_DEVICES; default 8.
+nexvue_max_channels() {
+  local n
+  n="$(nexvue_env_get MAX_CHANNELS "")"
+  if ! [[ "$n" =~ ^[1-8]$ ]]; then
+    n="$(nexvue_env_get MAX_DEVICES "8")"
+  fi
+  if ! [[ "$n" =~ ^[1-8]$ ]]; then
+    n=8
+  fi
+  printf '%s' "$n"
+}
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_ONLY=false
 APPLY_FIREWALL=false
@@ -298,16 +327,72 @@ install -m 644 "${REPO_DIR}/mediamtx.service" \
                "${REPO_DIR}/nexvue-status.service" \
                "${REPO_DIR}/nexvue-metrics.service" /etc/systemd/system/
 systemctl daemon-reload
+ok "scripts + units installed, systemd reloaded"
+
+# Channel .env stubs for every encode slot (never overwrite existing).
+MAX_CH="$(nexvue_max_channels)"
+for id in $(seq 0 $((MAX_CH - 1))); do
+  ch_env="/etc/nexvue/channels/${id}.env"
+  if [ -f "$ch_env" ]; then
+    continue
+  fi
+  if [ ! -f "${REPO_DIR}/channels-example.env" ]; then
+    warn "channels-example.env missing — cannot seed ${ch_env}"
+    continue
+  fi
+  sed -e "s/^DEVICE_NUMBER=.*/DEVICE_NUMBER=${id}/" \
+      -e "s/^CHANNEL_PATH=.*/CHANNEL_PATH=ch${id}/" \
+      "${REPO_DIR}/channels-example.env" > "${ch_env}"
+  chmod 644 "${ch_env}"
+  ok "seeded ${ch_env} (DEVICE_NUMBER=${id}, CHANNEL_PATH=ch${id})"
+done
+chmod 644 /etc/nexvue/channels/*.env 2>/dev/null || true
+
+# Enable + start shared daemons and encode@0 .. @(MAX_CHANNELS-1).
+# Empty DeckLink ports auto-park after AUTO_PARK_UNLOCK_CYCLES; Duo stations
+# should set MAX_CHANNELS=4 (or MAX_DEVICES=4) in nexvue.env before setup.
 systemctl enable nexvue-decklink-configure.service >/dev/null 2>&1 \
   && ok "enabled nexvue-decklink-configure.service (half-duplex BNCs before encode)" \
   || warn "could not enable nexvue-decklink-configure.service"
-# Pick up status bind default (127.0.0.1) + unit file changes.
-if systemctl is-active --quiet nexvue-status 2>/dev/null; then
-  systemctl try-restart nexvue-status >/dev/null 2>&1 \
-    && ok "nexvue-status restarted (loopback :9998)" \
-    || warn "nexvue-status restart failed — sudo systemctl restart nexvue-status"
+# Run configure once now so BNCs are ready before encoders start.
+if [ -x /usr/local/bin/decklink-configure ]; then
+  systemctl start nexvue-decklink-configure.service >/dev/null 2>&1 \
+    && ok "started nexvue-decklink-configure.service" \
+    || warn "nexvue-decklink-configure start failed (card absent / SDK helper missing?)"
 fi
-ok "scripts + units installed, systemd reloaded"
+
+for u in mediamtx nexvue-status nexvue-metrics; do
+  if systemctl enable --now "$u" >/dev/null 2>&1; then
+    ok "enabled --now ${u}"
+  else
+    warn "could not enable --now ${u}"
+  fi
+done
+
+enc_ok=0
+enc_fail=0
+for id in $(seq 0 $((MAX_CH - 1))); do
+  if systemctl enable --now "nexvue-encode@${id}" >/dev/null 2>&1; then
+    enc_ok=$((enc_ok + 1))
+  else
+    enc_fail=$((enc_fail + 1))
+    warn "could not enable --now nexvue-encode@${id}"
+  fi
+done
+if [ "$enc_ok" -gt 0 ]; then
+  ok "enabled --now nexvue-encode@0..$((MAX_CH - 1)) (${enc_ok} slot(s); MAX_CHANNELS=${MAX_CH})"
+fi
+if [ "$enc_fail" -gt 0 ]; then
+  warn "${enc_fail} encode slot(s) failed to enable — check journalctl -u 'nexvue-encode@*'"
+fi
+# Disable encode instances at/above MAX_CHANNELS so Duo (4) does not leave stale @4..@7 enabled.
+for id in $(seq "$MAX_CH" 7); do
+  if systemctl is-enabled --quiet "nexvue-encode@${id}" 2>/dev/null; then
+    systemctl disable --now "nexvue-encode@${id}" >/dev/null 2>&1 \
+      && ok "disabled nexvue-encode@${id} (above MAX_CHANNELS=${MAX_CH})" \
+      || true
+  fi
+done
 
 # Ops UI sudoers — validate before installing (a bad drop-in breaks sudo).
 if command -v visudo >/dev/null; then
@@ -948,21 +1033,20 @@ cat <<'NEXT'
 Next steps:
   1. If a reboot was flagged above: reboot, then  sudo ./setup.sh --check
   2. Install Blackmagic Desktop Video if flagged, reboot, re-check
-  3. Configure channels:
-       sudo cp channels-example.env /etc/nexvue/channels/0.env
-       sudo nano /etc/nexvue/channels/0.env
-  4. Start services:
-       sudo systemctl enable --now nexvue-decklink-configure   # Duo/Quad BNCs → half-duplex
-       sudo systemctl enable --now mediamtx nexvue-status nexvue-metrics nexvue-encode@0
+  3. Tune channel .env files under /etc/nexvue/channels/ (seeded for each
+     MAX_CHANNELS slot). Duo 2: set MAX_DEVICES=4 and MAX_CHANNELS=4 in
+     /etc/nexvue/nexvue.env, then re-run setup.sh (disables encode@4..7).
+  4. Services are enabled by setup: mediamtx, nexvue-status, nexvue-metrics,
+     nexvue-decklink-configure, and nexvue-encode@0..(MAX_CHANNELS-1).
+     Empty SDI ports auto-park; re-enable from Services when patched.
   5. Firewall (if ufw is in use): open ports with
        sudo ./setup.sh --firewall     (then: sudo ufw enable, once 22/ssh is allowed)
      or apply the rules manually — see the Firewall section in README.md
   6. Remove any Apache Basic Auth / .htaccess AuthType — app login replaces it.
      Confirm JWKS (MediaMTX): curl -fsS http://127.0.0.1:9080/nexvue-jwks.php | head
-  7. Login:  https://<edge-ip>/login.html
+  7. Login:  https://<edge-ip>/login
      Default bootstrap: admin / password  (forced change on first login)
-     Users + share links: /users.html (admin). Player/Multiview/Metrics/Services/Settings
-     require a session (or a share link ?t=… on Player).
+     Path UI: /player /multiview /metrics /settings /services /users
      If login shows "auth store unavailable": sudo ./setup.sh  (repairs
      /var/lib/nexvue/auth ownership + migrates legacy auth.db).
      If Player connects but never gets video after JWT auth: re-run setup.sh

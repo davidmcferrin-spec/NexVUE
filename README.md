@@ -34,7 +34,8 @@ SDI 1080i59.94 (4 or 8) --> [DeckLink card]
   engine shares that bandwidth with 8-channel deinterlace. Cheap insurance.
 - Blackmagic DeckLink Quad 2 in the PCIe 4.0 x16 slot (card is Gen2 x8).
   **Duo 2 (4 ch)** works identically — set `MAX_DEVICES=4` in
-  `/etc/nexvue/nexvue.env` and enable only `nexvue-encode@0..3`. The Duo 2 Mini
+  `/etc/nexvue/nexvue.env` — `setup.sh` then enables only `@0..3` and disables
+  `@4..7`. The Duo 2 Mini
   (low-profile) is the pick if the chassis only takes half-height cards
   (e.g. an SFF box).
 - DIN 1.0/2.3-to-BNC breakout cables, one per channel (8 for Quad 2, 4 for
@@ -59,11 +60,14 @@ at the cost of vertical detail.
 ## Install
 
 **Preferred:** from the repo root as root, `sudo ./setup.sh` installs packages,
-MediaMTX, systemd units (encode / status / metrics collector), ops sudo
-wrappers + `/etc/sudoers.d/nexvue-ops`, and — when `/var/www/html` exists —
-the Apache web UI (player, multiview, metrics, services, channels). Use
-`sudo ./setup.sh --check` after a reboot; `sudo ./setup.sh --firewall` for
-Phase 1 ufw rules.
+MediaMTX, systemd units, ops sudo wrappers + `/etc/sudoers.d/nexvue-ops`,
+seeds missing `/etc/nexvue/channels/N.env` for each `MAX_CHANNELS` slot, and
+`enable --now`s `mediamtx`, `nexvue-status`, `nexvue-metrics`,
+`nexvue-decklink-configure`, and `nexvue-encode@0..(MAX_CHANNELS-1)` (default
+8 → `@0`–`@7`; Duo: set `MAX_CHANNELS=4` in `nexvue.env`). Empty SDI ports
+auto-park. When `/var/www/html` exists, it also installs the Apache path UI
+(`/login`, `/player`, …). Use `sudo ./setup.sh --check` after a reboot;
+`sudo ./setup.sh --firewall` for Phase 1 ufw rules.
 
 Manual steps below match what `setup.sh` does if you prefer to run them by hand.
 
@@ -142,17 +146,20 @@ sudo cp mediamtx.service nexvue-encode@.service \
 # Station-wide card size (install only if absent — setup.sh also migrates):
 sudo cp -n nexvue-example.env /etc/nexvue/nexvue.env   # MAX_DEVICES=8; MAX_CHANNELS=8
 
-# One env file per channel you want live (see channels-example.env):
+# One env file per encode slot (setup.sh seeds these from channels-example.env):
 sudo cp channels-example.env /etc/nexvue/channels/0.env
 sudo nano /etc/nexvue/channels/0.env
 #   (inline '# comments' and whitespace in the env file are fine —
 #    the unit sources it through a shell)   # set DEVICE_NUMBER=0, CHANNEL_PATH=ch0
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now mediamtx nexvue-status nexvue-metrics nexvue-encode@0
+sudo systemctl enable --now mediamtx nexvue-status nexvue-metrics
+# Quad 2 default (MAX_CHANNELS=8): enable all slots; empty ports auto-park.
+for n in $(seq 0 7); do sudo systemctl enable --now nexvue-encode@$n; done
+# Duo 2: only @0..3 (and set MAX_CHANNELS=4 / MAX_DEVICES=4 in nexvue.env).
 ```
 
-Add channels by creating `1.env` .. `7.env` and enabling `nexvue-encode@1` .. `@7`.
+`setup.sh` performs the enable loop from `MAX_CHANNELS` automatically.
 
 The metrics **collector** has no listening port — it only writes SQLite.
 Reading it back is Apache + PHP (next step). See "Usage Metrics Dashboard".

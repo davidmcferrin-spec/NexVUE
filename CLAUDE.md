@@ -173,8 +173,11 @@ this box can't get additional ports opened.
   `AUTO_PARK_UNLOCK_CYCLES` consecutive unlocked starts (default 5;
   `RestartSec=5`). Encode also **retries DeckLink opens** with backoff and
   kills hung `gst-launch` after fatal `not-negotiated` (zombie green unit).
-  Prefer enabling encoders only for patched Inputs; Services Enable/Disable
-  still parks/unparks by hand.
+  `setup.sh` seeds channel `.env` stubs and `enable --now`s
+  `mediamtx` / `nexvue-status` / `nexvue-metrics` /
+  `nexvue-decklink-configure` / `nexvue-encode@0..(MAX_CHANNELS-1)` (default
+  8; Duo: `MAX_CHANNELS=4` disables `@4..7`). Empty ports rely on auto-park;
+  Services Enable/Disable still parks/unparks by hand.
 - Glass-to-glass latency still unmeasured with a burnt-in clock (datacenter
   deployment — no co-located source monitor). RTT-based estimate recorded in
   README; re-measure on bench when possible. Duo 2 connector-direction notes
@@ -209,7 +212,8 @@ this box can't get additional ports opened.
 - **No pip.** Python is stdlib-only today; if a dependency ever becomes
   necessary, it comes from apt (`python3-<package>`), never pip.
 - `setup.sh` is the canonical installer — keep it in sync with any new
-  package, file, or unit added to the project.
+  package, file, or unit added to the project. It also brings the station
+  up: shared units + encode slots for `MAX_CHANNELS` (see Known open items).
 - Dark monospace UI aesthetic (see `index.html` palette) — consistent
   across the tool family (player, multiviewer, metrics, services, channels).
   Light theme via `html[data-theme]` + `localStorage.nexvue-theme` (default
