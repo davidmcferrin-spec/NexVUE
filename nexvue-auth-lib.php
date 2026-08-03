@@ -1288,9 +1288,23 @@ function auth_reset_consume(string $raw, string $newPassword): void {
     $st->execute();
 }
 
-function auth_current_user(): ?array {
+/**
+ * Current logged-in user row (or null).
+ *
+ * @param bool $forceDb When true, skip the session snapshot (empty password_hash)
+ *                      and request memo — always reload from SQLite and refresh
+ *                      session fields. Required for change_password and any
+ *                      path that needs a real password_hash or post-update flags.
+ */
+function auth_current_user(bool $forceDb = false): ?array {
     static $memo = null;
     static $memoSet = false;
+    if ($forceDb) {
+        $memo = null;
+        $memoSet = false;
+        auth_session_start();
+        unset($_SESSION['user_cache_at']);
+    }
     if ($memoSet) {
         return $memo;
     }
@@ -1305,9 +1319,12 @@ function auth_current_user(): ?array {
     $role = $_SESSION['role'] ?? null;
     // Hot path (status/captions/WHEP): trust session snapshot briefly — avoids
     // SQLite on every 2s poll. Revalidate from DB when the cache ages out.
+    // Snapshot intentionally omits password_hash (never put bcrypt in $_SESSION).
+    // Callers that need the hash must pass $forceDb=true.
     // user_channels must be present (null = all-channels ACL); older sessions
     // without the key fall through to a DB reload.
-    if (is_string($role) && $role !== ''
+    if (!$forceDb
+        && is_string($role) && $role !== ''
         && $cacheAt >= (time() - NEXVUE_AUTH_SESSION_CACHE_S)
         && array_key_exists('user_channels', $_SESSION)) {
         $memo = [

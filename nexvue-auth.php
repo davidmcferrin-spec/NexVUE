@@ -127,13 +127,15 @@ try {
     }
 
     if ($action === 'change_password') {
-        $user = auth_current_user();
+        // Must load from SQLite — session cache omits password_hash (empty string)
+        // so password_verify would always fail within NEXVUE_AUTH_SESSION_CACHE_S.
+        $user = auth_current_user(true);
         if ($user === null) {
             auth_api_fail(401, 'unauthorized');
         }
         $current = (string)($body['current_password'] ?? '');
         $next = (string)($body['new_password'] ?? '');
-        if (!password_verify($current, $user['password_hash'])) {
+        if ($user['password_hash'] === '' || !password_verify($current, $user['password_hash'])) {
             auth_api_fail(401, 'invalid credentials');
         }
         if (strlen($next) < 8) {
@@ -146,7 +148,14 @@ try {
             'password' => $next,
             'must_change_password' => false,
         ]);
-        auth_api_ok(['user' => auth_me_payload()]);
+        // Refresh session + request memo so must_change_password clears immediately
+        // (otherwise login/gate keep bouncing to the force-change form).
+        $fresh = auth_current_user(true);
+        $me = auth_me_payload();
+        if ($fresh === null || $me === null || !empty($me['must_change_password'])) {
+            auth_api_fail(500, 'password updated but session refresh failed');
+        }
+        auth_api_ok(['user' => $me]);
     }
 
     if ($action === 'forgot') {

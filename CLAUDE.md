@@ -148,9 +148,12 @@ this box can't get additional ports opened.
   MediaMTX JWKS is served on loopback `:9080` (`nexvue-jwks-loopback.conf`)
   so HTTPS redirects cannot break publish/WHEP JWT validation; setup patches
   `mediamtx.yml` and restarts mediamtx + enabled encoders. Auth hot path:
-  session snapshot cache + `session_write_close` after checks (captions SSE
-  must not hold the session lock), aliases read channel `.env` without sudo,
-  Player/Multiview start WHEP before waiting on aliases. **2.0 front door:**
+  session snapshot cache (omits `password_hash`) + `session_write_close`
+  after checks (captions SSE must not hold the session lock);
+  `change_password` forces a DB reload so first-login verify works and
+  clears `must_change_password` in session. Aliases read channel `.env`
+  without sudo. Player/Multiview start WHEP before waiting on aliases.
+  **2.0 front door:**
   Apache DocumentRoot `{webroot}/public` → `index.php` /
   `nexvue-web-router.php` (server-side session/share gate); pages in
   `pages/`; JSON under `/api/*`; station key `NEXVUE_API_KEY` (alias

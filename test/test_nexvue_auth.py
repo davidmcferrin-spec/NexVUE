@@ -102,6 +102,43 @@ echo json_encode(['ok' => $ok !== null, 'bad' => $bad === null]);
         self.assertTrue(data["ok"])
         self.assertTrue(data["bad"])
 
+    def test_change_password_after_session_cache(self) -> None:
+        """Hot-path session cache omits password_hash; forceDb must verify + clear must_change."""
+        data = self._php(
+            """
+if (session_status() !== PHP_SESSION_ACTIVE) {
+  session_start();
+}
+$row = auth_user_find_by_username('admin');
+auth_login_user($row);
+// Prime request memo + session snapshot (empty hash), as status/me polls do.
+$cached = auth_current_user();
+$cached_hash = (string)($cached['password_hash'] ?? 'missing');
+// change_password path: reload from DB
+$db_user = auth_current_user(true);
+$verify = password_verify('password', (string)$db_user['password_hash']);
+auth_user_update($db_user['id'], [
+  'password' => 'newpassword1',
+  'must_change_password' => false,
+]);
+$fresh = auth_current_user(true);
+$me = auth_me_payload();
+$verify_new = password_verify('newpassword1', (string)$fresh['password_hash']);
+echo json_encode([
+  'cached_hash_empty' => $cached_hash === '',
+  'verify_old' => $verify,
+  'must_change_after' => !empty($me['must_change_password']),
+  'session_flag' => !empty($_SESSION['must_change_password']),
+  'verify_new' => $verify_new,
+]);
+"""
+        )
+        self.assertTrue(data["cached_hash_empty"])
+        self.assertTrue(data["verify_old"])
+        self.assertFalse(data["must_change_after"])
+        self.assertFalse(data["session_flag"])
+        self.assertTrue(data["verify_new"])
+
     def test_share_requires_expiry(self) -> None:
         data = self._php(
             """
