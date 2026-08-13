@@ -8,8 +8,10 @@
 #   sudo ./setup.sh            full install + sanity checks
 #   sudo ./setup.sh --check    sanity checks only (e.g. after HWE reboot or
 #                              after installing Desktop Video)
-#   sudo ./setup.sh --firewall install, then open Phase 1 ufw ports (does not
-#                              enable ufw for you — see note at that step)
+#   sudo ./setup.sh --firewall apply ufw rules (SSH/443/8889/8189, no :80) and
+#                              enable ufw. Full install already does this;
+#                              the flag is a legacy alias and also works with
+#                              --check if you only want the firewall step.
 #
 # Python policy: NexVUE uses stdlib only — no pip, ever. Any future Python
 # dependency must come from apt (python3-<package>).
@@ -141,6 +143,76 @@ EOF
   chmod 640 "${key}"
 }
 
+# Ubuntu's unit is ssh.service; sshd.service is an alias on some images.
+ensure_sshd() {
+  if systemctl enable --now ssh >/dev/null 2>&1 \
+      || systemctl enable --now sshd >/dev/null 2>&1; then
+    if systemctl is-active --quiet ssh 2>/dev/null \
+        || systemctl is-active --quiet sshd 2>/dev/null; then
+      ok "sshd enabled and running"
+      return 0
+    fi
+  fi
+  warn "could not enable ssh/sshd — install openssh-server before enabling ufw"
+  return 0
+}
+
+nexvue_ufw_delete_port80() {
+  local i num
+  ufw --force delete allow 80/tcp >/dev/null 2>&1 || true
+  ufw --force delete allow 80 >/dev/null 2>&1 || true
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    num="$(ufw status numbered 2>/dev/null \
+      | sed -nE 's/^\[\s*([0-9]+)\]\s+80\/tcp(\s+\(v6\))?[[:space:]].*/\1/p' \
+      | tail -1)"
+    [ -n "${num}" ] || break
+    ufw --force delete "${num}" >/dev/null 2>&1 || break
+  done
+}
+
+# SSH first, then HTTPS/WHEP. Never allow :80. Enable ufw only if sshd is up.
+apply_nexvue_firewall() {
+  step "Firewall (ufw) — SSH + HTTPS + WHEP (HTTP :80 closed)"
+  if ! command -v ufw >/dev/null; then
+    warn "ufw not installed — skipping (apt install ufw)"
+    return
+  fi
+  if ufw allow OpenSSH >/dev/null 2>&1; then
+    ok "ufw allow OpenSSH"
+  else
+    ufw allow 22/tcp comment 'SSH' >/dev/null 2>&1 \
+      && ok "ufw allow 22/tcp" \
+      || warn "ufw allow SSH failed"
+  fi
+  ufw allow 443/tcp comment 'NexVUE Apache HTTPS' >/dev/null \
+    || warn "ufw allow 443/tcp failed"
+  ufw allow 8889/tcp comment 'NexVUE WHEP signaling' >/dev/null \
+    || warn "ufw allow 8889/tcp failed"
+  ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)' >/dev/null \
+    || warn "ufw allow 8189 failed"
+  ok "ufw viewer ports opened (443,8889,8189/udp+tcp)"
+  nexvue_ufw_delete_port80
+  if ufw status 2>/dev/null | grep -qE '\b80/tcp\b'; then
+    warn "ufw still allows 80/tcp — delete it (Apache HTTP is off)"
+  else
+    ok "ufw does not allow 80/tcp"
+  fi
+  if ufw status 2>/dev/null | grep -qE '\b9997\b|\b9998\b'; then
+    warn "ufw still allows 9997/9998 — remove those rules (API/status are loopback-only now)"
+  fi
+  if systemctl is-active --quiet ssh 2>/dev/null \
+      || systemctl is-active --quiet sshd 2>/dev/null; then
+    if ufw --force enable >/dev/null 2>&1; then
+      ok "ufw enabled"
+    else
+      warn "ufw --force enable failed"
+    fi
+  else
+    warn "sshd not active — not enabling ufw (would lock you out). Start ssh, then re-run setup.sh"
+  fi
+  ok "8554 (RTSP) left closed — loopback ingest only"
+}
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_ONLY=false
 APPLY_FIREWALL=false
@@ -172,6 +244,7 @@ REQUIRED_FILES=(
   nexvue-web-router.php nexvue-web-apache.conf nexvue-ssl-apache.conf
   public/index.php
   nexvue-mediamtx-jwt-patch.py nexvue-mediamtx-tls-patch.py
+  nexvue-apache-http-off.py
   nexvue-jwks-loopback.conf
   login.html forgot.html reset.html users.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
@@ -215,6 +288,7 @@ apt-get install -y -qq \
   intel-media-va-driver-non-free vainfo intel-gpu-tools \
   build-essential curl ca-certificates jq openssl ssl-cert \
   apache2 libapache2-mod-php php-cli php-sqlite3 \
+  openssh-server ufw \
   python3-gi python3-gst-1.0 gir1.2-glib-2.0 gir1.2-gstreamer-1.0 \
   gir1.2-gst-plugins-base-1.0
 ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for the Phase 1.5 supervisor — never pip; Apache + php-cli/sqlite3 for login/auth + metrics.php)"
@@ -233,6 +307,7 @@ if command -v a2enmod >/dev/null 2>&1; then
     fi
   done
   $php_mod_enabled || warn "no php*.load under /etc/apache2/mods-available — login JSON APIs will 500 until libapache2-mod-php is enabled"
+  systemctl enable apache2 >/dev/null 2>&1 || true
   if systemctl is-active --quiet apache2 2>/dev/null; then
     systemctl reload apache2 >/dev/null 2>&1 \
       && ok "apache2 reloaded" \
@@ -247,6 +322,7 @@ if command -v a2enmod >/dev/null 2>&1; then
 else
   warn "a2enmod missing — install apache2 + libapache2-mod-php for the web UI"
 fi
+ensure_sshd
 
 # Allow the metrics collector (user nexvue) to read iGPU PMU without root.
 # AmbientCapabilities on the unit also requests CAP_PERFMON; setcap covers
@@ -848,6 +924,27 @@ EOF
       warn "python3 missing — cannot auto-patch DocumentRoot; set DocumentRoot ${PUBLIC} manually"
     fi
 
+    # HTTPS-only: drop the HTTP vhost and Listen 80. JWKS stays on :9080.
+    if [ -L /etc/apache2/sites-enabled/000-default.conf ] \
+        || [ -f /etc/apache2/sites-enabled/000-default.conf ]; then
+      a2dissite 000-default >/dev/null 2>&1 \
+        && ok "Apache site 000-default disabled (HTTP :80 off)" \
+        || warn "a2dissite 000-default failed — disable the HTTP vhost manually"
+    else
+      ok "Apache HTTP site 000-default already disabled"
+    fi
+    if [ -f /etc/apache2/ports.conf ]; then
+      _http_off="$(python3 "${REPO_DIR}/nexvue-apache-http-off.py" /etc/apache2/ports.conf)"
+      if [ "${_http_off}" = "patched" ]; then
+        ok "Apache Listen 80 commented in ports.conf"
+      else
+        ok "Apache Listen 80 already off in ports.conf"
+      fi
+    fi
+    systemctl enable apache2 >/dev/null 2>&1 \
+      && ok "apache2 enabled on boot" \
+      || warn "systemctl enable apache2 failed"
+
     if command -v apache2ctl >/dev/null 2>&1; then
       if apache2ctl -M 2>/dev/null | grep -q rewrite_module; then
         ok "apache2ctl: rewrite_module loaded"
@@ -866,26 +963,21 @@ EOF
       fi
     fi
 
-    # Smoke: path rewrite reaches the front controller (login is public HTML).
+    # Smoke: path rewrite reaches the front controller over HTTPS only.
     if systemctl is-active --quiet apache2 2>/dev/null; then
-      smoke_ok=false
-      for smoke_url in \
-          "http://127.0.0.1/login" \
-          "https://127.0.0.1/login"; do
-        if curl -fskS --max-time 3 "$smoke_url" 2>/dev/null | grep -qi 'NexVUE'; then
-          ok "front-door smoke OK: $smoke_url"
-          smoke_ok=true
-          break
-        fi
-      done
-      if ! $smoke_ok; then
-        warn "front-door smoke failed (curl /login) — check DocumentRoot is ${PUBLIC} and mod_rewrite is on"
+      if curl -fsS --max-time 2 "http://127.0.0.1/login" >/dev/null 2>&1; then
+        warn "Apache still answers HTTP :80 — Listen 80 / 000-default should be off"
+      else
+        ok "Apache HTTP :80 is closed"
       fi
-      if curl -fskS --max-time 3 "http://127.0.0.1/api/version" 2>/dev/null \
-          | grep -q '"version"' \
-        || curl -fskS --max-time 3 "https://127.0.0.1/api/version" 2>/dev/null \
+      if curl -fskS --max-time 3 "https://127.0.0.1/login" 2>/dev/null | grep -qi 'NexVUE'; then
+        ok "front-door smoke OK: https://127.0.0.1/login"
+      else
+        warn "front-door smoke failed (curl https://127.0.0.1/login) — check DocumentRoot is ${PUBLIC}, mod_ssl, and mod_rewrite"
+      fi
+      if curl -fskS --max-time 3 "https://127.0.0.1/api/version" 2>/dev/null \
           | grep -q '"version"'; then
-        ok "front-door API smoke OK: /api/version"
+        ok "front-door API smoke OK: https://127.0.0.1/api/version"
       else
         warn "front-door API smoke failed (/api/version) — rewrite may not be routing to index.php"
       fi
@@ -900,6 +992,7 @@ else
 fi
 
 install -m 644 "${REPO_DIR}/nexvue-mediamtx-jwt-patch.py" /usr/local/share/nexvue/nexvue-mediamtx-jwt-patch.py
+install -m 644 "${REPO_DIR}/nexvue-apache-http-off.py" /usr/local/share/nexvue/nexvue-apache-http-off.py
 install -m 644 "${REPO_DIR}/nexvue-jwks-loopback.conf" /usr/local/share/nexvue/nexvue-jwks-loopback.conf
 
 # MediaMTX JWT needs a reachable JWKS. HTTPS-only Apache often 301s :80 → :443,
@@ -992,6 +1085,8 @@ if [ -x /usr/local/bin/decklink-configure ]; then
   fi
 fi
 
+apply_nexvue_firewall
+
 fi # !CHECK_ONLY
 
 ###############################################################################
@@ -1069,6 +1164,58 @@ if systemctl is-active --quiet apache2 2>/dev/null; then
   ok "apache2 is active"
 else
   warn "apache2 not running — sudo systemctl enable --now apache2"
+fi
+if systemctl is-enabled --quiet apache2 2>/dev/null; then
+  ok "apache2 is enabled"
+else
+  warn "apache2 not enabled on boot — sudo systemctl enable apache2"
+fi
+if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
+  ok "sshd is active"
+else
+  warn "sshd not running — sudo systemctl enable --now ssh"
+fi
+if systemctl is-enabled --quiet ssh 2>/dev/null || systemctl is-enabled --quiet sshd 2>/dev/null; then
+  ok "sshd is enabled"
+else
+  warn "sshd not enabled on boot — sudo systemctl enable ssh"
+fi
+if [ -f /etc/apache2/ports.conf ]; then
+  if python3 "${REPO_DIR}/nexvue-apache-http-off.py" /etc/apache2/ports.conf --check \
+      >/dev/null 2>&1; then
+    ok "Apache Listen 80 is off"
+  else
+    warn "Apache still has Listen 80 — re-run sudo ./setup.sh"
+  fi
+fi
+if [ -e /etc/apache2/sites-enabled/000-default.conf ]; then
+  warn "Apache 000-default still enabled (HTTP :80) — re-run sudo ./setup.sh"
+elif [ -d /etc/apache2/sites-enabled ]; then
+  ok "Apache HTTP site 000-default is disabled"
+fi
+if command -v ufw >/dev/null 2>&1; then
+  if ufw status 2>/dev/null | grep -q "Status: active"; then
+    ok "ufw is active"
+    if ufw status 2>/dev/null | grep -qE 'OpenSSH|[[:space:]]22/tcp'; then
+      ok "ufw allows SSH"
+    else
+      warn "ufw active but SSH not allowed — re-run sudo ./setup.sh"
+    fi
+    if ufw status 2>/dev/null | grep -qE '\b443/tcp\b'; then
+      ok "ufw allows 443/tcp"
+    else
+      warn "ufw active but 443/tcp not allowed — re-run sudo ./setup.sh"
+    fi
+    if ufw status 2>/dev/null | grep -qE '\b80/tcp\b'; then
+      warn "ufw still allows 80/tcp — re-run sudo ./setup.sh (HTTP is closed)"
+    else
+      ok "ufw does not allow 80/tcp"
+    fi
+  else
+    warn "ufw is not active — sudo ./setup.sh allows SSH/443/8889/8189 and enables it"
+  fi
+else
+  warn "ufw not installed — sudo ./setup.sh installs and enables it"
 fi
 WEBROOT="${NEXVUE_WEBROOT:-/var/www/html}"
 PUBLIC="${WEBROOT}/public"
@@ -1215,31 +1362,10 @@ fi
   || warn "decklink-configure not installed (Duo/Quad BNC mapping; see step 5)"
 
 ###############################################################################
-# Optional: viewer firewall rules (only with --firewall — never silent)
+# --check --firewall: apply ufw without a full install
 ###############################################################################
-if $APPLY_FIREWALL; then
-  step "Firewall (ufw) — viewer ports (API/status are loopback-only)"
-  if ! command -v ufw >/dev/null; then
-    warn "ufw not installed — skipping (apt install ufw to use --firewall)"
-  else
-    # NOTE: does not enable ufw for you — enabling can drop your SSH session if
-    # 22 isn't already allowed. Opens viewer ports only; you enable ufw.
-    # :9997 / :9998 bind to 127.0.0.1 — do not open them.
-    ufw allow 80/tcp comment 'NexVUE player (Apache)' >/dev/null
-    ufw allow 443/tcp comment 'NexVUE player (Apache TLS)' >/dev/null
-    ufw allow 8889/tcp comment 'NexVUE WHEP signaling' >/dev/null
-    ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)' >/dev/null
-    # Metrics has NO port at all — the collector doesn't listen on anything;
-    # PHP reads its SQLite file directly and Apache serves the result on 443.
-    ok "NexVUE viewer ports opened (80,443,8889,8189/udp+tcp)"
-    if ufw status 2>/dev/null | grep -qE '\b9997\b|\b9998\b'; then
-      warn "ufw still allows 9997/9998 — remove those rules (API/status are loopback-only now)"
-    fi
-    if ! ufw status | grep -q "Status: active"; then
-      warn "ufw is NOT active — rules staged but not enforced. Ensure 22/ssh is allowed, then: sudo ufw enable"
-    fi
-    warn "8554 (RTSP) left closed on purpose — loopback ingest only"
-  fi
+if $CHECK_ONLY && $APPLY_FIREWALL; then
+  apply_nexvue_firewall
 fi
 
 ###############################################################################
@@ -1267,9 +1393,10 @@ Next steps:
   5. TLS: /etc/nexvue/tls/{fullchain,privkey}.pem (self-signed if setup created
      them). Replace with a real cert when ready; Apache + MediaMTX already
      point there. Trust click-through once on https://<edge>:8889/ if self-signed.
-  6. Firewall (if ufw is in use): open ports with
-       sudo ./setup.sh --firewall     (then: sudo ufw enable, once 22/ssh is allowed)
-     or apply the rules manually — see the Firewall section in README.md
+     UI is HTTPS-only (Apache :80 / ufw 80 closed). Use https://<edge-ip>/login
+     — plain http:// will not connect.
+  6. Firewall: setup allows OpenSSH + 443/8889/8189 and enables ufw (HTTP :80
+     is not allowed). Re-apply with sudo ./setup.sh --firewall if needed.
   7. Remove any Apache Basic Auth / .htaccess AuthType — app login replaces it.
      Confirm JWKS (MediaMTX): curl -fsS http://127.0.0.1:9080/nexvue-jwks.php | head
   8. Login:  https://<edge-ip>/login

@@ -160,7 +160,8 @@ this box can't get additional ports opened.
   `NEXVUE_SYNC_KEY`) for Bearer/`X-NexVUE-Key` sync + `api_ping`. Client gate
   JS remains for nav roles + WHEP JWT. Central catalog portal + Entra OIDC
   remain later. Real (non-self-signed) TLS for Apache + WHEP `:8889` still
-  recommended before wider users.
+  recommended before wider users. Apache is HTTPS-only (`:80` closed) so
+  the player origin is `https:` and WHEP uses `https://…:8889`.
 - **Phase 3: DMZ** — MediaMTX API (`127.0.0.1:9997`) and status
   (`NEXVUE_STATUS_BIND=127.0.0.1:9998`) are loopback-bound; Player uses
   `nexvue-mediamtx-api.php` + `nexvue-status.php`. Remaining: Entra OIDC,
@@ -188,11 +189,13 @@ this box can't get additional ports opened.
 - `setup.sh` ensures `/etc/nexvue/tls/{fullchain,privkey}.pem` (creates a
   self-signed pair if missing; never overwrites existing), points Apache
   HTTPS + MediaMTX WHEP/API at those paths (`root:ssl-cert`, key 640).
-  Self-signed still needs a one-time per-browser click-through on `:8889`
-  (trust on `:443` does not extend to other ports). Replace the PEMs with
-  a real cert before wider users. Player stats/dots use same-origin
-  proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`); `:9997`/`:9998`
-  are loopback-only.
+  Apache HTTP `:80` is off (`000-default` + `Listen 80`); UI is HTTPS-only.
+  `setup.sh` `enable --now`s `apache2` and `ssh`, allows OpenSSH/443/8889/8189
+  in ufw (not 80), and enables ufw. Self-signed still needs a one-time
+  per-browser click-through on `:8889` (trust on `:443` does not extend to
+  other ports). Replace the PEMs with a real cert before wider users. Player
+  stats/dots use same-origin proxies (`nexvue-mediamtx-api.php`,
+  `nexvue-status.php`); `:9997`/`:9998` are loopback-only.
 - `decklink-status.cpp`'s active-detection probe takes ~0.7s per IDLE input
   it has to open and test; status daemon poll interval was raised to 5s
   (from 2s) to accommodate, and `STALE_AFTER_S` is set above the helper
@@ -204,7 +207,8 @@ this box can't get additional ports opened.
   vah264enc` is still the source of truth if a different box rejects a
   property.
 - MediaMTX API (:9997) and status daemon (:9998) bind loopback; do not
-  open them in ufw. `setup.sh --firewall` opens viewer ports only.
+  open them in ufw. `setup.sh` allows OpenSSH + 443/8889/8189 (not :80)
+  and enables ufw (`--firewall` re-applies).
 - Auto-switch thresholds in `index.html` are conservative first guesses;
   tune from field data.
 

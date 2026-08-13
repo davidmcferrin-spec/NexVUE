@@ -79,10 +79,10 @@ echo
 
 # ---- PHP API ----------------------------------------------------------------
 echo "-- nexvue-metrics.php host series --"
-api_url="http://127.0.0.1/nexvue-metrics.php?endpoint=host&range=1h"
+api_url="https://127.0.0.1/api/metrics?view=host&range=1h"
 if ! command -v curl >/dev/null 2>&1; then
   warn "curl missing — skip PHP API probe"
-elif out="$(curl -fsS --max-time 10 "$api_url" 2>/dev/null)"; then
+elif out="$(curl -fskS --max-time 10 "$api_url" 2>/dev/null)"; then
   if grep -q 'cpu_temp_c' <<<"$out"; then
     ok "API host payload includes cpu_temp_c"
   else

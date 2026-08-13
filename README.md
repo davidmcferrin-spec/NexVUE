@@ -68,8 +68,10 @@ MediaMTX WHEP/API share the same PEMs), and `enable --now`s `mediamtx`,
 `nexvue-encode@0..(MAX_CHANNELS-1)` (default 8 → `@0`–`@7`; Duo: set
 `MAX_CHANNELS=4` in `nexvue.env`). Empty SDI ports auto-park. When
 `/var/www/html` exists, it also installs the Apache path UI (`/login`,
-`/player`, …). Use `sudo ./setup.sh --check` after a reboot;
-`sudo ./setup.sh --firewall` for Phase 1 ufw rules.
+`/player`, …). Use `sudo ./setup.sh --check` after a reboot.
+`setup.sh` also enables `apache2` + `ssh`, turns off Apache HTTP `:80`
+(Listen + `000-default`), allows OpenSSH / 443 / 8889 / 8189 in ufw (not
+`:80`), and enables ufw. `--firewall` is a legacy alias for that ufw step.
 
 Manual steps below match what `setup.sh` does if you prefer to run them by hand.
 
@@ -170,8 +172,8 @@ Reading it back is Apache + PHP (next step). See "Usage Metrics Dashboard".
 
 ### 5. Apache web UI (player / multiviewer / metrics / ops)
 
-Drop the UI files into Apache's docroot (same place IT already serves on
-80/443). Metrics and ops PHP scripts must sit next to the HTML so relative
+Drop the UI files into Apache's docroot (HTTPS `:443` — HTTP `:80` is
+closed). Metrics and ops PHP scripts must sit next to the HTML so relative
 `fetch()` paths resolve:
 
 Prefer `sudo ./setup.sh` — it installs Apache + mod_php, copies the full
@@ -289,12 +291,14 @@ opened explicitly. Port/protocol map:
 
 | Port      | Proto     | Scope        | Purpose                                   |
 |-----------|-----------|--------------|-------------------------------------------|
-| 8889      | TCP       | viewers      | WHEP signaling (HTTP POST/PATCH/DELETE)   |
+| 22        | TCP       | operators    | SSH (`OpenSSH` ufw profile)               |
+| 443       | TCP       | viewers      | Apache HTTPS UI (`/login`, `/player`, …)  |
+| 8889      | TCP       | viewers      | WHEP signaling (HTTPS POST/PATCH/DELETE)  |
 | 8189      | UDP + TCP | viewers      | WebRTC media (UDP) + ICE-TCP fallback     |
+| 80        | —         | **closed**   | Apache HTTP is off; do not allow in ufw   |
 | 9997      | TCP       | **loopback** | MediaMTX API — do NOT open; Player uses `nexvue-mediamtx-api.php` |
 | 9998      | TCP       | **loopback** | Status daemon — do NOT open; Player uses `nexvue-status.php` |
 | —         | —         | (none)       | Metrics dashboard has NO port at all — the collector doesn't listen on anything; PHP reads its SQLite file directly and Apache serves it on 443. See Usage Metrics Dashboard section. |
-| 80 / 443  | TCP       | viewers      | Apache serving the player page            |
 | 8554      | —         | **loopback** | RTSP ingest — do NOT open (127.0.0.1 only)|
 
 Two things people get wrong here: the WebRTC **media** port (8189) needs
@@ -307,18 +311,22 @@ then plays nothing.
 
 `apiAddress` is `127.0.0.1:9997` and `nexvue-status` binds `127.0.0.1:9998`
 by default — do **not** open those in ufw. Player/Multiview stats and signal
-dots go through Apache PHP proxies on 443.
+dots go through Apache PHP proxies on 443. `setup.sh` applies these rules
+and enables ufw (SSH first so you are not locked out). `--firewall` re-applies
+the same step.
 
 ```bash
-sudo ufw allow 80/tcp comment 'NexVUE player (Apache)'
-sudo ufw allow 443/tcp comment 'NexVUE player (Apache TLS)'
+sudo ufw allow OpenSSH
+sudo ufw allow 443/tcp comment 'NexVUE Apache HTTPS'
 sudo ufw allow 8889/tcp comment 'NexVUE WHEP signaling'
 sudo ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)'
-sudo ufw enable
+sudo ufw delete allow 80/tcp   # if an older install opened HTTP
+sudo ufw --force enable
 # Metrics has no port to open at all — the collector doesn't listen on
 # anything; PHP reads its SQLite file directly, served by Apache on 443
 # alongside everything else. See "Usage Metrics Dashboard".
 # 9997/9998 are loopback-only — never allow them through the firewall.
+# Port 80 stays closed — Apache does not listen for HTTP.
 sudo ufw status verbose
 ```
 
@@ -337,7 +345,7 @@ journalctl -fu nexvue-encode@0
 
 Then from a LAN machine:
 
-- **Built-in player:** `http://<edge-ip>:8889/ch0`
+- **Built-in player:** `https://<edge-ip>:8889/ch0`
 - **Test player with stats:** open `/player` via Apache (top nav → Player),
   click a channel. Session tiles (resolution/fps, bitrate, RTT, loss, SDI
   input, …) live in a bottom drawer — click **Session metrics** to expand
@@ -643,8 +651,10 @@ dots stay gray and **SDI input** shows `status unreachable`, check that
    `nexvue` + `www-data` to `ssl-cert`, points MediaMTX
    (`webrtcServer*` / `apiServer*`) and Apache (`SSLCertificate*` +
    `nexvue-ssl-certs.conf`) at those paths, enables `mod_ssl` / `default-ssl`
-   when needed, then starts services. Existing PEM files are never
-   overwritten — drop a real cert there before or after setup.
+   when needed, **disables Apache HTTP `:80`** (`a2dissite 000-default` +
+   comment `Listen 80`), enables `apache2` + `ssh`, then starts services.
+   Existing PEM files are never overwritten — drop a real cert there before
+   or after setup.
 2. **Replace the self-signed pair when you have a real cert** (same paths;
    keep `root:ssl-cert` + modes above), then:
    ```bash
@@ -774,7 +784,7 @@ to be served publicly via Apache anyway. Nothing to configure here as long
 as both pieces are running with their shipped units/script — just know
 *why* it works if you're auditing permissions later.
 
-Open `http://<edge-ip>/metrics.html` (top nav → Metrics).
+Open `https://<edge-ip>/metrics` (top nav → Metrics).
 
 ### Views (`nexvue-metrics.php?view=...&range=...` or `&from=&to=`)
 
@@ -967,8 +977,10 @@ expired; JWT auth is the lasting gate.
 - **`index.html` / `multiview.html` auto-discover the edge host** from
   `location.hostname` — load them via Apache at any address and WHEP/API/status
   all target that same host on their fixed ports (8889/9997/9998). Protocol
-  (`http:`/`https:`) is auto-detected from the page's own scheme — see the TLS
-  section above if that's not lining up. Top nav brand **NexVUE** (click for
+  (`http:`/`https:`) is auto-detected from the page's own scheme — Apache is
+  HTTPS-only (`:80` closed), so load `https://<edge>/player` (plain HTTP will
+  not connect, and an HTTP origin would send WHEP to `http://…:8889` against
+  TLS MediaMTX). Top nav brand **NexVUE** (click for
   page-URL QR) /
   Player / Multiview / Metrics / Services / Settings. Player and Multiview
   session metrics sit in a collapsed bottom drawer (`Session metrics`);
