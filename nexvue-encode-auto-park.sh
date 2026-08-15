@@ -4,7 +4,7 @@
 #
 # Verbs:
 #   check <channel_id> <device_number>
-#     Run from nexvue-encode.sh (user nexvue) before gst-launch.
+#     Run from nexvue-encode.py (user nexvue) before the first capture open.
 #     Reads AUTO_PARK_UNLOCK_CYCLES (default 5; 0 = disabled).
 #     Exit 0  → continue encode (locked, disabled, or fail-open).
 #     Exit 1  → unlocked this start; counter bumped; encode should exit so

@@ -20,7 +20,7 @@ echo
 
 echo "-- ExecStart / binary --"
 systemctl show -p FragmentPath -p ExecStart nexvue-encode@0 2>/dev/null || true
-for f in /usr/local/bin/nexvue-encode.sh /usr/local/bin/nexvue-supervisor.py; do
+for f in /usr/local/bin/nexvue-encode.sh /usr/local/bin/nexvue-encode.py /usr/local/bin/nexvue-supervisor.py; do
   if [ -x "$f" ] || [ -f "$f" ]; then
     ls -l "$f"
   else

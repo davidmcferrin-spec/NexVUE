@@ -4,11 +4,10 @@
 #   systemctl enable --now nexvue-encode@0 nexvue-encode@1 ...
 # Instance name %i selects /etc/nexvue/channels/%i.env
 #
-# ExecStart runs nexvue-encode.sh (gst-launch DeckLink → MediaMTX). The
-# Phase 1.5 supervisor/slate path was rolled back after field instability;
-# nexvue-supervisor.py remains in the tree for a future redesign only.
-# Encoders restart independently of each other and of MediaMTX; if MediaMTX
-# bounces, rtspclientsink fails, the unit exits, and systemd relaunches it.
+# ExecStart runs nexvue-encode.sh → nexvue-encode.py (persistent MediaMTX
+# publish + disposable DeckLink capture). Phase 1.5 input-selector/slate is
+# not used. Encoders restart independently; RTSP sink death rebuilds publish
+# only. Capture not-negotiated / exclusive-open races do not tear down WHEP.
 
 [Unit]
 Description=NexVUE encoder channel %i (DeckLink -> MediaMTX)
@@ -48,8 +47,8 @@ Environment=GST_REGISTRY=/tmp/.gstreamer-registry.bin
 ExecStart=/usr/bin/bash -c 'set -a; f="/etc/nexvue/channels/%i.env"; [ -r "$f" ] || { echo "missing env file: $f" >&2; exit 71; }; . "$f"; g="/etc/nexvue/nexvue.env"; [ -r "$g" ] && . "$g"; CHANNEL_ID=%i; exec /usr/local/bin/nexvue-encode.sh'
 
 Restart=always
-# Slightly longer than DeckLink exclusive-open release after SIGTERM; in-script
-# open retries (nexvue-encode.sh) handle the short reopen race.
+# Slightly longer than DeckLink exclusive-open release after SIGTERM; the
+# Python encoder retries capture in-process while publish stays up.
 RestartSec=5
 # Exit 75 = auto-park after consecutive unlocked DeckLink starts
 # (nexvue-encode-auto-park.sh). Do not restart; ExecStopPost disables the unit.

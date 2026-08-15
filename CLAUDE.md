@@ -125,12 +125,14 @@ this box can't get additional ports opened.
   for Temperature schema/API/chart), then a clean 72h closeout window.
   Station-wide `MAX_DEVICES` / `MAX_CHANNELS` live in `/etc/nexvue/nexvue.env`.
   Glass-to-glass latency photos remain deferred until on-site/bench access.
-- **Phase 1.5: rolled back** — `nexvue-encode@.service` ExecStart is again
-  `nexvue-encode.sh`. The script itself was restored to the Phase-1-stable
-  revision from immediately before supervisor/slate (`git 4095445^`) so
-  supervisor-era pipeline drift is gone. `nexvue-supervisor.py` stays in
-  the tree unused. Empty ports auto-park after consecutive unlocks, or park
-  via Services Enable/Disable. Captions/LO/metrics/ops UI remain. Assembly tests:
+- **Phase 1.5: rolled back (slate/selector)** — production ExecStart is
+  `nexvue-encode.sh` → `nexvue-encode.py`: persistent MediaMTX publish
+  (appsrc → HI/LO encode → RTSP) + disposable DeckLink capture (appsink).
+  SDI/`not-negotiated`/exclusive-open races tear down capture only; publish
+  holds last-frame then black (`SIGNAL_LOSS_HOLD_S`, default 15s) so WHEP
+  stays up. No `input-selector` / slate (`nexvue-supervisor.py` unused).
+  Empty ports still auto-park after consecutive never-live unlocks.
+  Captions/LO/metrics/ops UI remain. Tests: `test/test_nexvue_encode.py`,
   `test/test-pipeline-assembly.sh`.
 - **Phase 2: edge local auth landed** — bcrypt users (admin/operator/sharer/viewer),
   per-user channel ACL, named revocable share links with mandatory expiry
@@ -175,8 +177,10 @@ this box can't get additional ports opened.
 - Empty Quad ports with `nexvue-encode@N` still enabled used to restart-loop
   after Phase 1.5 slate rollback. **Auto-park** disables the slot after
   `AUTO_PARK_UNLOCK_CYCLES` consecutive unlocked starts (default 5;
-  `RestartSec=5`). Encode also **retries DeckLink opens** with backoff and
-  kills hung `gst-launch` after fatal `not-negotiated` (zombie green unit).
+  `RestartSec=5`). `nexvue-encode.py` retries capture in-process after
+  `not-negotiated` while publish stays up; a silent PAUSED open past
+  `DECKLINK_OPEN_GATE_S` is treated as a failed open (not a green unit).
+  Hung `set_state(NULL)` after `DECKLINK_HANG_KILL_S` exits for systemd.
   `setup.sh` seeds channel `.env` stubs and `enable --now`s
   `mediamtx` / `nexvue-status` / `nexvue-metrics` /
   `nexvue-decklink-configure` / `nexvue-encode@0..(MAX_CHANNELS-1)` (default

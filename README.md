@@ -109,7 +109,7 @@ vainfo | grep -i h264
 
 If vainfo shows no encode entrypoints on Arrow Lake, the repo media driver is
 too old — install `intel-media-va-driver-non-free` from Intel's own apt
-repository (or the kisak PPA) and re-check. `nexvue-encode.sh` fails loudly
+repository (or the kisak PPA) and re-check. `nexvue-encode.py` fails loudly
 with a pointer to this if `vah264enc` is missing.
 
 ### 2. Blackmagic Desktop Video
@@ -142,7 +142,7 @@ sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin nexvue
 
 sudo mkdir -p /etc/nexvue/channels
 sudo cp mediamtx.yml /etc/nexvue/
-sudo cp nexvue-encode.sh nexvue-encode-auto-park.sh nexvue-supervisor.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-encode.sh /usr/local/bin/nexvue-encode-auto-park.sh /usr/local/bin/nexvue-supervisor.py
+sudo cp nexvue-encode.sh nexvue-encode.py nexvue-encode-auto-park.sh nexvue-supervisor.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-encode.sh /usr/local/bin/nexvue-encode.py /usr/local/bin/nexvue-encode-auto-park.sh /usr/local/bin/nexvue-supervisor.py
 sudo cp nexvue-status-server.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-status-server.py
 sudo cp nexvue-captions-decode.py nexvue-captions-probe.sh /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-captions-decode.py /usr/local/bin/nexvue-captions-probe.sh
 sudo cp nexvue-metrics-server.py /usr/local/bin/ && sudo chmod 755 /usr/local/bin/nexvue-metrics-server.py
@@ -573,7 +573,7 @@ more code). Current hardware: **DeckLink Quad 2** (already installed at
 | Deploy UI + Temperature metrics | Re-run `setup.sh` + `nexvue-phase1-deploy-verify.sh` after each pull |
 | 72h soak (clean Started window) | Operator — start after deploy-verify; use `--since 1h` until journal is clean |
 | Captions probe + Player CC | Operator on a captioned feed |
-| Phase 1.5 supervisor assumptions | Rolled back — ExecStart is `nexvue-encode.sh` again |
+| Phase 1.5 supervisor assumptions | Rolled back (slate/selector). Production encode is `nexvue-encode.py` (persistent publish, disposable capture) |
 
 1. **Quad 2 connectors → half-duplex** for every intended capture BNC
    (`sudo decklink-configure --apply-inputs`, or Desktop Video Setup). Confirm with `decklink-status` (lock +
@@ -964,9 +964,9 @@ expired; JWT auth is the lasting gate.
   (`nexvue-encode@.service`'s `ExecStart`), not systemd's native
   `EnvironmentFile=` parser — the latter does NOT strip inline comments, so a
   line like `MAX_DEVICES=4   # note` would otherwise pass the comment through
-  as part of the value and break arithmetic checks. `nexvue-encode.sh` also
-  defensively strips inline comments itself (`strip_inline()`), so this is
-  safe even if the script is ever invoked outside the unit.
+  as part of the value and break arithmetic checks. `nexvue-encode.py`
+  also strips inline comments when reading env, so this is safe even if
+  the encoder is invoked outside the unit.
 - **Values with spaces must be shell-quoted** for the same reason (the file is
   sourced by bash): an unquoted `CHANNEL_ALIAS=TVU 35` runs `35` as a command
   and silently truncates the alias to `TVU` (journal tell:
@@ -1056,10 +1056,10 @@ expired; JWT auth is the lasting gate.
 - **Closed captions are a side channel**, not MediaMTX tracks. Encode writes
   `/run/nexvue/captions/<path>.json`; Apache serves SSE via
   `nexvue-captions.php`. HI/LO reconnect keeps the same channel subscription.
-  The gst-launch encoder keeps `output-cc` / `ccextractor` on the DeckLink
-  DeckLink branch continuously (even while SLATE is the selected output) and
-  sends a control-FIFO `CLEAR` on every SLATE entry so the overlay blanks
-  immediately rather than waiting out the decoder's own idle-erase timeout.
+  The encode capture pipeline keeps `output-cc` / `ccextractor` on DeckLink.
+  Capture rebuilds close the FIFO (decoder exits on EOF); encode respawns
+  the decoder on the next open. Idle-erase still clears stale overlay text
+  when VANC stops.
 - **Input status & reference:** the `nexvue-status` daemon (port 9998) polls the
   DeckLink Status API via the `decklink-status` helper and serves JSON
   (per-input signal lock + detected format, genlock reference lock + mode).
@@ -1082,18 +1082,22 @@ expired; JWT auth is the lasting gate.
   in Settings if LO still looks choppy — under multi-channel load keep usage
   at 7 or use a lower preset.
 - **SRT inputs:** deferred with the Phase 1.5 rollback — production encode
-  is DeckLink-only (`nexvue-encode.sh`). `INPUT_TYPE=srt` remains in Settings
+  is DeckLink-only (`nexvue-encode.py`). `INPUT_TYPE=srt` remains in Settings
   for a future redesign; do not enable it on live units today.
-- **Self-healing model:** constant output caps mean input format changes never
-  drop viewer sessions; the watchdog turns capture hangs into clean systemd
-  restarts; black frames ride through brief signal loss. `nexvue-encode.sh`
-  retries DeckLink opens (`DECKLINK_OPEN_ATTEMPTS`, backoff) and force-kills
-  hung `gst-launch` after fatal `not-negotiated` so the unit cannot stay
-  green with a dead pipeline. Unlocked empty ports cycle (`RestartSec=5`)
-  for up to `AUTO_PARK_UNLOCK_CYCLES` consecutive starts (default 5), then
-  `nexvue-encode-auto-park.sh` disables that `encode@N` (exit 75 +
-  `ExecStopPost`). Phase 1.5 NO SIGNAL slate was rolled back; production
-  ExecStart is `nexvue-encode.sh` again.
+- **Self-healing model:** `nexvue-encode.py` runs two GStreamer pipelines in
+  one process. **Publish** (appsrc → HI/LO encode → `rtspclientsink`) stays
+  up and keeps pushing last-frame / black + silence so MediaMTX / WHEP
+  sessions survive SDI flaps. **Capture** (DeckLink → normalize → appsink)
+  is torn down and reopened on `not-negotiated`, exclusive-open races, or
+  EOS — never via `input-selector` / slate (that stormed in Phase 1.5).
+  A silent PAUSED open past `DECKLINK_OPEN_GATE_S` (10s) is a failed open,
+  not a green unit. RTSP sink death rebuilds publish only. Once a channel
+  has been live, unlocks retry in-process and do not increment auto-park.
+  Empty ports that never lock still cycle (`RestartSec=5`) for up to
+  `AUTO_PARK_UNLOCK_CYCLES` (default 5), then `nexvue-encode-auto-park.sh`
+  disables that `encode@N` (exit 75 + `ExecStopPost`). `WATCHDOG_MS`
+  defaults to **0** (off) so a 3s SDI hitch is hold/black, not a unit bounce.
+  `SIGNAL_LOSS_HOLD_S` (default 15) holds the last frame, then black.
 - **Signal-present / encoder-alive alarming** belongs in Phase 4 portal ops
   via **outbound** edge heartbeats (DMZ cannot reach TRUSTED monitors).
   Status daemon JSON + MediaMTX `/v3/paths/list` remain the on-box data
@@ -1101,15 +1105,15 @@ expired; JWT auth is the lasting gate.
 - **Format changes:** normalized away — output caps are constant per channel.
 - **No Docker, no Node** — two binaries, two scripts, systemd.
 
-## Phase 1.5 supervisor — rolled back (deferred redesign)
+## Phase 1.5 supervisor — rolled back (superseded by split-pipeline encode)
 
-**Status (2026-07-20):** production ExecStart is again
-`/usr/local/bin/nexvue-encode.sh`. The supervisor/`input-selector`/slate path
-was pulled after repeated LIVE↔SLATE flaps and DeckLink
-`not-negotiated`/`error (-5)` storms on real hardware. `nexvue-supervisor.py`
-and its unit tests remain in the tree as a starting point for a future
-redesign only — systemd does not run them. Captions, LO, metrics, and the
-ops UI continue to work on the gst-launch encoder.
+**Status (2026-08-14):** production ExecStart is `nexvue-encode.sh` →
+`nexvue-encode.py`. The Phase 1.5 `input-selector` / NO SIGNAL slate path
+was pulled after LIVE↔SLATE flaps and DeckLink `not-negotiated` /
+`error (-5)` storms. `nexvue-supervisor.py` remains in the tree unused.
+The 2.4 encoder keeps the 1.5 *goal* (persistent RTSP, disposable DeckLink)
+without selector pad surgery: two pipelines, appsrc/appsink, last-frame /
+black hold.
 
 Historical notes below describe the rolled-back design.
 
@@ -1300,7 +1304,7 @@ and implemented — see the decisions list above the collapsed spec.
 | Phase | Scope |
 |---|---|
 | 1 (this) | Single edge, LAN WHEP, no auth. Prove stability + latency. |
-| 1.5 | **Rolled back** — production encode is `nexvue-encode.sh` again. Supervisor/slate deferred for redesign after field instability. See "Phase 1.5 supervisor" below. |
+| 1.5 | **Rolled back** (slate/selector). Split-pipeline encode (`nexvue-encode.py`) is the production healer. See "Phase 1.5 supervisor" below. |
 | 2 | **Edge local auth landed** (bcrypt users + roles, share links, MediaMTX JWT/JWKS, sync-shaped export/import). Central PHP portal (catalog + fleet sync client) still future; Entra OIDC remains Phase 3. |
 | 3 | DMZ exposure: TLS on 443, `webrtcAdditionalHosts` = public FQDN, single UDP 8189 rule + ICE-TCP fallback; MediaMTX API + status daemon already loopback-bound (`nexvue-mediamtx-api.php` / `nexvue-status.php`). Remaining: Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
 | 4 | Fleet rollout: per-station config management; portal ops dashboard fed by **outbound** edge heartbeats (encoder-alive, signal-present, session counts). No inbound probe from TRUSTED — DMZ edge pushes out only. |

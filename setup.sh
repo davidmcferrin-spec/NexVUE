@@ -228,7 +228,7 @@ done
 # ---- Required repo files (verify before touching the system) ---------------------
 REQUIRED_FILES=(
   mediamtx.yml mediamtx.service
-  nexvue-encode.sh nexvue-supervisor.py nexvue-encode@.service
+  nexvue-encode.sh nexvue-encode.py nexvue-supervisor.py nexvue-encode@.service
   nexvue-encode-auto-park.sh
   nexvue-decklink-configure.service
   decklink-configure.cpp
@@ -291,7 +291,7 @@ apt-get install -y -qq \
   openssh-server ufw \
   python3-gi python3-gst-1.0 gir1.2-glib-2.0 gir1.2-gstreamer-1.0 \
   gir1.2-gst-plugins-base-1.0
-ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for the Phase 1.5 supervisor — never pip; Apache + php-cli/sqlite3 for login/auth + metrics.php)"
+ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for nexvue-encode.py — never pip; Apache + php-cli/sqlite3 for login/auth + metrics.php)"
 
 # PHP under Apache (login / ops / metrics). Idempotent: enable whatever
 # versioned mod_php apt just installed, then reload if Apache is running.
@@ -454,6 +454,7 @@ if [ -f /etc/nexvue/mediamtx.yml ]; then
 fi
 
 install -m 755 "${REPO_DIR}/nexvue-encode.sh" /usr/local/bin/nexvue-encode.sh
+install -m 755 "${REPO_DIR}/nexvue-encode.py" /usr/local/bin/nexvue-encode.py
 install -m 755 "${REPO_DIR}/nexvue-encode-auto-park.sh" /usr/local/bin/nexvue-encode-auto-park.sh
 install -m 755 "${REPO_DIR}/nexvue-supervisor.py" /usr/local/bin/nexvue-supervisor.py
 install -m 755 "${REPO_DIR}/nexvue-status-server.py" /usr/local/bin/nexvue-status-server.py
@@ -1134,6 +1135,9 @@ done
 [ -x /usr/local/bin/nexvue-encode.sh ] \
   && ok "nexvue-encode.sh present" \
   || warn "nexvue-encode.sh missing — nexvue-encode@N will not start"
+[ -x /usr/local/bin/nexvue-encode.py ] \
+  && ok "nexvue-encode.py present (persistent publish + disposable capture)" \
+  || warn "nexvue-encode.py missing — nexvue-encode@N will not start"
 [ -x /usr/local/bin/nexvue-encode-auto-park.sh ] \
   && ok "nexvue-encode-auto-park.sh present" \
   || warn "nexvue-encode-auto-park.sh missing — empty-port auto-park disabled"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit tests for nexvue-encode.sh pipeline assembly (GStreamer stubbed via PATH).
+# Unit tests for nexvue-encode pipeline assembly (print-pipeline, no GI).
 #
 # Must run under bash (uses pipefail, [[ ]], <<< herestrings). If launched with
 # sh/dash (e.g. `sh test-pipeline-assembly.sh`), re-exec under bash so the
@@ -10,13 +10,8 @@ if [ -z "${BASH_VERSION:-}" ]; then
 fi
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export PATH="$PWD/test/stubbin:$PATH"
-# Open-supervisor defaults add settle sleeps; assembly only checks pipeline text.
-export DECKLINK_OPEN_DELAY_S=0
+export NEXVUE_ENCODE_PRINT_PIPELINE=1
 export DECKLINK_START_STAGGER_S=0
-export DECKLINK_OPEN_ATTEMPTS=1
-export DECKLINK_OPEN_GATE_S=30
-export DECKLINK_HANG_KILL_S=0
 fail() { echo "FAIL: $1"; exit 1; }
 run_encode() { bash ./nexvue-encode.sh "$@"; }
 
@@ -32,7 +27,10 @@ expect_usage_64() {
 # T1: single-rendition pipeline (LO explicitly off)
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false run_encode)
 grep -q "rtsp://127.0.0.1:8554/ch0" <<<"$out" || fail "T1 default RTSP url"
-grep -q "watchdog" <<<"$out" || fail "T1 watchdog present"
+grep -q "watchdog" <<<"$out" && fail "T1 default WATCHDOG_MS=0 must omit watchdog"
+grep -q "appsink name=vasink" <<<"$out" || fail "T1 capture appsink"
+grep -q "appsrc name=vsrc" <<<"$out" || fail "T1 publish appsrc"
+grep -q "input-selector" <<<"$out" && fail "T1 must not use input-selector"
 grep -q "deinterlace fields=all method=yadif" <<<"$out" || fail "T1 default method=yadif"
 
 # T1b: publish JWT appended to RTSP URLs when NEXVUE_PUBLISH_JWT is set
@@ -42,8 +40,8 @@ grep -q 'location=rtsp://127.0.0.1:8554/ch0?jwt=test.jwt.token' <<<"$out_jwt" \
 out_jwt_lo=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true NEXVUE_PUBLISH_JWT=test.jwt.token run_encode)
 grep -q 'location=rtsp://127.0.0.1:8554/ch0lo?jwt=test.jwt.token' <<<"$out_jwt_lo" \
   || fail "T1b LO RTSP must append ?jwt="
-out_nw=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false WATCHDOG_MS=0 run_encode)
-grep -q "watchdog" <<<"$out_nw" && fail "T1 WATCHDOG_MS=0 must omit watchdog"
+out_wd=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false WATCHDOG_MS=3000 run_encode)
+grep -q "watchdog timeout=3000" <<<"$out_wd" || fail "T1 WATCHDOG_MS=3000 must appear on capture"
 grep -q "width=1920,height=1080,framerate=60000/1001" <<<"$out" || fail "T1 normalization caps"
 grep -q "opusenc" <<<"$out" || fail "T1 audio present by default"
 grep -q "audiorate" <<<"$out" || fail "T1 audiorate present (gapless timestamp fix)"
@@ -55,7 +53,7 @@ grep -q "name=sinklo location=rtsp://127.0.0.1:8554/ch3lo" <<<"$out" || fail "T2
 grep -q "tee name=vt" <<<"$out" || fail "T2 video tee"
 grep -q "width=1280,height=720,framerate=30000/1001" <<<"$out" || fail "T2 lo caps"
 grep -q "tee name=at" <<<"$out" || fail "T2 audio tee"
-grep -c "vah264enc" <<<"$out" | grep -q "^2$" || fail "T2 two encoders"
+[ "$(grep -o "vah264enc" <<<"$out" | wc -l)" -eq 2 ] || fail "T2 two encoders"
 
 # T3: silent channel drops audio entirely
 out=$(DEVICE_NUMBER=1 CHANNEL_PATH=ch1 ENABLE_AUDIO=false run_encode)

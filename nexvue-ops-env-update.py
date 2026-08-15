@@ -354,7 +354,7 @@ def sanitize_value(key: str, value: str) -> str:
         return value
     # Everything else: alphanumeric-ish; reject shell metacharacters.
     # Also reject '!' — EXTRA_ENC_ARGS is interpolated UNQUOTED into the
-    # gst-launch pipeline in nexvue-encode.sh (handled above).
+    # gst parse-launch strings in nexvue-encode.py (handled above).
     if re.search(r"[`$;&|<>!\\\"']", value):
         raise ValueError(f"{key}: disallowed characters in value")
     return value

@@ -8,7 +8,7 @@
 #   - PHP host API returns temperature fields
 #   - Apache docroot has current UI (no obsolete cast.html)
 #   - MAX_DEVICES in /etc/nexvue/nexvue.env
-#   - encode units use nexvue-encode.sh
+#   - encode units use nexvue-encode.sh → nexvue-encode.py
 #
 # Usage:
 #   sudo ./nexvue-phase1-deploy-verify.sh
@@ -149,6 +149,11 @@ if grep -q 'nexvue-encode.sh' <<<"$exec_line"; then
   ok "nexvue-encode@0 ExecStart → nexvue-encode.sh"
 else
   fail "nexvue-encode@0 ExecStart is not nexvue-encode.sh — redeploy unit: sudo ./setup.sh && sudo systemctl daemon-reload"
+fi
+if [ -x /usr/local/bin/nexvue-encode.py ]; then
+  ok "nexvue-encode.py present"
+else
+  fail "nexvue-encode.py missing — encode@N wrapper cannot start the resilient encoder"
 fi
 if [ -x /usr/local/bin/nexvue-encode-auto-park.sh ]; then
   ok "nexvue-encode-auto-park.sh present"

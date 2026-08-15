@@ -234,6 +234,7 @@ def collect_versions(dest: Path) -> None:
     }
     for helper in (
         "/usr/local/bin/nexvue-encode.sh",
+        "/usr/local/bin/nexvue-encode.py",
         "/usr/local/bin/nexvue-support-bundle.py",
         "/usr/local/bin/decklink-status",
         "/usr/local/bin/decklink-audio-probe",
