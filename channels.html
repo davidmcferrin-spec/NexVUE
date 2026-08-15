@@ -567,7 +567,7 @@
     DEINT_FIELDS: "all",
     DEINT_METHOD: "yadif",
     VIDEO_ENCODER: "vah264enc",
-    DECKLINK_BUFFER_FRAMES: "2",
+    DECKLINK_BUFFER_FRAMES: "3",
     ENABLE_AUDIO: "true",
     AUDIO_LAYOUT: "51_sap",
     AUDIO_EMBEDS: "1,2,3,4,5,6,7,8",
@@ -639,7 +639,7 @@
       label: "DeckLink buffer (frames)",
       type: "select",
       options: ["1", "2", "3", "4"],
-      tip: "Capture queue depth. Keep small for latency — 2 is recommended. Default 2.",
+      tip: "Capture queue depth. Keep small for latency — 3 gives a little headroom against SDI/driver jitter over the prior 2. Default 3.",
     },
     ENABLE_AUDIO: {
       label: "Publish audio",

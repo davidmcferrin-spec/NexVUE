@@ -174,6 +174,14 @@ class TestCapturePolicy(unittest.TestCase):
         self.assertEqual(d.action, "retry")
         self.assertEqual(d.backoff_s, 2.0)
 
+    def test_never_live_busy_retries_not_park(self) -> None:
+        # Premature probe while we still hold exclusive-open reports busy
+        # and must not be treated as unlocked (that skipped auto-park).
+        d = mod.decide_capture_failure(
+            been_live=False, probe="busy", failures=1, base_backoff_s=2.0, cap_s=15.0
+        )
+        self.assertEqual(d.action, "retry")
+
     def test_backoff_caps(self) -> None:
         d = mod.decide_capture_failure(
             been_live=True, probe="locked", failures=8, base_backoff_s=2.0, cap_s=15.0

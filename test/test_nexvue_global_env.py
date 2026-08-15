@@ -43,11 +43,15 @@ def migrate_max_devices(legacy_values: list[str]) -> tuple[str, str | None]:
 
 class TestEncodeServicePrecedence(unittest.TestCase):
     def test_channel_env_sourced_before_global(self) -> None:
+        # Phase 1.5 input-selector/slate (nexvue-supervisor.py) was rolled
+        # back — production ExecStart is nexvue-encode.sh -> nexvue-encode.py
+        # (persistent MediaMTX publish + disposable DeckLink capture).
         text = (ROOT / "nexvue-encode@.service").read_text(encoding="utf-8")
-        self.assertIn("nexvue-supervisor.py", text)
+        self.assertIn("nexvue-encode.sh", text)
+        self.assertNotIn("nexvue-supervisor.py", text)
         # Channel file, then global — global wins for MAX_DEVICES.
         m = re.search(
-            r"\. \"\$f\".*?\. \"\$g\".*?exec /usr/local/bin/nexvue-supervisor\.py",
+            r"\. \"\$f\".*?\. \"\$g\".*?exec /usr/local/bin/nexvue-encode\.sh",
             text,
             re.DOTALL,
         )

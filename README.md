@@ -487,7 +487,7 @@ Approximate steady-state budget on LAN, 1080i59.94 source, tuned defaults:
 | Stage                              | Cost      | Knob                                   |
 |------------------------------------|-----------|----------------------------------------|
 | SDI frame capture (interlaced)     | ~33 ms    | physics — none                         |
-| DeckLink driver queue              | ~33 ms    | `DECKLINK_BUFFER_FRAMES=2` (default 5 allows up to ~165 ms) |
+| DeckLink driver queue              | ~33-50 ms | `DECKLINK_BUFFER_FRAMES=3` (default; raised from 2 for SDI/driver-jitter headroom — each buffer step is ~33 ms at 29.97fps interlaced capture) |
 | Deinterlace + HW encode            | ~20-25 ms | `target-usage=7`, `b-frames=0` (set)   |
 | RTSP -> MediaMTX -> WHEP (LAN)     | <5 ms     | —                                      |
 | Browser jitter buffer              | ~10-30 ms | `playoutDelayHint`/`jitterBufferTarget` = 0 (set in player) — 50-100 ms if unset |
@@ -1093,7 +1093,10 @@ expired; JWT auth is the lasting gate.
   Capture appsinks pull preroll (`new-preroll` + `async=false`) so a live
   DeckLink pipeline is not stuck PAUSED. The open gate fails only on ERROR
   or no video frame after `DECKLINK_OPEN_GATE_S` (10s) — PAUSED-with-frames
-  is a successful open. RTSP sink death rebuilds publish only. Once a channel
+  is a successful open. Retry / auto-park probe runs only after capture
+  reaches NULL (off-thread) so a still-held card is not reported busy;
+  shutdown waits out an in-flight async NULL. RTSP sink death rebuilds
+  publish only. Once a channel
   has been live, unlocks retry in-process and do not increment auto-park.
   Empty ports that never lock still cycle (`RestartSec=5`) for up to
   `AUTO_PARK_UNLOCK_CYCLES` (default 5), then `nexvue-encode-auto-park.sh`

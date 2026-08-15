@@ -182,6 +182,9 @@ this box can't get additional ports opened.
   (`async=false`); the open gate fails only on ERROR or no frame after
   `DECKLINK_OPEN_GATE_S`, not on a healthy PAUSED preroll.
   Hung `set_state(NULL)` after `DECKLINK_HANG_KILL_S` exits for systemd.
+  Capture retry / auto-park probe runs only after capture reaches NULL
+  (off-thread); shutdown waits out an in-flight async NULL so the next
+  start does not lose the exclusive-open race.
   `setup.sh` seeds channel `.env` stubs and `enable --now`s
   `mediamtx` / `nexvue-status` / `nexvue-metrics` /
   `nexvue-decklink-configure` / `nexvue-encode@0..(MAX_CHANNELS-1)` (default

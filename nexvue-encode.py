@@ -384,7 +384,7 @@ def load_config(env: Mapping[str, str]) -> EncodeConfig:
         )
     audio_embeds = opt("AUDIO_EMBEDS", "")
 
-    decklink_buffer_frames = opt_int("DECKLINK_BUFFER_FRAMES", 2)
+    decklink_buffer_frames = opt_int("DECKLINK_BUFFER_FRAMES", 3)
     watchdog_ms = opt_int("WATCHDOG_MS", 0)
     if watchdog_ms < 0:
         raise ConfigError(f"WATCHDOG_MS must be >= 0, got {watchdog_ms}")
@@ -726,6 +726,9 @@ class EncodeRuntime:
         self._pump_started = False
         self._use_captions = cfg.captions_enable
         self._cap_nulling = False
+        self._cap_releasing = None
+        self._cap_null_poll_id = 0
+        self._cap_fail_why = ""
         self._got_video_frame = False
 
     def _capture_cfg(self) -> EncodeConfig:
@@ -822,7 +825,7 @@ class EncodeRuntime:
         self._vsrc = None
         self._asrc = None
         if old is not None:
-            self._null_pipeline(old, "publish")
+            self._null_pipeline_blocking(old, "publish")
         self._v_n = 0
         self._a_n = 0
         self._v_start = time.monotonic()
@@ -897,7 +900,7 @@ class EncodeRuntime:
     def _start_capture(self) -> None:
         if self._stopping or self._cap is not None:
             return
-        if self._cap_nulling:
+        if self._cap_nulling or self._cap_releasing is not None:
             GLib.timeout_add(200, self._retry_capture)
             return
         self._cap_saw_error = False
@@ -928,8 +931,7 @@ class EncodeRuntime:
         ret = self._cap.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
             log.warning("capture set_state PLAYING failed immediately")
-            self._teardown_capture("set-state-fail")
-            self._on_capture_failed("set-state")
+            self._teardown_capture("set-state")
             return
         GLib.timeout_add(200, self._poll_capture_open)
 
@@ -964,7 +966,6 @@ class EncodeRuntime:
             time.monotonic() - self._cap_open_mono,
         )
         self._teardown_capture("open-gate")
-        self._on_capture_failed("open-gate")
         return False
 
     def _on_video_preroll(self, sink) -> int:
@@ -1016,7 +1017,6 @@ class EncodeRuntime:
         if self._stopping or self._cap is None:
             return False
         self._teardown_capture("error")
-        self._on_capture_failed("error")
         return False
 
     def _on_pub_bus(self, _bus, message) -> None:
@@ -1053,14 +1053,34 @@ class EncodeRuntime:
         return False
 
     def _on_capture_failed(self, why: str) -> None:
+        """Decide retry vs auto-park after capture is gone (or never built).
+
+        DeckLink probe runs off-thread: the helper can take ~0.7s per idle
+        input and must not stall the publish pump. Call this only after
+        exclusive-open is released (or when there was no pipeline).
+        """
         if self._stopping:
             return
         self._cap_failures += 1
-        probe = probe_decklink(self.cfg.device_number)
+        failures = self._cap_failures
+        been_live = self._been_live
+        device = self.cfg.device_number
+
+        def _probe() -> None:
+            probe = probe_decklink(device)
+            GLib.idle_add(self._apply_capture_decision, why, probe, failures, been_live)
+
+        threading.Thread(target=_probe, name="nexvue-decklink-probe", daemon=True).start()
+
+    def _apply_capture_decision(
+        self, why: str, probe: str, failures: int, been_live: bool
+    ) -> bool:
+        if self._stopping:
+            return False
         decision = decide_capture_failure(
-            been_live=self._been_live,
+            been_live=been_live,
             probe=probe,
-            failures=self._cap_failures,
+            failures=failures,
             base_backoff_s=float(self.cfg.open_backoff_s),
             cap_s=float(self.cfg.open_backoff_cap_s),
         )
@@ -1068,8 +1088,8 @@ class EncodeRuntime:
             "device %s: probe=%s been_live=%s failures=%s (%s) — %s",
             self.cfg.device_number,
             probe,
-            self._been_live,
-            self._cap_failures,
+            been_live,
+            failures,
             why,
             decision.reason,
         )
@@ -1079,32 +1099,130 @@ class EncodeRuntime:
             self._stopping = True
             if self._loop is not None:
                 self._loop.quit()
-            return
+            return False
         delay_ms = int(decision.backoff_s * 1000)
         log.info("retrying capture in %ss", decision.backoff_s)
         if self._cap_retry_id:
             GLib.source_remove(self._cap_retry_id)
         self._cap_retry_id = GLib.timeout_add(max(delay_ms, 1), self._retry_capture)
+        return False
 
     def _retry_capture(self) -> bool:
         self._cap_retry_id = 0
         self._start_capture()
         return False
 
-    def _teardown_capture(self, why: str) -> None:
+    def _teardown_capture(self, why: str, *, blocking: bool = False) -> None:
+        """Tear down the capture pipeline.
+
+        Non-blocking by default: capture death is the routine SDI-hiccup
+        path (not-negotiated, exclusive-open races, cable glitches), and it
+        must not stall the GLib main loop — that loop is the same thread
+        that drives the publish appsrc pump (_video_tick/_audio_tick), so
+        blocking here would freeze every WHEP viewer for the NULL wait.
+        blocking=True is for final process shutdown only, where the loop
+        has already stopped and there is no pump left to protect.
+
+        Retry / auto-park runs from _on_capture_nulled after NULL, not here.
+        """
         cap = self._cap
         self._cap = None
         if cap is None:
+            if blocking:
+                self._finish_release_blocking()
             return
         log.info("tearing down capture (%s)", why)
+        self._cap_fail_why = why
         self._cap_nulling = True
-        try:
-            self._null_pipeline(cap, "capture")
-        finally:
+        self._cap_releasing = cap
+        if blocking:
+            self._cancel_async_null_poll()
+            self._null_pipeline_blocking(cap, "capture")
+            self._cap_releasing = None
             self._cap_nulling = False
+            self._stop_captions_proc()
+            return
+        self._null_pipeline_async(cap, "capture", self._on_capture_nulled)
+
+    def _finish_release_blocking(self) -> None:
+        """Complete an in-flight async NULL on the shutdown path."""
+        self._cancel_async_null_poll()
+        cap = self._cap_releasing
+        if cap is None:
+            return
+        self._null_pipeline_blocking(cap, "capture")
+        self._cap_releasing = None
+        self._cap_nulling = False
+        self._cap_fail_why = ""
         self._stop_captions_proc()
 
-    def _null_pipeline(self, pipeline, label: str) -> None:
+    def _cancel_async_null_poll(self) -> None:
+        if self._cap_null_poll_id:
+            try:
+                GLib.source_remove(self._cap_null_poll_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._cap_null_poll_id = 0
+
+    def _on_capture_nulled(self) -> None:
+        self._cap_null_poll_id = 0
+        self._cap_releasing = None
+        self._cap_nulling = False
+        self._stop_captions_proc()
+        why = self._cap_fail_why
+        self._cap_fail_why = ""
+        if why and why != "shutdown" and not self._stopping:
+            self._on_capture_failed(why)
+
+    def _null_pipeline_async(self, pipeline, label: str, on_done) -> None:
+        """Drive `pipeline` to NULL without blocking the GLib main loop.
+
+        set_state(NULL) itself returns promptly; the actual DeckLink
+        exclusive-open release can lag behind it. Poll get_state(0) on a
+        GLib timer so the publish pump keeps ticking. Keep the pipeline
+        on self._cap_releasing until NULL so shutdown can wait it out.
+        """
+        hang_s = max(2, int(self.cfg.hang_kill_s))
+        bus = pipeline.get_bus()
+        try:
+            bus.remove_signal_watch()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            pipeline.set_state(Gst.State.NULL)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s NULL failed: %s", label, exc)
+            on_done()
+            return
+
+        deadline = time.monotonic() + hang_s
+
+        def _poll() -> bool:
+            if self._cap_null_poll_id == 0:
+                return False
+            ret, state, _pending = pipeline.get_state(0)
+            if state == Gst.State.NULL or ret == Gst.StateChangeReturn.FAILURE:
+                self._cap_null_poll_id = 0
+                on_done()
+                return False
+            if time.monotonic() >= deadline:
+                log.error(
+                    "%s set_state(NULL) hung %ss — exiting for systemd restart",
+                    label,
+                    hang_s,
+                )
+                os._exit(1)
+            return True
+
+        self._cap_null_poll_id = GLib.timeout_add(50, _poll)
+
+    def _null_pipeline_blocking(self, pipeline, label: str) -> None:
+        """Synchronous NULL wait — only safe once the GLib loop has stopped
+        (final shutdown) or for a pipeline the pump never touches while it
+        runs (rebuild swaps `self._vsrc`/`self._asrc` to None first). Runs
+        the wait off-thread as a hard backstop in case get_state() itself
+        never returns.
+        """
         done = threading.Event()
         hang_s = max(2, int(self.cfg.hang_kill_s))
 
@@ -1190,9 +1308,12 @@ class EncodeRuntime:
 
     def _shutdown(self) -> None:
         self._stopping = True
-        self._teardown_capture("shutdown")
+        # blocking=True: the GLib loop has already stopped (run() returned),
+        # so there is no pump left to protect and we want a clean, waited-out
+        # teardown before the process exits.
+        self._teardown_capture("shutdown", blocking=True)
         if self._pub is not None:
-            self._null_pipeline(self._pub, "publish")
+            self._null_pipeline_blocking(self._pub, "publish")
             self._pub = None
         self._stop_captions_proc()
 
