@@ -180,13 +180,21 @@ def capture_open_status(
     *,
     state: str,
     saw_error: bool,
+    got_frame: bool,
     elapsed_s: float,
     gate_s: float,
 ) -> str:
-    """wait | ok | fail — fail on ERROR or silent PAUSED past the open gate."""
+    """wait | ok | fail.
+
+    A live DeckLink pipeline often sits PAUSED until appsink preroll is
+    pulled — that is not a failed open. Success is a pulled video frame
+    (preroll or sample). Fail on ERROR, or no frame at all past the gate.
+    ``state`` is kept for journal context only.
+    """
+    del state  # journal / callers still pass it
     if saw_error:
         return "fail"
-    if state == "PLAYING":
+    if got_frame:
         return "ok"
     if elapsed_s >= gate_s:
         return "fail"
@@ -559,7 +567,10 @@ def capture_pipeline_desc(cfg: EncodeConfig) -> str:
     parts.append(f"! deinterlace fields={cfg.deint_fields} method={cfg.deint_method}")
     parts.append("! videorate ! videoscale ! videoconvert")
     parts.append(f"! {_norm_caps(cfg)}")
-    parts.append("! appsink name=vasink emit-signals=true max-buffers=2 drop=true sync=false")
+    parts.append(
+        "! appsink name=vasink emit-signals=true max-buffers=2 drop=true "
+        "sync=false async=false enable-last-sample=false"
+    )
 
     if cfg.captions_enable:
         parts.append(
@@ -579,7 +590,8 @@ def capture_pipeline_desc(cfg: EncodeConfig) -> str:
             f"! {_audio_remix_desc()} "
             "ali. ! audioconvert "
             "! audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f "
-            "! appsink name=aasink emit-signals=true max-buffers=8 drop=true sync=false"
+            "! appsink name=aasink emit-signals=true max-buffers=8 drop=true "
+            "sync=false async=false enable-last-sample=false"
         )
     return " ".join(parts)
 
@@ -713,6 +725,8 @@ class EncodeRuntime:
         self._captions_proc: Optional[subprocess.Popen] = None
         self._pump_started = False
         self._use_captions = cfg.captions_enable
+        self._cap_nulling = False
+        self._got_video_frame = False
 
     def _capture_cfg(self) -> EncodeConfig:
         if self._use_captions == self.cfg.captions_enable:
@@ -883,7 +897,11 @@ class EncodeRuntime:
     def _start_capture(self) -> None:
         if self._stopping or self._cap is not None:
             return
+        if self._cap_nulling:
+            GLib.timeout_add(200, self._retry_capture)
+            return
         self._cap_saw_error = False
+        self._got_video_frame = False
         self._cap_open_mono = time.monotonic()
         self._ensure_captions()
         desc = capture_pipeline_desc(self._capture_cfg())
@@ -895,9 +913,13 @@ class EncodeRuntime:
             return
         vasink = self._cap.get_by_name("vasink")
         if vasink is not None:
+            _configure_appsink(vasink, max_buffers=2)
+            vasink.connect("new-preroll", self._on_video_preroll)
             vasink.connect("new-sample", self._on_video_sample)
         aasink = self._cap.get_by_name("aasink")
         if aasink is not None:
+            _configure_appsink(aasink, max_buffers=8)
+            aasink.connect("new-preroll", self._on_audio_preroll)
             aasink.connect("new-sample", self._on_audio_sample)
         bus = self._cap.get_bus()
         bus.add_signal_watch()
@@ -924,27 +946,34 @@ class EncodeRuntime:
         status = capture_open_status(
             state=state_name,
             saw_error=self._cap_saw_error,
+            got_frame=self._got_video_frame,
             elapsed_s=time.monotonic() - self._cap_open_mono,
             gate_s=float(self.cfg.open_gate_s),
         )
         if status == "wait":
             return True
         if status == "ok":
-            log.info("capture PLAYING")
+            log.info("capture live (state=%s)", state_name)
             self._cap_failures = 0
             return False
         log.warning(
-            "capture open gate failed (state=%s error=%s after %.1fs) — teardown",
-            state,
+            "capture open gate failed (state=%s error=%s frame=%s after %.1fs) — teardown",
+            state_name,
             self._cap_saw_error,
+            self._got_video_frame,
             time.monotonic() - self._cap_open_mono,
         )
         self._teardown_capture("open-gate")
         self._on_capture_failed("open-gate")
         return False
 
+    def _on_video_preroll(self, sink) -> int:
+        return self._ingest_video_sample(sink.emit("pull-preroll"))
+
     def _on_video_sample(self, sink) -> int:
-        sample = sink.emit("pull-sample")
+        return self._ingest_video_sample(sink.emit("pull-sample"))
+
+    def _ingest_video_sample(self, sample) -> int:
         if sample is None:
             return Gst.FlowReturn.OK
         data = _buffer_bytes(sample.get_buffer())
@@ -953,10 +982,16 @@ class EncodeRuntime:
                 self._last_video = data
                 self._last_video_mono = time.monotonic()
                 self._been_live = True
+                self._got_video_frame = True
         return Gst.FlowReturn.OK
 
+    def _on_audio_preroll(self, sink) -> int:
+        return self._ingest_audio_sample(sink.emit("pull-preroll"))
+
     def _on_audio_sample(self, sink) -> int:
-        sample = sink.emit("pull-sample")
+        return self._ingest_audio_sample(sink.emit("pull-sample"))
+
+    def _ingest_audio_sample(self, sample) -> int:
         if sample is None:
             return Gst.FlowReturn.OK
         data = _buffer_bytes(sample.get_buffer())
@@ -1062,11 +1097,16 @@ class EncodeRuntime:
         if cap is None:
             return
         log.info("tearing down capture (%s)", why)
-        self._null_pipeline(cap, "capture")
+        self._cap_nulling = True
+        try:
+            self._null_pipeline(cap, "capture")
+        finally:
+            self._cap_nulling = False
         self._stop_captions_proc()
 
     def _null_pipeline(self, pipeline, label: str) -> None:
         done = threading.Event()
+        hang_s = max(2, int(self.cfg.hang_kill_s))
 
         def _null() -> None:
             try:
@@ -1076,6 +1116,9 @@ class EncodeRuntime:
                 except Exception:  # noqa: BLE001
                     pass
                 pipeline.set_state(Gst.State.NULL)
+                # Wait for the actual NULL transition — set_state can return
+                # before DeckLink children release exclusive-open.
+                pipeline.get_state(hang_s * Gst.SECOND)
             except Exception as exc:  # noqa: BLE001
                 log.warning("%s NULL failed: %s", label, exc)
             finally:
@@ -1083,8 +1126,8 @@ class EncodeRuntime:
 
         t = threading.Thread(target=_null, name=f"null-{label}", daemon=True)
         t.start()
-        if not done.wait(self.cfg.hang_kill_s):
-            log.error("%s set_state(NULL) hung %ss — exiting for systemd restart", label, self.cfg.hang_kill_s)
+        if not done.wait(hang_s + 2):
+            log.error("%s set_state(NULL) hung %ss — exiting for systemd restart", label, hang_s)
             os._exit(1)
 
     def _ensure_captions(self) -> None:
@@ -1152,6 +1195,22 @@ class EncodeRuntime:
             self._null_pipeline(self._pub, "publish")
             self._pub = None
         self._stop_captions_proc()
+
+
+def _configure_appsink(sink, *, max_buffers: int) -> None:
+    """Live DeckLink must not block PAUSED→PLAYING on the app pulling preroll."""
+    for name, value in (
+        ("emit-signals", True),
+        ("sync", False),
+        ("async", False),
+        ("drop", True),
+        ("enable-last-sample", False),
+        ("max-buffers", max_buffers),
+    ):
+        try:
+            sink.set_property(name, value)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _buffer_bytes(buf) -> bytes:

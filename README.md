@@ -1090,8 +1090,10 @@ expired; JWT auth is the lasting gate.
   sessions survive SDI flaps. **Capture** (DeckLink → normalize → appsink)
   is torn down and reopened on `not-negotiated`, exclusive-open races, or
   EOS — never via `input-selector` / slate (that stormed in Phase 1.5).
-  A silent PAUSED open past `DECKLINK_OPEN_GATE_S` (10s) is a failed open,
-  not a green unit. RTSP sink death rebuilds publish only. Once a channel
+  Capture appsinks pull preroll (`new-preroll` + `async=false`) so a live
+  DeckLink pipeline is not stuck PAUSED. The open gate fails only on ERROR
+  or no video frame after `DECKLINK_OPEN_GATE_S` (10s) — PAUSED-with-frames
+  is a successful open. RTSP sink death rebuilds publish only. Once a channel
   has been live, unlocks retry in-process and do not increment auto-park.
   Empty ports that never lock still cycle (`RestartSec=5`) for up to
   `AUTO_PARK_UNLOCK_CYCLES` (default 5), then `nexvue-encode-auto-park.sh`

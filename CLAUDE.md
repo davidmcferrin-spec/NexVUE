@@ -178,8 +178,9 @@ this box can't get additional ports opened.
   after Phase 1.5 slate rollback. **Auto-park** disables the slot after
   `AUTO_PARK_UNLOCK_CYCLES` consecutive unlocked starts (default 5;
   `RestartSec=5`). `nexvue-encode.py` retries capture in-process after
-  `not-negotiated` while publish stays up; a silent PAUSED open past
-  `DECKLINK_OPEN_GATE_S` is treated as a failed open (not a green unit).
+  `not-negotiated` while publish stays up. Capture appsinks pull preroll
+  (`async=false`); the open gate fails only on ERROR or no frame after
+  `DECKLINK_OPEN_GATE_S`, not on a healthy PAUSED preroll.
   Hung `set_state(NULL)` after `DECKLINK_HANG_KILL_S` exits for systemd.
   `setup.sh` seeds channel `.env` stubs and `enable --now`s
   `mediamtx` / `nexvue-status` / `nexvue-metrics` /

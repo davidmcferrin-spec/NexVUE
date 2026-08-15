@@ -107,6 +107,7 @@ class TestPipelineAssembly(unittest.TestCase):
         blob = mod.print_pipelines(mod.load_config(env(LO_ENABLE="false")))
         self.assertIn("decklinkvideosrc device-number=0", blob)
         self.assertIn("appsink name=vasink", blob)
+        self.assertIn("async=false", blob)
         self.assertIn("appsrc name=vsrc", blob)
         self.assertIn("rtsp://127.0.0.1:8554/ch0", blob)
         self.assertNotIn("input-selector", blob)
@@ -181,23 +182,39 @@ class TestCapturePolicy(unittest.TestCase):
 
     def test_open_gate_playing_ok(self) -> None:
         self.assertEqual(
-            mod.capture_open_status(state="PLAYING", saw_error=False, elapsed_s=1.0, gate_s=10.0),
+            mod.capture_open_status(
+                state="PLAYING", saw_error=False, got_frame=True, elapsed_s=1.0, gate_s=10.0
+            ),
+            "ok",
+        )
+
+    def test_open_gate_preroll_paused_is_ok(self) -> None:
+        self.assertEqual(
+            mod.capture_open_status(
+                state="PAUSED", saw_error=False, got_frame=True, elapsed_s=12.0, gate_s=10.0
+            ),
             "ok",
         )
 
     def test_open_gate_error_fails(self) -> None:
         self.assertEqual(
-            mod.capture_open_status(state="PAUSED", saw_error=True, elapsed_s=0.2, gate_s=10.0),
+            mod.capture_open_status(
+                state="PAUSED", saw_error=True, got_frame=False, elapsed_s=0.2, gate_s=10.0
+            ),
             "fail",
         )
 
-    def test_open_gate_silent_paused_fails_after_gate(self) -> None:
+    def test_open_gate_no_frame_fails_after_gate(self) -> None:
         self.assertEqual(
-            mod.capture_open_status(state="PAUSED", saw_error=False, elapsed_s=5.0, gate_s=10.0),
+            mod.capture_open_status(
+                state="PAUSED", saw_error=False, got_frame=False, elapsed_s=5.0, gate_s=10.0
+            ),
             "wait",
         )
         self.assertEqual(
-            mod.capture_open_status(state="PAUSED", saw_error=False, elapsed_s=10.0, gate_s=10.0),
+            mod.capture_open_status(
+                state="PAUSED", saw_error=False, got_frame=False, elapsed_s=10.0, gate_s=10.0
+            ),
             "fail",
         )
 

@@ -29,6 +29,7 @@ out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false run_encode)
 grep -q "rtsp://127.0.0.1:8554/ch0" <<<"$out" || fail "T1 default RTSP url"
 grep -q "watchdog" <<<"$out" && fail "T1 default WATCHDOG_MS=0 must omit watchdog"
 grep -q "appsink name=vasink" <<<"$out" || fail "T1 capture appsink"
+grep -q "async=false" <<<"$out" || fail "T1 appsink must be async=false (preroll must not block PLAYING)"
 grep -q "appsrc name=vsrc" <<<"$out" || fail "T1 publish appsrc"
 grep -q "input-selector" <<<"$out" && fail "T1 must not use input-selector"
 grep -q "deinterlace fields=all method=yadif" <<<"$out" || fail "T1 default method=yadif"
