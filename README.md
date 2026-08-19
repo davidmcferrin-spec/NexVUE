@@ -69,9 +69,10 @@ MediaMTX WHEP/API share the same PEMs), and `enable --now`s `mediamtx`,
 `MAX_CHANNELS=4` in `nexvue.env`). Empty SDI ports auto-park. When
 `/var/www/html` exists, it also installs the Apache path UI (`/login`,
 `/player`, …). Use `sudo ./setup.sh --check` after a reboot.
-`setup.sh` also enables `apache2` + `ssh`, turns off Apache HTTP `:80`
-(Listen + `000-default`), allows OpenSSH / 443 / 8889 / 8189 in ufw (not
-`:80`), and enables ufw. `--firewall` is a legacy alias for that ufw step.
+`setup.sh` also enables `apache2` + `ssh`, keeps Apache HTTP `:80` open as a
+redirect-only front door (`Listen` + `000-default` ensured, real content
+stays HTTPS-only), allows OpenSSH / 80 / 443 / 8889 / 8189 in ufw, and
+enables ufw. `--firewall` is a legacy alias for that ufw step.
 
 Manual steps below match what `setup.sh` does if you prefer to run them by hand.
 
@@ -176,9 +177,10 @@ The node's web UI (pages, JS assets, PHP APIs) lives under [`web-node/`](web-nod
 in this repo — a separate [`web-portal/`](web-portal/) holds the central
 portal's own web app, installed with `sudo ./setup.sh --portal` instead.
 
-Drop the UI files into Apache's docroot (HTTPS `:443` — HTTP `:80` is
-closed). Metrics and ops PHP scripts must sit next to the HTML so relative
-`fetch()` paths resolve:
+Drop the UI files into Apache's docroot (HTTPS `:443` — HTTP `:80` stays
+open only to 301-redirect to `:443`, never to serve real content). Metrics
+and ops PHP scripts must sit next to the HTML so relative `fetch()` paths
+resolve:
 
 Prefer `sudo ./setup.sh` — it installs Apache + mod_php, copies the full
 web UI (including `login.html` / `nexvue-auth*.php`), bootstraps the auth
@@ -300,7 +302,7 @@ opened explicitly. Port/protocol map:
 | 443       | TCP       | viewers      | Apache HTTPS UI (`/login`, `/player`, …)  |
 | 8889      | TCP       | viewers      | WHEP signaling (HTTPS POST/PATCH/DELETE)  |
 | 8189      | UDP + TCP | viewers      | WebRTC media (UDP) + ICE-TCP fallback     |
-| 80        | —         | **closed**   | Apache HTTP is off; do not allow in ufw   |
+| 80        | TCP       | viewers      | Apache HTTP — redirect-only (301 to the same URL under `https://`); real content is never served here |
 | 9997      | TCP       | **loopback** | MediaMTX API — do NOT open; Player uses `nexvue-mediamtx-api.php` |
 | 9998      | TCP       | **loopback** | Status daemon — do NOT open; Player uses `nexvue-status.php` |
 | —         | —         | (none)       | Metrics dashboard has NO port at all — the collector doesn't listen on anything; PHP reads its SQLite file directly and Apache serves it on 443. See Usage Metrics Dashboard section. |
@@ -322,16 +324,16 @@ the same step.
 
 ```bash
 sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp comment 'NexVUE Apache HTTP (redirects to HTTPS)'
 sudo ufw allow 443/tcp comment 'NexVUE Apache HTTPS'
 sudo ufw allow 8889/tcp comment 'NexVUE WHEP signaling'
 sudo ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)'
-sudo ufw delete allow 80/tcp   # if an older install opened HTTP
 sudo ufw --force enable
 # Metrics has no port to open at all — the collector doesn't listen on
 # anything; PHP reads its SQLite file directly, served by Apache on 443
 # alongside everything else. See "Usage Metrics Dashboard".
 # 9997/9998 are loopback-only — never allow them through the firewall.
-# Port 80 stays closed — Apache does not listen for HTTP.
+# Port 80 only ever serves a 301 redirect to :443 — never real content.
 sudo ufw status verbose
 ```
 
@@ -656,8 +658,11 @@ dots stay gray and **SDI input** shows `status unreachable`, check that
    `nexvue` + `www-data` to `ssl-cert`, points MediaMTX
    (`webrtcServer*` / `apiServer*`) and Apache (`SSLCertificate*` +
    `nexvue-ssl-certs.conf`) at those paths, enables `mod_ssl` / `default-ssl`
-   when needed, **disables Apache HTTP `:80`** (`a2dissite 000-default` +
-   comment `Listen 80`), enables `apache2` + `ssh`, then starts services.
+   when needed, **keeps Apache HTTP `:80` open redirect-only** (`a2ensite
+   000-default` + `Listen 80` ensured; `nexvue_web_https_redirect_target()`
+   301s every non-loopback hit to the same URL under `https://` — real
+   content is never served over `:80`), enables `apache2` + `ssh`, then
+   starts services.
    Existing PEM files are never overwritten — drop a real cert there before
    or after setup.
 2. **Replace the self-signed pair when you have a real cert** (same paths;
@@ -981,12 +986,15 @@ expired; JWT auth is the lasting gate.
   (`nexvue-ops-env-update.py`) quotes such values automatically and reads
   quoted values back correctly.
 - **`index.html` / `multiview.html` auto-discover the edge host** from
-  `location.hostname` — load them via Apache at any address and WHEP/API/status
-  all target that same host on their fixed ports (8889/9997/9998). Protocol
-  (`http:`/`https:`) is auto-detected from the page's own scheme — Apache is
-  HTTPS-only (`:80` closed), so load `https://<edge>/player` (plain HTTP will
-  not connect, and an HTTP origin would send WHEP to `http://…:8889` against
-  TLS MediaMTX). Top nav brand **NexVUE** (click for
+  `location.hostname` — load them via Apache at any address. WHEP always uses
+  `https://<host>:8889` (MediaMTX `webrtcEncryption: yes`); it does **not**
+  inherit a leftover `http:` page scheme (that POSTs plaintext at TLS `:8889`
+  and the browser shows `ERR_CONNECTION_RESET` / a fake CORS error). The
+  front door 301s non-loopback HTTP to HTTPS — Apache keeps `:80` open
+  specifically for that redirect, but real UI content is HTTPS-only; still
+  load `https://<edge>/player` and click-through
+  `https://<edge>:8889/` once if the cert is self-signed (trust on `:443`
+  does not extend to other ports). Top nav brand **NexVUE** (click for
   page-URL QR) /
   Player / Multiview / Metrics / Services / Settings. Player and Multiview
   session metrics sit in a collapsed bottom drawer (`Session metrics`);

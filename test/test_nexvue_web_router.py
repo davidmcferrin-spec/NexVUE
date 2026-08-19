@@ -47,6 +47,19 @@ class TestWebRouterFiles(unittest.TestCase):
         ui = (ROOT / "web-node" / "nexvue-ui.js").read_text(encoding="utf-8")
         self.assertIn('LOGO_SRC = "/api/logo"', ui)
 
+    def test_whep_always_https(self) -> None:
+        # MediaMTX :8889 is TLS-only. Inheriting http: from a leftover :80
+        # page produced ERR_CONNECTION_RESET (Chrome reports it as CORS).
+        gate = (ROOT / "web-node" / "nexvue-auth-gate.js").read_text(encoding="utf-8")
+        self.assertIn('return "https://" + edgeHost() + ":" + WHEP_PORT', gate)
+        self.assertIn("whepUrl: whepUrl", gate)
+        player = (ROOT / "web-node" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("NexVueAuth.whepUrl(path, jwt)", player)
+        self.assertNotIn("location.protocol", player)
+        multi = (ROOT / "web-node" / "multiview.html").read_text(encoding="utf-8")
+        self.assertIn("NexVueAuth.whepUrl(path, jwt)", multi)
+        self.assertNotIn("location.protocol", multi)
+
     def test_login_page_has_non_blocking_portal_nudge(self) -> None:
         # Phase 4 — local sign-in must never be hidden/blocked by the nudge;
         # it only becomes visible via JS after a successful portal_status
@@ -85,6 +98,31 @@ echo json_encode([
         self.assertIn("/api/ops", data["apis"])
         self.assertEqual(data["share_path"], "multiview")
         self.assertEqual(data["share_url"], "https://edge.example/player?t=abc")
+
+    def test_https_redirect_target(self) -> None:
+        code = f"""
+require '{ROUTER.as_posix()}';
+$_SERVER['HTTPS'] = 'off';
+$_SERVER['HTTP_HOST'] = '10.207.40.18';
+$_SERVER['REQUEST_URI'] = '/player?t=abc';
+$_SERVER['SERVER_PORT'] = '80';
+$http = nexvue_web_https_redirect_target();
+$_SERVER['HTTPS'] = 'on';
+$_SERVER['SERVER_PORT'] = '443';
+$https = nexvue_web_https_redirect_target();
+$_SERVER['HTTPS'] = 'off';
+$_SERVER['HTTP_HOST'] = '127.0.0.1:9080';
+$_SERVER['SERVER_PORT'] = '9080';
+$_SERVER['REQUEST_URI'] = '/nexvue-jwks.php';
+$loop = nexvue_web_https_redirect_target();
+echo json_encode(['http' => $http, 'https' => $https, 'loopback' => $loop]);
+"""
+        r = subprocess.run([PHP, "-r", code], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(data["http"], "https://10.207.40.18/player?t=abc")
+        self.assertIsNone(data["https"])
+        self.assertIsNone(data["loopback"])
 
 
 if __name__ == "__main__":

@@ -412,26 +412,13 @@
   const UP_LOSS = 0.005, UP_AFTER_S = 20;
   const SWITCH_COOLDOWN_MS = 10000;
 
-  // WHEP signaling stays on its own port on the edge host. MediaMTX API
-  // (:9997) and status (:9998) are loopback-only — Player uses same-origin
-  // PHP proxies (nexvue-mediamtx-api.php / nexvue-status.php).
-  const PORT = { whep: 8889 };
-  // Match the PAGE's own scheme. If Apache is HTTPS, WHEP must be too
-  // (MediaMTX webrtcEncryption: yes).
-  const PROTO = location.protocol === "https:" ? "https:" : "http:";
-
-  // Auto-discovered once at load. Falls back to localhost when opened as a
-  // file:// (no hostname), so bring-up straight from disk still works.
-  const EDGE_HOST = (location.hostname && location.hostname.length)
-    ? location.hostname : "127.0.0.1";
+  // WHEP signaling stays on its own TLS port on the edge host (always
+  // https:// — MediaMTX webrtcEncryption: yes). MediaMTX API (:9997) and
+  // status (:9998) are loopback-only — Player uses same-origin PHP proxies.
 
   function setState(text, cls) {
     stateEl.textContent = text;
     stateEl.className = cls || "";
-  }
-
-  function whepBase() {
-    return `${PROTO}//${EDGE_HOST}:${PORT.whep}`;
   }
 
   function pathFor(rend) {
@@ -662,7 +649,7 @@
 
     try {
       const jwt = await NexVueAuth.whepJwt(path);
-      const url = `${whepBase()}/${path}/whep?jwt=${encodeURIComponent(jwt)}`;
+      const url = NexVueAuth.whepUrl(path, jwt);
       const offer = await pc.createOffer();
       // Chrome won't advertise multiopus; MediaMTX rejects >2ch Opus without it.
       const prepared = await NexVueVu.prepareWhepOffer(offer);
@@ -708,7 +695,8 @@
       apiTimer = setInterval(pollApiStats, 2000);
       pollApiStats();
     } catch (err) {
-      const msg = err && err.message ? err.message : String(err);
+      const raw = err && err.message ? err.message : String(err);
+      const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
       const sid = currentSessionId;
       setState(`error: ${msg}`, "bad");
       closeSession();

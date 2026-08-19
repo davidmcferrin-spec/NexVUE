@@ -162,8 +162,17 @@ this box can't get additional ports opened.
   `NEXVUE_SYNC_KEY`) for Bearer/`X-NexVUE-Key` sync + `api_ping`. Client gate
   JS remains for nav roles + WHEP JWT. Central catalog portal + Entra OIDC
   remain later. Real (non-self-signed) TLS for Apache + WHEP `:8889` still
-  recommended before wider users. Apache is HTTPS-only (`:80` closed) so
-  the player origin is `https:` and WHEP uses `https://…:8889`.
+  recommended before wider users. UI content is HTTPS-only; WHEP is always
+  `https://…:8889` regardless of page scheme (`NexVueAuth.whepUrl()`, not
+  `location.protocol`) since MediaMTX's `:8889` listener is TLS-only —
+  before that fix, a stray `http://` bookmark inherited `http:` for the WHEP
+  fetch too and just got `ERR_CONNECTION_RESET` (Chrome often labels the
+  OPTIONS preflight as CORS, which is a red herring). Apache still listens
+  on `:80` — `nexvue_web_https_redirect_target()` 301s any non-loopback HTTP
+  hit to the same URL under `https://` before any other routing runs; the
+  JWKS loopback vhost (`127.0.0.1:9080`) is excluded and stays plain HTTP
+  forever. Real incident: `nynycof1nexvue01`, 2026-08-19 — a browser reached
+  the player over `http://` and every WHEP POST failed this way.
 - **Phase 3: DMZ** — MediaMTX API (`127.0.0.1:9997`) and status
   (`NEXVUE_STATUS_BIND=127.0.0.1:9998`) are loopback-bound; Player uses
   `nexvue-mediamtx-api.php` + `nexvue-status.php`. Remaining: Entra OIDC,
@@ -246,9 +255,12 @@ this box can't get additional ports opened.
 - `setup.sh` ensures `/etc/nexvue/tls/{fullchain,privkey}.pem` (creates a
   self-signed pair if missing; never overwrites existing), points Apache
   HTTPS + MediaMTX WHEP/API at those paths (`root:ssl-cert`, key 640).
-  Apache HTTP `:80` is off (`000-default` + `Listen 80`); UI is HTTPS-only.
-  `setup.sh` `enable --now`s `apache2` and `ssh`, allows OpenSSH/443/8889/8189
-  in ufw (not 80), and enables ufw. Self-signed still needs a one-time
+  Apache HTTP `:80` stays open redirect-only (`000-default` + `Listen 80`
+  ensured, not disabled — `nexvue-apache-http-on.py` is the idempotent
+  ensure-step, replacing the old `nexvue-apache-http-off.py`); UI content
+  itself is HTTPS-only, `nexvue_web_https_redirect_target()` 301s the rest.
+  `setup.sh` `enable --now`s `apache2` and `ssh`, allows OpenSSH/80/443/8889/8189
+  in ufw, and enables ufw. Self-signed still needs a one-time
   per-browser click-through on `:8889` (trust on `:443` does not extend to
   other ports). Replace the PEMs with a real cert before wider users. Player
   stats/dots use same-origin proxies (`nexvue-mediamtx-api.php`,
@@ -264,8 +276,9 @@ this box can't get additional ports opened.
   vah264enc` is still the source of truth if a different box rejects a
   property.
 - MediaMTX API (:9997) and status daemon (:9998) bind loopback; do not
-  open them in ufw. `setup.sh` allows OpenSSH + 443/8889/8189 (not :80)
-  and enables ufw (`--firewall` re-applies).
+  open them in ufw. `setup.sh` allows OpenSSH + 80/443/8889/8189
+  and enables ufw (`--firewall` re-applies); :80 is redirect-only, never
+  content.
 - Auto-switch thresholds in `index.html` are conservative first guesses;
   tune from field data.
 

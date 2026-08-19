@@ -398,11 +398,7 @@
   let preferFullscreen = false;
   let fsRestoreTimer = null;
 
-  // WHEP on :8889; API/status are loopback + same-origin PHP proxies.
-  const PORT = { whep: 8889 };
-  const PROTO = location.protocol === "https:" ? "https:" : "http:";
-  const EDGE_HOST = (location.hostname && location.hostname.length)
-    ? location.hostname : "127.0.0.1";
+  // WHEP on TLS :8889 (always https://). API/status are loopback + same-origin PHP proxies.
 
   let layout = "quad";   // "dual" | "quad"
   let rendition = "lo";  // "hi" | "lo" — LO default for multi-session load
@@ -540,10 +536,6 @@
       acquireWakeLock();
     }
   });
-
-  function whepBase() {
-    return `${PROTO}//${EDGE_HOST}:${PORT.whep}`;
-  }
 
   function pathFor(base) {
     return rendition === "lo" ? `${base}lo` : base;
@@ -833,7 +825,7 @@
 
     try {
       const jwt = await NexVueAuth.whepJwt(path);
-      const url = `${whepBase()}/${path}/whep?jwt=${encodeURIComponent(jwt)}`;
+      const url = NexVueAuth.whepUrl(path, jwt);
       const offer = await pc.createOffer();
       // Chrome won't advertise multiopus; MediaMTX rejects >2ch Opus without it.
       const prepared = await NexVueVu.prepareWhepOffer(offer);
@@ -876,7 +868,8 @@
       pane.sessionId = parseWhepSessionId(res);
       await pc.setRemoteDescription({ type: "answer", sdp: body });
     } catch (err) {
-      const msg = err && err.message ? err.message : String(err);
+      const raw = err && err.message ? err.message : String(err);
+      const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
       setPaneStatus(pane, `error: ${msg}`, "bad");
       const sid = pane.sessionId;
       closePane(pane, false);

@@ -133,6 +133,47 @@ function nexvue_web_query_suffix(): string {
     return ($q !== '') ? ('?' . $q) : '';
 }
 
+function nexvue_web_is_https(): bool {
+    $https = $_SERVER['HTTPS'] ?? '';
+    if (is_string($https) && $https !== '' && strcasecmp($https, 'off') !== 0) {
+        return true;
+    }
+    if ((int)($_SERVER['SERVER_PORT'] ?? 0) === 443) {
+        return true;
+    }
+    $fwd = $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '';
+    if (is_string($fwd) && $fwd !== '') {
+        $first = strtolower(trim(explode(',', $fwd, 2)[0]));
+        if ($first === 'https') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Absolute https:// URL to bounce leftover HTTP :80 hits, or null if already
+ * TLS / loopback (JWKS vhost on 127.0.0.1:9080 must stay HTTP).
+ */
+function nexvue_web_https_redirect_target(): ?string {
+    if (nexvue_web_is_https()) {
+        return null;
+    }
+    $host = $_SERVER['HTTP_HOST'] ?? '';
+    if (!is_string($host) || $host === '') {
+        return null;
+    }
+    $hostOnly = strtolower(explode(':', $host, 2)[0]);
+    if ($hostOnly === '127.0.0.1' || $hostOnly === 'localhost' || $hostOnly === '::1') {
+        return null;
+    }
+    $uri = $_SERVER['REQUEST_URI'] ?? '/';
+    if (!is_string($uri) || $uri === '') {
+        $uri = '/';
+    }
+    return 'https://' . $host . $uri;
+}
+
 /**
  * Redeem ?t= or path token into a session when present.
  */
@@ -224,6 +265,11 @@ function nexvue_web_dispatch_api(string $phpFile): void {
 }
 
 function nexvue_web_dispatch(): void {
+    $httpsTo = nexvue_web_https_redirect_target();
+    if ($httpsTo !== null) {
+        nexvue_web_redirect($httpsTo, 301);
+    }
+
     $path = nexvue_web_request_path();
 
     // Static assets under public/assets/ are served by Apache directly.

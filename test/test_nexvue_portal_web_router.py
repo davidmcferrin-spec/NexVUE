@@ -79,6 +79,35 @@ echo json_encode([
         self.assertEqual(data["stations_roles"], ["org_admin"])
         self.assertEqual(data["users_roles"], ["org_admin"])
 
+    def test_https_redirect_target(self) -> None:
+        # Apache keeps :80 open on a portal box too, purely to redirect —
+        # same rationale as the edge (a stray http:// bookmark should
+        # bounce cleanly, not dead-end against a TLS-only endpoint).
+        code = f"""
+require '{ROUTER.as_posix()}';
+$_SERVER['HTTPS'] = 'off';
+$_SERVER['HTTP_HOST'] = 'portal.example.com';
+$_SERVER['REQUEST_URI'] = '/catalog';
+$_SERVER['SERVER_PORT'] = '80';
+$http = nexvue_portal_web_https_redirect_target();
+$_SERVER['HTTPS'] = 'on';
+$_SERVER['SERVER_PORT'] = '443';
+$https = nexvue_portal_web_https_redirect_target();
+echo json_encode(['http' => $http, 'https' => $https]);
+"""
+        r = subprocess.run([PHP, "-r", code], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(data["http"], "https://portal.example.com/catalog")
+        self.assertIsNone(data["https"])
+
+    def test_dispatch_redirects_before_any_routing(self) -> None:
+        text = ROUTER.read_text(encoding="utf-8")
+        dispatch_start = text.index("function nexvue_portal_web_dispatch(): void {")
+        redirect_idx = text.index("nexvue_portal_web_https_redirect_target()", dispatch_start)
+        pages_idx = text.index("nexvue_portal_web_pages()", dispatch_start)
+        self.assertLess(redirect_idx, pages_idx, "HTTPS redirect must be checked before page routing")
+
 
 if __name__ == "__main__":
     unittest.main()

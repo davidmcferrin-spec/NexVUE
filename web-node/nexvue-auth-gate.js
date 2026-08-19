@@ -4,7 +4,7 @@
  * Usage (after nexvue-ui.js):
  *   await NexVueAuth.requirePage({ roles: ['admin','operator'], allowShare: false });
  *   const jwt = await NexVueAuth.whepJwt('ch0');
- *   // WHEP URL: `${whepBase()}/${path}/whep?jwt=${encodeURIComponent(jwt)}`
+ *   const url = NexVueAuth.whepUrl(path, jwt); // always https://<host>:8889/...
  */
 (function (global) {
   "use strict";
@@ -236,6 +236,34 @@
     });
   }
 
+  var WHEP_PORT = 8889;
+
+  function edgeHost() {
+    var h = global.location && global.location.hostname;
+    return (h && h.length) ? h : "127.0.0.1";
+  }
+
+  /**
+   * MediaMTX WHEP is always TLS (webrtcEncryption: yes). Never inherit the
+   * page scheme — HTTP leftover on :80 would POST plaintext at :8889 and the
+   * TLS listener RSTs (ERR_CONNECTION_RESET, reported as a CORS failure).
+   */
+  function whepBase() {
+    return "https://" + edgeHost() + ":" + WHEP_PORT;
+  }
+
+  function whepUrl(path, jwt) {
+    return whepBase() + "/" + path + "/whep?jwt=" + encodeURIComponent(jwt);
+  }
+
+  function whepFetchHint(errMsg) {
+    if (!/Failed to fetch|NetworkError|Load failed/i.test(String(errMsg || ""))) {
+      return "";
+    }
+    return " — WHEP is " + whepBase() +
+      " (open that URL once to trust a self-signed cert; load the player over https://)";
+  }
+
   function channelAllowed(path, user) {
     user = user || _user;
     if (!user) return true;
@@ -271,6 +299,9 @@
     me: me,
     requirePage: requirePage,
     whepJwt: whepJwt,
+    whepBase: whepBase,
+    whepUrl: whepUrl,
+    whepFetchHint: whepFetchHint,
     channelAllowed: channelAllowed,
     canShare: canShare,
     currentUser: currentUser,

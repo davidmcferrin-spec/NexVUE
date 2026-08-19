@@ -157,22 +157,13 @@ ensure_sshd() {
   return 0
 }
 
-nexvue_ufw_delete_port80() {
-  local i num
-  ufw --force delete allow 80/tcp >/dev/null 2>&1 || true
-  ufw --force delete allow 80 >/dev/null 2>&1 || true
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-    num="$(ufw status numbered 2>/dev/null \
-      | sed -nE 's/^\[\s*([0-9]+)\]\s+80\/tcp(\s+\(v6\))?[[:space:]].*/\1/p' \
-      | tail -1)"
-    [ -n "${num}" ] || break
-    ufw --force delete "${num}" >/dev/null 2>&1 || break
-  done
-}
-
-# SSH first, then HTTPS/WHEP. Never allow :80. Enable ufw only if sshd is up.
+# SSH first, then HTTPS/WHEP, then HTTP (redirect-to-HTTPS only — see
+# nexvue_web_https_redirect_target() in nexvue-web-router.php; closing :80
+# outright used to strand anyone who reached the UI via a stale http://
+# bookmark, since the browser inherited http: for the WHEP fetch too and
+# MediaMTX's :8889 listener is TLS-only). Enable ufw only if sshd is up.
 apply_nexvue_firewall() {
-  step "Firewall (ufw) — SSH + HTTPS + WHEP (HTTP :80 closed)"
+  step "Firewall (ufw) — SSH + HTTPS + WHEP + HTTP (redirect only)"
   if ! command -v ufw >/dev/null; then
     warn "ufw not installed — skipping (apt install ufw)"
     return
@@ -186,17 +177,13 @@ apply_nexvue_firewall() {
   fi
   ufw allow 443/tcp comment 'NexVUE Apache HTTPS' >/dev/null \
     || warn "ufw allow 443/tcp failed"
+  ufw allow 80/tcp comment 'NexVUE Apache HTTP (redirects to HTTPS)' >/dev/null \
+    || warn "ufw allow 80/tcp failed"
   ufw allow 8889/tcp comment 'NexVUE WHEP signaling' >/dev/null \
     || warn "ufw allow 8889/tcp failed"
   ufw allow 8189 comment 'NexVUE WebRTC media (UDP+TCP)' >/dev/null \
     || warn "ufw allow 8189 failed"
-  ok "ufw viewer ports opened (443,8889,8189/udp+tcp)"
-  nexvue_ufw_delete_port80
-  if ufw status 2>/dev/null | grep -qE '\b80/tcp\b'; then
-    warn "ufw still allows 80/tcp — delete it (Apache HTTP is off)"
-  else
-    ok "ufw does not allow 80/tcp"
-  fi
+  ok "ufw viewer ports opened (80,443,8889,8189/udp+tcp)"
   if ufw status 2>/dev/null | grep -qE '\b9997\b|\b9998\b'; then
     warn "ufw still allows 9997/9998 — remove those rules (API/status are loopback-only now)"
   fi
@@ -271,6 +258,13 @@ install_portal() {
     fi
     [ -f /etc/nexvue-portal/tls/fullchain.pem ] && ok "portal TLS cert present" || warn "portal TLS cert missing"
     [ -f /var/lib/nexvue-portal/portal.db ] && ok "portal.db present" || warn "portal.db missing — run bootstrap"
+    if command -v curl >/dev/null 2>&1 && systemctl is-active --quiet apache2 2>/dev/null; then
+      _portal_http_loc="$(curl -fsS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 2 "http://127.0.0.1/login" 2>/dev/null || true)"
+      case "${_portal_http_loc}" in
+        30*\ https://*) ok "portal HTTP :80 redirects to HTTPS (${_portal_http_loc})" ;;
+        *) warn "portal :80 did not redirect to HTTPS (got: ${_portal_http_loc:-no response}) — check ufw allows 80/tcp and 000-default is enabled" ;;
+      esac
+    fi
     return 0
   fi
 
@@ -393,12 +387,16 @@ install_portal() {
   systemctl enable --now apache2 >/dev/null 2>&1 && ok "apache2 enabled --now" \
     || warn "could not enable --now apache2"
 
-  step "Cloud portal — firewall (SSH + HTTPS only; no media ports)"
+  step "Cloud portal — firewall (SSH + HTTPS + HTTP redirect only; no media ports)"
   if command -v ufw >/dev/null 2>&1; then
     ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || warn "ufw allow SSH failed"
     ufw allow 443/tcp comment 'NexVUE portal HTTPS' >/dev/null 2>&1 || warn "ufw allow 443/tcp failed"
+    # :80 stays open only for the HTTP -> HTTPS redirect
+    # (nexvue_portal_web_https_redirect_target()) — same rationale as the
+    # edge: a stray http:// bookmark should bounce cleanly, not dead-end.
+    ufw allow 80/tcp comment 'NexVUE portal HTTP (redirects to HTTPS)' >/dev/null 2>&1 || warn "ufw allow 80/tcp failed"
     if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
-      ufw --force enable >/dev/null 2>&1 && ok "ufw enabled (OpenSSH + 443 only)" || warn "ufw --force enable failed"
+      ufw --force enable >/dev/null 2>&1 && ok "ufw enabled (OpenSSH + 80/443 only)" || warn "ufw --force enable failed"
     else
       warn "sshd not active — not enabling ufw (would lock you out)"
     fi
@@ -454,7 +452,7 @@ REQUIRED_FILES=(
   web-node/nexvue-web-router.php nexvue-web-apache.conf nexvue-ssl-apache.conf
   web-node/public/index.php
   nexvue-mediamtx-jwt-patch.py nexvue-mediamtx-tls-patch.py
-  nexvue-apache-http-off.py
+  nexvue-apache-http-on.py
   nexvue-jwks-loopback.conf
   web-node/login.html web-node/forgot.html web-node/reset.html web-node/users.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
@@ -1150,21 +1148,29 @@ EOF
       warn "python3 missing — cannot auto-patch DocumentRoot; set DocumentRoot ${PUBLIC} manually"
     fi
 
-    # HTTPS-only: drop the HTTP vhost and Listen 80. JWKS stays on :9080.
-    if [ -L /etc/apache2/sites-enabled/000-default.conf ] \
-        || [ -f /etc/apache2/sites-enabled/000-default.conf ]; then
-      a2dissite 000-default >/dev/null 2>&1 \
-        && ok "Apache site 000-default disabled (HTTP :80 off)" \
-        || warn "a2dissite 000-default failed — disable the HTTP vhost manually"
+    # UI is still HTTPS-only for real content, but Apache keeps :80 open
+    # specifically to 301 redirect stray HTTP hits to the same URL under
+    # https:// (nexvue_web_https_redirect_target() in nexvue-web-router.php
+    # does the actual redirect; JWKS loopback on :9080 is a separate vhost
+    # and untouched either way). Closing :80 outright used to send anyone
+    # who reached the UI via a stale http:// bookmark into a dead end: the
+    # browser inherited http: for the WHEP fetch too, and MediaMTX's :8889
+    # listener is TLS-only, so it just reset the connection with no
+    # explanation. 000-default already has DocumentRoot ${PUBLIC} from the
+    # patch above, so the same router handles both ports.
+    if [ -e /etc/apache2/sites-available/000-default.conf ]; then
+      a2ensite 000-default >/dev/null 2>&1 \
+        && ok "Apache site 000-default enabled (HTTP :80 -> HTTPS redirect)" \
+        || warn "a2ensite 000-default failed — enable the HTTP vhost manually"
     else
-      ok "Apache HTTP site 000-default already disabled"
+      warn "no /etc/apache2/sites-available/000-default.conf — HTTP :80 will not respond; create a vhost with DocumentRoot ${PUBLIC} manually"
     fi
     if [ -f /etc/apache2/ports.conf ]; then
-      _http_off="$(python3 "${REPO_DIR}/nexvue-apache-http-off.py" /etc/apache2/ports.conf)"
-      if [ "${_http_off}" = "patched" ]; then
-        ok "Apache Listen 80 commented in ports.conf"
+      _http_on="$(python3 "${REPO_DIR}/nexvue-apache-http-on.py" /etc/apache2/ports.conf)"
+      if [ "${_http_on}" = "patched" ]; then
+        ok "Apache Listen 80 enabled in ports.conf"
       else
-        ok "Apache Listen 80 already off in ports.conf"
+        ok "Apache Listen 80 already on in ports.conf"
       fi
     fi
     systemctl enable apache2 >/dev/null 2>&1 \
@@ -1189,13 +1195,16 @@ EOF
       fi
     fi
 
-    # Smoke: path rewrite reaches the front controller over HTTPS only.
+    # Smoke: HTTP :80 redirects to HTTPS; the front controller itself is
+    # HTTPS-only.
     if systemctl is-active --quiet apache2 2>/dev/null; then
-      if curl -fsS --max-time 2 "http://127.0.0.1/login" >/dev/null 2>&1; then
-        warn "Apache still answers HTTP :80 — Listen 80 / 000-default should be off"
-      else
-        ok "Apache HTTP :80 is closed"
-      fi
+      _http_loc="$(curl -fsS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 2 "http://127.0.0.1/login" 2>/dev/null || true)"
+      case "${_http_loc}" in
+        30*\ https://*)
+          ok "Apache HTTP :80 redirects to HTTPS (${_http_loc})" ;;
+        *)
+          warn "Apache :80 did not redirect to HTTPS as expected (got: ${_http_loc:-no response}) — check 000-default is enabled with DocumentRoot ${PUBLIC} and Listen 80 is on" ;;
+      esac
       if curl -fskS --max-time 3 "https://127.0.0.1/login" 2>/dev/null | grep -qi 'NexVUE'; then
         ok "front-door smoke OK: https://127.0.0.1/login"
       else
@@ -1218,7 +1227,7 @@ else
 fi
 
 install -m 644 "${REPO_DIR}/nexvue-mediamtx-jwt-patch.py" /usr/local/share/nexvue/nexvue-mediamtx-jwt-patch.py
-install -m 644 "${REPO_DIR}/nexvue-apache-http-off.py" /usr/local/share/nexvue/nexvue-apache-http-off.py
+install -m 644 "${REPO_DIR}/nexvue-apache-http-on.py" /usr/local/share/nexvue/nexvue-apache-http-on.py
 install -m 644 "${REPO_DIR}/nexvue-jwks-loopback.conf" /usr/local/share/nexvue/nexvue-jwks-loopback.conf
 
 # MediaMTX JWT needs a reachable JWKS. HTTPS-only Apache often 301s :80 → :443,
@@ -1410,17 +1419,17 @@ else
   warn "sshd not enabled on boot — sudo systemctl enable ssh"
 fi
 if [ -f /etc/apache2/ports.conf ]; then
-  if python3 "${REPO_DIR}/nexvue-apache-http-off.py" /etc/apache2/ports.conf --check \
+  if python3 "${REPO_DIR}/nexvue-apache-http-on.py" /etc/apache2/ports.conf --check \
       >/dev/null 2>&1; then
-    ok "Apache Listen 80 is off"
+    ok "Apache Listen 80 is on"
   else
-    warn "Apache still has Listen 80 — re-run sudo ./setup.sh"
+    warn "Apache Listen 80 is off — HTTP will not redirect to HTTPS; re-run sudo ./setup.sh"
   fi
 fi
 if [ -e /etc/apache2/sites-enabled/000-default.conf ]; then
-  warn "Apache 000-default still enabled (HTTP :80) — re-run sudo ./setup.sh"
+  ok "Apache HTTP site 000-default is enabled (redirects to HTTPS)"
 elif [ -d /etc/apache2/sites-enabled ]; then
-  ok "Apache HTTP site 000-default is disabled"
+  warn "Apache 000-default not enabled — HTTP :80 will not redirect to HTTPS; re-run sudo ./setup.sh"
 fi
 if command -v ufw >/dev/null 2>&1; then
   if ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -1436,9 +1445,9 @@ if command -v ufw >/dev/null 2>&1; then
       warn "ufw active but 443/tcp not allowed — re-run sudo ./setup.sh"
     fi
     if ufw status 2>/dev/null | grep -qE '\b80/tcp\b'; then
-      warn "ufw still allows 80/tcp — re-run sudo ./setup.sh (HTTP is closed)"
+      ok "ufw allows 80/tcp (HTTP -> HTTPS redirect only)"
     else
-      ok "ufw does not allow 80/tcp"
+      warn "ufw does not allow 80/tcp — HTTP-to-HTTPS redirect will not be reachable; re-run sudo ./setup.sh"
     fi
   else
     warn "ufw is not active — sudo ./setup.sh allows SSH/443/8889/8189 and enables it"

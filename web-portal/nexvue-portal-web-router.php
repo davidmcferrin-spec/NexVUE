@@ -78,6 +78,45 @@ function nexvue_portal_web_query_suffix(): string {
     return ($q !== '') ? ('?' . $q) : '';
 }
 
+function nexvue_portal_web_is_https(): bool {
+    $https = $_SERVER['HTTPS'] ?? '';
+    if (is_string($https) && $https !== '' && strcasecmp($https, 'off') !== 0) {
+        return true;
+    }
+    if ((int)($_SERVER['SERVER_PORT'] ?? 0) === 443) {
+        return true;
+    }
+    $fwd = $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '';
+    if (is_string($fwd) && $fwd !== '') {
+        $first = strtolower(trim(explode(',', $fwd, 2)[0]));
+        if ($first === 'https') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Absolute https:// URL to bounce a leftover HTTP :80 hit, or null if
+ * already TLS. Same rationale as the edge's nexvue_web_https_redirect_target()
+ * — Apache keeps :80 open specifically to redirect here rather than close
+ * it outright.
+ */
+function nexvue_portal_web_https_redirect_target(): ?string {
+    if (nexvue_portal_web_is_https()) {
+        return null;
+    }
+    $host = $_SERVER['HTTP_HOST'] ?? '';
+    if (!is_string($host) || $host === '') {
+        return null;
+    }
+    $uri = $_SERVER['REQUEST_URI'] ?? '/';
+    if (!is_string($uri) || $uri === '') {
+        $uri = '/';
+    }
+    return 'https://' . $host . $uri;
+}
+
 /**
  * @param array{file:string, roles:?list<string>, public:bool} $page
  */
@@ -135,6 +174,11 @@ function nexvue_portal_web_dispatch_api(): void {
 }
 
 function nexvue_portal_web_dispatch(): void {
+    $httpsTo = nexvue_portal_web_https_redirect_target();
+    if ($httpsTo !== null) {
+        nexvue_portal_web_redirect($httpsTo, 301);
+    }
+
     $path = nexvue_portal_web_request_path();
 
     if (str_starts_with($path, '/assets/')) {
