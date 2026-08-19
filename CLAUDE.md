@@ -134,6 +134,31 @@ this box can't get additional ports opened.
   Empty ports still auto-park after consecutive never-live unlocks.
   Captions/LO/metrics/ops UI remain. Tests: `test/test_nexvue_encode.py`,
   `test/test-pipeline-assembly.sh`.
+  Publish is fed by a self-clocked appsrc pump (`_video_tick`/`_audio_tick`,
+  GLib timers) that pushes whatever `_last_video`/`_last_audio` currently
+  holds at a fixed cadence — this is *why* WHEP survives capture teardown
+  (deliberate; see `SIGNAL_LOSS_HOLD_S` above), but it means the pump's
+  declared per-push PTS/duration MUST match how often capture actually
+  refreshes that value, or every push mislabels its real sample/frame
+  count and the downstream clock quietly drifts — no GStreamer error, just
+  steady degradation. Video is fine because `videorate` in the capture
+  chain retimes to `output_fps` before the appsink, so one frame arrives
+  per output period by construction. Audio was NOT: `_a_dur` (the pump's
+  cadence) was wired to `AUDIO_FRAME_MS`, but that setting only sizes
+  `opusenc`'s own internal encode frame (its `frame-size` property) — it
+  has nothing to do with how capture delivers raw PCM, and nothing in the
+  capture audio chain rechunks to a fixed duration (`audiorate` fixes
+  sample *rate*, not buffer size; DeckLink delivers embedded audio per
+  video-frame callback, not per `AUDIO_FRAME_MS`). Real symptom (all
+  channels, both LAN and remote, zero journal errors — nothing crashes,
+  the clock just warps): audio/video "stuttering, sounds sluggish" vs. the
+  same content on the pre-split-pipeline v1.12 build. Fixed by decoupling
+  `_a_dur` from `AUDIO_FRAME_MS` entirely — it now equals `_v_dur`
+  (nanosecond-precise, `make_silence_s16_ns`) — `AUDIO_FRAME_MS` still only
+  controls `opusenc`'s frame size as documented; GStreamer re-chunks
+  arbitrary buffer boundaries internally regardless of how the appsrc
+  pushed them, so this doesn't affect the "10ms low-latency Opus frame"
+  behavior at all.
 - **Phase 2: edge local auth landed** — bcrypt users (admin/operator/sharer/viewer),
   per-user channel ACL, named revocable share links with mandatory expiry
   (Users admin UI + Player/Multiview Share for admin/sharer; sharer sees own

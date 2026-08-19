@@ -279,6 +279,60 @@ class TestCapturePolicy(unittest.TestCase):
         )
 
 
+class TestAudioRelayCadence(unittest.TestCase):
+    """Regression coverage for a real quality bug: the publish appsrc relay
+    was pacing/timestamping audio pushes at AUDIO_FRAME_MS (an opusenc-only
+    setting — how big Opus's own encode frames are, nothing to do with how
+    capture delivers raw PCM) instead of the cadence audio actually arrives
+    at (per video-frame callback, no rechunking element exists in the
+    capture audio chain). That mismatch mislabeled every pushed buffer's
+    PTS/duration versus its real sample count — heard as steady
+    stuttering/warped audio with zero GStreamer errors logged, since
+    nothing crashes, the audio clock just drifts."""
+
+    def test_audio_relay_duration_matches_video_frame_period_not_frame_ms(self) -> None:
+        cfg = mod.load_config(env(AUDIO_FRAME_MS="10"))
+        rt = mod.EncodeRuntime(cfg)
+        self.assertEqual(rt._a_dur, rt._v_dur)
+        self.assertNotEqual(rt._a_dur, cfg.audio_frame_ms * 1_000_000)
+
+    def test_audio_relay_duration_tracks_output_fps_not_frame_ms_either_way(self) -> None:
+        # deint top halves the output rate — the relay cadence must follow
+        # that, regardless of what AUDIO_FRAME_MS (opusenc-only) is set to.
+        cfg = mod.load_config(env(DEINT_FIELDS="top", AUDIO_FRAME_MS="60"))
+        rt = mod.EncodeRuntime(cfg)
+        self.assertEqual(rt._a_dur, mod.fps_duration_ns("30000/1001"))
+        self.assertNotEqual(rt._a_dur, 60 * 1_000_000)
+
+    def test_silence_buffer_sized_for_actual_relay_duration(self) -> None:
+        cfg = mod.load_config(env())
+        rt = mod.EncodeRuntime(cfg)
+        expected_samples = round(48000 * rt._a_dur / 1_000_000_000)
+        self.assertEqual(len(rt._silence), expected_samples * 8 * 2)
+
+
+class TestSilenceNs(unittest.TestCase):
+    def test_matches_ms_helper_on_whole_milliseconds(self) -> None:
+        # 10ms at 48kHz is a whole-sample case both helpers must agree on.
+        self.assertEqual(
+            mod.make_silence_s16_ns(8, 48000, 10_000_000),
+            mod.make_silence_s16(8, 48000, 10),
+        )
+
+    def test_precise_for_non_whole_millisecond_duration(self) -> None:
+        # 60000/1001 fps period (~16.683ms) truncating to whole ms would
+        # under-count samples by a fraction every frame — the exact bug
+        # class this helper exists to avoid.
+        dur_ns = mod.fps_duration_ns("60000/1001")
+        out = mod.make_silence_s16_ns(8, 48000, dur_ns)
+        expected_samples = round(48000 * dur_ns / 1_000_000_000)
+        self.assertEqual(len(out), expected_samples * 8 * 2)
+        # A naive ms-truncating computation would give a different (wrong)
+        # sample count for this same period.
+        naive_samples = 48000 * (dur_ns // 1_000_000) // 1000
+        self.assertNotEqual(expected_samples, naive_samples)
+
+
 class TestProbeParse(unittest.TestCase):
     def test_locked_busy_unlocked(self) -> None:
         payload = '{"devices":[{"index":5,"busy":false,"input_locked":true}]}'

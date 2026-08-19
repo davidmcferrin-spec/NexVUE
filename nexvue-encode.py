@@ -142,6 +142,16 @@ def make_silence_s16(channels: int, rate: int, frame_ms: int) -> bytes:
     return bytes(samples * channels * 2)
 
 
+def make_silence_s16_ns(channels: int, rate: int, duration_ns: int) -> bytes:
+    """Like make_silence_s16, but nanosecond-precise — needed because the
+    video frame period (e.g. 60000/1001 ~= 16.683ms) is not a whole number
+    of milliseconds; truncating to ms here would itself introduce a slow
+    drift between the declared buffer duration and its actual sample count.
+    """
+    samples = round(rate * duration_ns / 1_000_000_000)
+    return bytes(samples * channels * 2)
+
+
 def capture_retry_backoff_s(failures: int, base_s: float, cap_s: float) -> float:
     if failures < 1:
         return max(0.0, base_s)
@@ -745,11 +755,26 @@ class EncodeRuntime:
         self._last_video_mono = 0.0
         self._last_audio_mono = 0.0
         self._black = make_black_nv12(cfg.output_width, cfg.output_height)
-        self._silence = make_silence_s16(8, 48000, cfg.audio_frame_ms)
         self._v_n = 0
         self._a_n = 0
         self._v_dur = fps_duration_ns(cfg.output_fps)
-        self._a_dur = cfg.audio_frame_ms * 1_000_000
+        # AUDIO_FRAME_MS only sizes opusenc's own internal encode frame
+        # (its `frame-size` property, set in publish_pipeline_desc) — it
+        # has nothing to do with how big the raw-PCM buffers arriving from
+        # capture actually are. decklinkaudiosrc delivers embedded audio
+        # per video-frame callback, not in AUDIO_FRAME_MS-sized chunks (no
+        # element in the capture audio chain re-buffers to a fixed
+        # duration; audiorate only corrects sample *rate*, not buffer
+        # size). The relay pump must push/timestamp at the cadence audio
+        # actually arrives — self._v_dur — not AUDIO_FRAME_MS: pacing this
+        # against the wrong period previously mislabeled every pushed
+        # buffer's PTS/duration relative to its real sample count, which
+        # opusenc/the audio clock reads as a steady drift — heard as
+        # stuttering/warped audio even though nothing ever errors, since
+        # GStreamer downstream is free to re-chunk arbitrary buffer sizes
+        # into its own frame-size regardless of how the appsrc pushed them.
+        self._a_dur = self._v_dur
+        self._silence = make_silence_s16_ns(8, 48000, self._a_dur)
         self._v_start = 0.0
         self._a_start = 0.0
         self._captions_proc: Optional[subprocess.Popen] = None
