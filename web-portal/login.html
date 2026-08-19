@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NexVUE — Login</title>
+<title>NexVUE Portal — Login</title>
 <script src="/assets/nexvue-ui.js"></script>
 <style>
   :root {
@@ -41,9 +41,6 @@
   }
   button.primary:hover { filter: brightness(1.05); }
   .err { color: var(--bad); font-size: 12px; margin-top: 10px; min-height: 1.2em; }
-  .links { margin-top: 14px; font-size: 12px; }
-  .links a { color: var(--acc); text-decoration: none; }
-  .links a:hover { text-decoration: underline; }
   .theme-toggle {
     position: fixed; top: 12px; right: 12px; background: var(--panel); color: var(--text);
     border: 1px solid var(--edge); border-radius: 4px; padding: 6px 10px; font: inherit; font-size: 12px; cursor: pointer;
@@ -51,26 +48,13 @@
   #change-box { display: none; }
   #change-box.show { display: block; }
   #login-box.hide { display: none; }
-  .portal-nudge {
-    display: none; background: var(--bg); border: 1px solid var(--acc);
-    border-radius: 4px; padding: 10px 12px; margin: 0 0 16px; font-size: 12px; color: var(--text);
-  }
-  .portal-nudge.show { display: block; }
-  .portal-nudge a { color: var(--acc); font-weight: 600; text-decoration: none; }
-  .portal-nudge a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 <button type="button" class="theme-toggle" id="theme-toggle">Light</button>
 <div class="card">
-  <h1>NexVUE</h1>
-  <p class="sub" id="subtitle">Sign in to continue</p>
-
-  <div class="portal-nudge" id="portal-nudge">
-    This station is managed by a NexVUE portal —
-    <a href="#" id="portal-nudge-link">sign in there</a> for the full stream catalog.
-    Local sign-in below still works.
-  </div>
+  <h1>NexVUE Portal</h1>
+  <p class="sub" id="subtitle">Sign in to your organization's stream catalog</p>
 
   <div id="login-box">
     <form id="login-form" autocomplete="on">
@@ -81,7 +65,6 @@
       <button type="submit" class="primary">Sign in</button>
       <div class="err" id="login-err"></div>
     </form>
-    <div class="links"><a href="/forgot">Forgot password?</a></div>
   </div>
 
   <div id="change-box">
@@ -97,11 +80,11 @@
     </form>
   </div>
 </div>
-<script src="/assets/nexvue-auth-gate.js"></script>
+<script src="/assets/nexvue-portal-auth-gate.js"></script>
 <script>
 (function () {
   const params = new URLSearchParams(location.search);
-  const next = params.get("next") || "/player";
+  const next = params.get("next") || "/catalog";
   const forceChange = params.get("change") === "1";
 
   function showChange(msg) {
@@ -112,22 +95,9 @@
 
   if (forceChange) showChange();
 
-  // If already logged in and no forced change, go next.
-  NexVueAuth.me().then(function (u) {
+  NexVuePortal.me().then(function (u) {
     if (u && u.must_change_password) showChange("Default password must be changed");
     else if (u && !forceChange) location.href = next;
-  }).catch(function () {});
-
-  // Non-blocking nudge toward the adopting portal's own login, when this
-  // station has one and it's currently reachable. Local sign-in (above)
-  // always stays fully functional either way — this never hides or
-  // disables it. Never shown on the /s/<token> share-redeem flow, which
-  // doesn't render this page at all.
-  NexVueAuth.api("portal_status").then(function (data) {
-    if (!data.adopted || !data.portal_reachable || !data.portal_url) return;
-    var link = document.getElementById("portal-nudge-link");
-    link.href = data.portal_url.replace(/\/$/, "") + "/login";
-    document.getElementById("portal-nudge").classList.add("show");
   }).catch(function () {});
 
   document.getElementById("login-form").addEventListener("submit", async function (ev) {
@@ -135,7 +105,7 @@
     const err = document.getElementById("login-err");
     err.textContent = "";
     try {
-      const data = await NexVueAuth.api("login", {
+      const data = await NexVuePortal.api("login", {
         username: document.getElementById("username").value,
         password: document.getElementById("password").value,
       });
@@ -158,7 +128,7 @@
     const b = document.getElementById("nw2").value;
     if (a !== b) { err.textContent = "passwords do not match"; return; }
     try {
-      await NexVueAuth.api("change_password", {
+      await NexVuePortal.api("change_password", {
         current_password: document.getElementById("cur").value,
         new_password: a,
       });

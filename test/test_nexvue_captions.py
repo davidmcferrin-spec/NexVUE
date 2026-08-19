@@ -20,9 +20,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PHP = shutil.which("php")
-CAPTIONS_PHP = ROOT / "nexvue-captions.php"
+CAPTIONS_PHP = ROOT / "web-node" / "nexvue-captions.php"
 DECODE_PY = ROOT / "nexvue-captions-decode.py"
-CAPTIONS_JS = ROOT / "nexvue-captions.js"
+CAPTIONS_JS = ROOT / "web-node" / "nexvue-captions.js"
 
 
 def _load_decode():
@@ -356,7 +356,7 @@ class TestCaptionsDomContract(unittest.TestCase):
 
     def test_player_files_wire_cc(self) -> None:
         for name in ("index.html", "multiview.html"):
-            html = (ROOT / name).read_text(encoding="utf-8")
+            html = (ROOT / "web-node" / name).read_text(encoding="utf-8")
             self.assertIn("nexvue-captions.js", html, name)
             self.assertIn("cc-overlay" if name != "multiview.html" else "pane-cc", html, name)
             if name == "index.html":

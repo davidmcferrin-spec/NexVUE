@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NexVUE Portal — Watch</title>
+<script src="/assets/nexvue-ui.js"></script>
+<script src="/assets/nexvue-portal-whep.js"></script>
+<style>
+  :root {
+    --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
+    --text: #d6dde6; --dim: #98a6b5; --muted: #b0bbc8;
+    --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5; --on-acc: #08131a;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f5f7; --panel: #ffffff; --edge: #cdd5de;
+    --text: #1c232b; --dim: #5a6675; --muted: #3d4a58;
+    --ok: #1f9d5c; --bad: #c62828; --acc: #0b7ea4; --on-acc: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  nav.topnav {
+    display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--edge);
+  }
+  nav.topnav a { color: var(--dim); text-decoration: none; font-size: 13px; }
+  nav.topnav a:hover { color: var(--acc); }
+  nav.topnav .spacer { flex: 1; }
+  .theme-toggle {
+    background: transparent; color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 5px 9px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  main { padding: 16px; max-width: 960px; margin: 0 auto; }
+  .stage {
+    width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 6px;
+    border: 1px solid var(--edge); display: flex; align-items: center; justify-content: center;
+    overflow: hidden; position: relative;
+  }
+  video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .state { position: absolute; left: 10px; bottom: 10px; font-size: 12px; padding: 4px 8px; border-radius: 4px; background: rgba(0,0,0,.55); }
+  .state.ok { color: var(--ok); }
+  .state.bad { color: var(--bad); }
+  h1 { font-size: 16px; margin: 16px 0 4px; color: var(--acc); }
+  .meta { color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a href="/catalog">← Catalog</a>
+  <span class="spacer"></span>
+  <span id="nav-who" hidden></span>
+  <a href="#" id="nav-logout" hidden>Sign out</a>
+  <button type="button" class="theme-toggle" id="theme-toggle">Light</button>
+</nav>
+<main>
+  <div class="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="state" id="state">connecting…</div>
+  </div>
+  <h1 id="title">—</h1>
+  <div class="meta" id="meta"></div>
+</main>
+<script src="/assets/nexvue-portal-auth-gate.js"></script>
+<script>
+(function () {
+  const params = new URLSearchParams(location.search);
+  const stationId = params.get("station") || "";
+  const channel = (params.get("channel") || "").toLowerCase();
+  const stationName = params.get("name") || "";
+  const video = document.getElementById("video");
+  const stateEl = document.getElementById("state");
+  let pc = null;
+
+  function setState(text, cls) {
+    stateEl.textContent = text;
+    stateEl.className = "state" + (cls ? " " + cls : "");
+  }
+
+  async function connect() {
+    if (!stationId || !/^ch[0-7]$/.test(channel)) {
+      setState("missing station/channel", "bad");
+      return;
+    }
+    document.getElementById("title").textContent = (stationName || stationId) + " — " + channel;
+    document.getElementById("meta").textContent = "station " + stationId;
+
+    let jwtResp;
+    try {
+      jwtResp = await NexVuePortal.viewerJwt(stationId, channel);
+    } catch (e) {
+      setState("not allowed: " + (e.message || "error"), "bad");
+      return;
+    }
+
+    pc = new RTCPeerConnection();
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
+    pc.ontrack = function (ev) {
+      try { ev.receiver.playoutDelayHint = 0; } catch (e) {}
+      try { ev.receiver.jitterBufferTarget = 0; } catch (e) {}
+      if (!video.srcObject) video.srcObject = ev.streams[0];
+    };
+    pc.onconnectionstatechange = function () {
+      if (!pc) return;
+      if (pc.connectionState === "connected") setState("connected", "ok");
+      else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+        setState(pc.connectionState, "bad");
+      }
+    };
+
+    try {
+      const offer = await pc.createOffer();
+      const prepared = await NexVuePortalWhep.prepareWhepOffer(offer);
+      await pc.setLocalDescription({ type: "offer", sdp: prepared.sdp });
+      await new Promise(function (resolve) {
+        if (pc.iceGatheringState === "complete") return resolve();
+        const check = function () {
+          if (pc.iceGatheringState === "complete") {
+            pc.removeEventListener("icegatheringstatechange", check);
+            resolve();
+          }
+        };
+        pc.addEventListener("icegatheringstatechange", check);
+        setTimeout(resolve, 2000);
+      });
+      const url = jwtResp.whep_url + "?jwt=" + encodeURIComponent(jwtResp.jwt);
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/sdp" },
+        body: pc.localDescription.sdp,
+      });
+      const body = await res.text();
+      if (!res.ok) {
+        throw new Error("WHEP endpoint returned " + res.status);
+      }
+      await pc.setRemoteDescription({ type: "answer", sdp: body });
+    } catch (err) {
+      setState("error: " + (err.message || err), "bad");
+    }
+  }
+
+  NexVuePortal.requirePage({}).then(function () {
+    connect();
+  });
+
+  window.addEventListener("beforeunload", function () {
+    if (pc) { try { pc.close(); } catch (e) {} }
+  });
+})();
+</script>
+</body>
+</html>

@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LIB = ROOT / "nexvue-auth-lib.php"
+LIB = ROOT / "web-node" / "nexvue-auth-lib.php"
 PHP = shutil.which("php")
 
 

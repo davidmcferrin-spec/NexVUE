@@ -16,11 +16,11 @@ def main() -> int:
         raise AssertionError("NEXVUE_STATUS_BIND default 127.0.0.1 missing")
     if re.search(r'^LISTEN_ADDR\s*=\s*\(\s*"0\.0\.0\.0"', SRC, re.M):
         raise AssertionError("LISTEN_ADDR must not hardcode 0.0.0.0")
-    if "nexvue-mediamtx-api.php" not in (ROOT / "index.html").read_text(encoding="utf-8"):
+    if "nexvue-mediamtx-api.php" not in (ROOT / "web-node" / "index.html").read_text(encoding="utf-8"):
         raise AssertionError("index.html must poll nexvue-mediamtx-api.php")
-    if "nexvue-mediamtx-api.php" not in (ROOT / "multiview.html").read_text(encoding="utf-8"):
+    if "nexvue-mediamtx-api.php" not in (ROOT / "web-node" / "multiview.html").read_text(encoding="utf-8"):
         raise AssertionError("multiview.html must poll nexvue-mediamtx-api.php")
-    api_php = (ROOT / "nexvue-mediamtx-api.php").read_text(encoding="utf-8")
+    api_php = (ROOT / "web-node" / "nexvue-mediamtx-api.php").read_text(encoding="utf-8")
     if "/v3/paths/list" not in api_php:
         raise AssertionError("nexvue-mediamtx-api.php must proxy /v3/paths/list")
     if "auth_require_any" not in api_php:

@@ -213,15 +213,225 @@ apply_nexvue_firewall() {
   ok "8554 (RTSP) left closed — loopback ingest only"
 }
 
+# ---- Cloud portal installer (Phase 4) --------------------------------------------
+# A portal deployment is always a separate box from an edge node — never the
+# DeckLink/GStreamer/MediaMTX/encoder stack, just Apache + PHP + its own
+# SQLite store. Self-contained function so `--portal` can branch out and
+# exit before any edge-only logic below runs.
+install_portal() {
+  local repo_dir webroot public pages assets
+  repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  webroot="${NEXVUE_PORTAL_WEBROOT:-/var/www/html}"
+  public="${webroot}/public"
+  pages="${webroot}/pages"
+  assets="${public}/assets"
+  local check_only=false
+  for arg in "$@"; do
+    [ "$arg" = "--check" ] && check_only=true
+  done
+
+  [ "$(id -u)" -eq 0 ] || fail "run as root: sudo ./setup.sh --portal"
+
+  step "Cloud portal — required files"
+  local portal_files=(
+    web-portal/public/index.php
+    web-portal/nexvue-portal-web-router.php
+    web-portal/nexvue-portal-web-apache.conf
+    web-portal/nexvue-portal-ssl-apache.conf
+    web-portal/nexvue-portal-auth-lib.php
+    web-portal/nexvue-portal-api.php
+    web-portal/nexvue-portal-bootstrap.php
+    web-portal/nexvue-portal-auth-gate.js
+    web-portal/nexvue-portal-whep.js
+    web-portal/nexvue-ui.js
+    web-portal/login.html
+    web-portal/catalog.html
+    web-portal/watch.html
+    web-portal/stations.html
+    web-portal/users.html
+  )
+  local f
+  for f in "${portal_files[@]}"; do
+    [ -f "${repo_dir}/${f}" ] || fail "missing ${f} — run from the repo root"
+  done
+  ok "all web-portal/ files present"
+  if $check_only; then
+    [ -d "${webroot}" ] || fail "portal webroot ${webroot} missing — run sudo ./setup.sh --portal (no --check) first"
+    for f in public/index.php nexvue-portal-web-router.php nexvue-portal-api.php \
+             nexvue-portal-auth-lib.php nexvue-portal-bootstrap.php \
+             pages/login.html pages/catalog.html pages/watch.html pages/stations.html pages/users.html \
+             public/assets/nexvue-ui.js public/assets/nexvue-portal-auth-gate.js public/assets/nexvue-portal-whep.js; do
+      [ -f "${webroot}/${f}" ] && ok "portal web UI: ${webroot}/${f}" || warn "portal web UI missing: ${webroot}/${f}"
+    done
+    if command -v apache2ctl >/dev/null 2>&1 \
+        && apache2ctl -S 2>/dev/null | grep -q "DocumentRoot: ${public}"; then
+      ok "Apache DocumentRoot is ${public}"
+    else
+      warn "Apache DocumentRoot may not be ${public} — /login, /api/portal will fail until fixed"
+    fi
+    [ -f /etc/nexvue-portal/tls/fullchain.pem ] && ok "portal TLS cert present" || warn "portal TLS cert missing"
+    [ -f /var/lib/nexvue-portal/portal.db ] && ok "portal.db present" || warn "portal.db missing — run bootstrap"
+    return 0
+  fi
+
+  step "Cloud portal — packages (Apache + PHP only; no DeckLink/GStreamer/MediaMTX)"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq || warn "apt-get update failed — continuing with cached package lists"
+  apt-get install -y -qq apache2 libapache2-mod-php php-cli php-sqlite3 ufw \
+    || fail "apt-get install (apache2/php/ufw) failed"
+  ok "apache2 + php-cli + php-sqlite3 + ufw installed"
+
+  step "Cloud portal — web app"
+  install -d -m 755 "${public}" "${pages}" "${assets}"
+  install -m 644 "${repo_dir}/web-portal/public/index.php" "${public}/index.php"
+  install -m 644 "${repo_dir}/web-portal/nexvue-portal-web-router.php" "${webroot}/nexvue-portal-web-router.php"
+  install -m 644 "${repo_dir}/web-portal/login.html" \
+                 "${repo_dir}/web-portal/catalog.html" \
+                 "${repo_dir}/web-portal/watch.html" \
+                 "${repo_dir}/web-portal/stations.html" \
+                 "${repo_dir}/web-portal/users.html" \
+                 "${pages}/"
+  install -m 644 "${repo_dir}/web-portal/nexvue-ui.js" \
+                 "${repo_dir}/web-portal/nexvue-portal-auth-gate.js" \
+                 "${repo_dir}/web-portal/nexvue-portal-whep.js" \
+                 "${assets}/"
+  install -m 644 "${repo_dir}/web-portal/nexvue-portal-auth-lib.php" \
+                 "${repo_dir}/web-portal/nexvue-portal-api.php" \
+                 "${webroot}/"
+  ok "web-portal/ installed under ${webroot} (public/ front door + pages/ + /api/portal)"
+
+  step "Cloud portal — store (portal.db + RSA signing key)"
+  install -d -m 750 -o www-data -g www-data /var/lib/nexvue-portal 2>/dev/null \
+    || install -d -m 750 /var/lib/nexvue-portal
+  chown www-data:www-data /var/lib/nexvue-portal 2>/dev/null || true
+  install -d -m 755 /usr/local/share/nexvue-portal
+  install -m 644 "${repo_dir}/web-portal/nexvue-portal-auth-lib.php" \
+    /usr/local/share/nexvue-portal/nexvue-portal-auth-lib.php
+  install -m 755 "${repo_dir}/web-portal/nexvue-portal-bootstrap.php" \
+    /usr/local/bin/nexvue-portal-bootstrap.php
+  if command -v php >/dev/null 2>&1; then
+    if php /usr/local/bin/nexvue-portal-bootstrap.php; then
+      ok "portal bootstrap (portal.db + RSA key + seed org/admin)"
+    else
+      warn "portal bootstrap failed — run: sudo php /usr/local/bin/nexvue-portal-bootstrap.php"
+    fi
+    if command -v runuser >/dev/null 2>&1; then
+      if runuser -u www-data -- php /usr/local/bin/nexvue-portal-bootstrap.php >/dev/null 2>&1; then
+        ok "portal store readable/writable as www-data"
+      else
+        warn "www-data could not read/write the portal store — check /var/lib/nexvue-portal ownership"
+      fi
+    fi
+  else
+    warn "php CLI not found — cannot bootstrap portal store"
+  fi
+
+  step "Cloud portal — TLS (self-signed if missing)"
+  local tls_dir=/etc/nexvue-portal/tls cert key cn host short
+  cert="${tls_dir}/fullchain.pem"
+  key="${tls_dir}/privkey.pem"
+  install -d -m 755 "${tls_dir}"
+  if ! getent group ssl-cert >/dev/null 2>&1; then
+    groupadd --system ssl-cert 2>/dev/null || true
+  fi
+  usermod -aG ssl-cert www-data 2>/dev/null || true
+  if [ -f "${cert}" ] && [ -f "${key}" ]; then
+    ok "portal TLS certs present: ${cert} + ${key} (left untouched)"
+  else
+    if command -v openssl >/dev/null 2>&1; then
+      host="$(hostname -f 2>/dev/null || true)"; short="$(hostname 2>/dev/null || true)"
+      cn="${host:-${short:-nexvue-portal}}"
+      openssl req -x509 -newkey rsa:4096 -sha256 -days 825 -nodes \
+        -keyout "${key}" -out "${cert}" \
+        -subj "/CN=${cn}/O=NexVUE Portal" >/dev/null 2>&1 \
+        && ok "created self-signed portal TLS certs (CN=${cn}; replace with a real cert when ready)" \
+        || warn "openssl failed creating portal TLS certs"
+    else
+      warn "openssl not found — cannot create portal TLS certs"
+    fi
+  fi
+  chown root:ssl-cert "${cert}" "${key}" 2>/dev/null || true
+  chmod 644 "${cert}" 2>/dev/null || true
+  chmod 640 "${key}" 2>/dev/null || true
+
+  step "Cloud portal — Apache"
+  if [ -d /etc/apache2/conf-available ] && command -v a2enmod >/dev/null 2>&1; then
+    a2enmod rewrite >/dev/null 2>&1 && ok "Apache mod_rewrite enabled" \
+      || warn "a2enmod rewrite failed — /login, /catalog routing will 404 without it"
+    a2enmod ssl >/dev/null 2>&1 && ok "Apache mod_ssl enabled" || warn "a2enmod ssl failed"
+    sed "s|@@APP_ROOT@@|${webroot}|g" "${repo_dir}/web-portal/nexvue-portal-web-apache.conf" \
+      > /etc/apache2/conf-available/nexvue-portal-web.conf
+    chmod 644 /etc/apache2/conf-available/nexvue-portal-web.conf
+    a2enconf nexvue-portal-web >/dev/null 2>&1 \
+      && ok "Apache conf enabled: nexvue-portal-web" || warn "a2enconf nexvue-portal-web failed"
+    install -m 644 "${repo_dir}/web-portal/nexvue-portal-ssl-apache.conf" \
+      /etc/apache2/conf-available/nexvue-portal-ssl-certs.conf
+    a2enconf nexvue-portal-ssl-certs >/dev/null 2>&1 \
+      && ok "Apache conf enabled: nexvue-portal-ssl-certs" || warn "a2enconf nexvue-portal-ssl-certs failed"
+    # Fresh/dedicated box assumption: patch Ubuntu's standard default vhosts
+    # directly rather than the edge installer's fully general regex patcher —
+    # simpler, appropriately scoped for a single-purpose portal box. If your
+    # site layout differs, set DocumentRoot to ${public} manually.
+    local vhost
+    for vhost in /etc/apache2/sites-available/000-default.conf /etc/apache2/sites-available/default-ssl.conf; do
+      [ -f "$vhost" ] || continue
+      if grep -qE '^\s*DocumentRoot\s+/var/www/html\s*$' "$vhost" 2>/dev/null; then
+        sed -i "s|^\(\s*DocumentRoot\s\+\)/var/www/html\s*\$|\1${public}|" "$vhost"
+        ok "patched DocumentRoot -> ${public} in $(basename "$vhost")"
+      fi
+    done
+    if ! apache2ctl -S 2>/dev/null | grep -q "DocumentRoot: ${public}"; then
+      warn "DocumentRoot may not be ${public} — set it manually in your enabled site if routing 404s"
+    fi
+    a2ensite default-ssl >/dev/null 2>&1 || true
+    systemctl reload apache2 >/dev/null 2>&1 || systemctl restart apache2 >/dev/null 2>&1 \
+      || warn "apache2 reload/restart failed — check apache2ctl configtest"
+    ok "Apache reloaded"
+  else
+    warn "Apache conf-available/a2enmod missing — enable rewrite/ssl and set DocumentRoot manually"
+  fi
+  systemctl enable --now apache2 >/dev/null 2>&1 && ok "apache2 enabled --now" \
+    || warn "could not enable --now apache2"
+
+  step "Cloud portal — firewall (SSH + HTTPS only; no media ports)"
+  if command -v ufw >/dev/null 2>&1; then
+    ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || warn "ufw allow SSH failed"
+    ufw allow 443/tcp comment 'NexVUE portal HTTPS' >/dev/null 2>&1 || warn "ufw allow 443/tcp failed"
+    if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
+      ufw --force enable >/dev/null 2>&1 && ok "ufw enabled (OpenSSH + 443 only)" || warn "ufw --force enable failed"
+    else
+      warn "sshd not active — not enabling ufw (would lock you out)"
+    fi
+  else
+    warn "ufw not installed — skipping firewall step"
+  fi
+
+  echo
+  ok "NexVUE cloud portal installed. Visit https://<this-host>/login (default admin / password — change immediately)."
+  ok "Next: on each edge node, Settings -> Adopt this station, using an enrollment code from /stations here."
+  return 0
+}
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_ONLY=false
 APPLY_FIREWALL=false
+PORTAL_MODE=false
 for arg in "$@"; do
   case "$arg" in
     --check)    CHECK_ONLY=true ;;
     --firewall) APPLY_FIREWALL=true ;;
+    --portal)   PORTAL_MODE=true ;;
   esac
 done
+
+# ---- Cloud portal install (separate box from an edge node) -----------------------
+# --portal installs ONLY the web-portal/ app + its own SQLite store — none of
+# the DeckLink/GStreamer/MediaMTX/encoder machinery below applies to a portal
+# box. Branches out and exits before any of that runs.
+if $PORTAL_MODE; then
+  install_portal "$@"
+  exit $?
+fi
 
 [ "$(id -u)" -eq 0 ] || fail "run as root: sudo ./setup.sh"
 
@@ -234,19 +444,19 @@ REQUIRED_FILES=(
   decklink-configure.cpp
   nexvue-status-server.py nexvue-status.service
   nexvue-metrics-server.py nexvue-metrics.service
-  nexvue-metrics.php nexvue-status.php nexvue-mediamtx-api.php
-  nexvue-captions.php nexvue-captions.js
-  nexvue-qr.js nexvue-ui.js nexvue-vu.js nexvue-logo.php chart.umd.min.js
-  metrics.html index.html multiview.html
-  nexvue-ops.php services.html channels.html
-  nexvue-auth-lib.php nexvue-auth.php nexvue-jwks.php nexvue-auth-bootstrap.php
-  nexvue-auth-gate.js nexvue-share-ui.js
-  nexvue-web-router.php nexvue-web-apache.conf nexvue-ssl-apache.conf
-  public/index.php
+  web-node/nexvue-metrics.php web-node/nexvue-status.php web-node/nexvue-mediamtx-api.php
+  web-node/nexvue-captions.php web-node/nexvue-captions.js
+  web-node/nexvue-qr.js web-node/nexvue-ui.js web-node/nexvue-vu.js web-node/nexvue-logo.php web-node/chart.umd.min.js
+  web-node/metrics.html web-node/index.html web-node/multiview.html
+  web-node/nexvue-ops.php web-node/services.html web-node/channels.html
+  web-node/nexvue-auth-lib.php web-node/nexvue-auth.php web-node/nexvue-jwks.php nexvue-auth-bootstrap.php
+  web-node/nexvue-auth-gate.js web-node/nexvue-share-ui.js
+  web-node/nexvue-web-router.php nexvue-web-apache.conf nexvue-ssl-apache.conf
+  web-node/public/index.php
   nexvue-mediamtx-jwt-patch.py nexvue-mediamtx-tls-patch.py
   nexvue-apache-http-off.py
   nexvue-jwks-loopback.conf
-  login.html forgot.html reset.html users.html
+  web-node/login.html web-node/forgot.html web-node/reset.html web-node/users.html
   nexvue-captions-decode.py nexvue-captions-probe.sh
   nexvue-phase1-closeout.sh
   nexvue-phase1-deploy-verify.sh
@@ -257,10 +467,12 @@ REQUIRED_FILES=(
   nexvue-ops-enable.sh nexvue-ops-audio-probe.sh
   nexvue-ops-support-bundle.sh nexvue-support-bundle.py
   nexvue-ops-update.sh
-  nexvue-version.php
+  web-node/nexvue-version.php
   VERSION
   channels-example.env
   nexvue-example.env
+  nexvue-portal-heartbeat.php nexvue-portal-heartbeat.service nexvue-portal-heartbeat.timer
+  nexvue-ops-portal-write.sh nexvue-ops-portal-write.py
 )
 if ! $CHECK_ONLY; then
   for f in "${REQUIRED_FILES[@]}"; do
@@ -475,6 +687,9 @@ install -m 755 "${REPO_DIR}/nexvue-ops-audio-probe.sh" /usr/local/bin/nexvue-ops
 install -m 755 "${REPO_DIR}/nexvue-ops-support-bundle.sh" /usr/local/bin/nexvue-ops-support-bundle.sh
 install -m 755 "${REPO_DIR}/nexvue-support-bundle.py" /usr/local/bin/nexvue-support-bundle.py
 install -m 755 "${REPO_DIR}/nexvue-ops-update.sh" /usr/local/bin/nexvue-ops-update.sh
+install -m 755 "${REPO_DIR}/nexvue-ops-portal-write.py" /usr/local/bin/nexvue-ops-portal-write.py
+install -m 755 "${REPO_DIR}/nexvue-ops-portal-write.sh" /usr/local/bin/nexvue-ops-portal-write.sh
+install -m 755 "${REPO_DIR}/nexvue-portal-heartbeat.php" /usr/local/bin/nexvue-portal-heartbeat.php
 # Support-bundle zip staging (www-data must read finished zips).
 install -d -m 750 -o root -g www-data /var/lib/nexvue/support 2>/dev/null \
   || install -d -m 750 /var/lib/nexvue/support
@@ -519,7 +734,9 @@ install -m 644 "${REPO_DIR}/mediamtx.service" \
                "${REPO_DIR}/nexvue-encode@.service" \
                "${REPO_DIR}/nexvue-decklink-configure.service" \
                "${REPO_DIR}/nexvue-status.service" \
-               "${REPO_DIR}/nexvue-metrics.service" /etc/systemd/system/
+               "${REPO_DIR}/nexvue-metrics.service" \
+               "${REPO_DIR}/nexvue-portal-heartbeat.service" \
+               "${REPO_DIR}/nexvue-portal-heartbeat.timer" /etc/systemd/system/
 systemctl daemon-reload
 ok "scripts + units installed, systemd reloaded"
 
@@ -562,6 +779,14 @@ for u in mediamtx nexvue-status nexvue-metrics; do
     warn "could not enable --now ${u}"
   fi
 done
+
+# Cloud portal heartbeat (Phase 4) — safe to enable unconditionally on every
+# station: the service no-ops until an admin adopts it (Settings → Adopt).
+if systemctl enable --now nexvue-portal-heartbeat.timer >/dev/null 2>&1; then
+  ok "enabled --now nexvue-portal-heartbeat.timer (no-op until station is adopted)"
+else
+  warn "could not enable --now nexvue-portal-heartbeat.timer"
+fi
 
 enc_ok=0
 enc_fail=0
@@ -633,7 +858,7 @@ if [ -f /var/lib/nexvue/auth.db ] && [ ! -f /var/lib/nexvue/auth/auth.db ]; then
   done
   ok "migrated auth.db → /var/lib/nexvue/auth/auth.db"
 fi
-install -m 644 "${REPO_DIR}/nexvue-auth-lib.php" /usr/local/share/nexvue/nexvue-auth-lib.php
+install -m 644 "${REPO_DIR}/web-node/nexvue-auth-lib.php" /usr/local/share/nexvue/nexvue-auth-lib.php
 install -m 755 "${REPO_DIR}/nexvue-auth-bootstrap.php" /usr/local/bin/nexvue-auth-bootstrap.php
 # Smoke must use the installed lib — www-data often cannot read REPO_DIR under /home.
 AUTH_LIB_INSTALLED=/usr/local/share/nexvue/nexvue-auth-lib.php
@@ -701,39 +926,39 @@ ASSETS="${PUBLIC}/assets"
 if [ -d "${WEBROOT}" ] || mkdir -p "${WEBROOT}" 2>/dev/null; then
   install -d -m 755 "${PUBLIC}" "${PAGES}" "${ASSETS}"
   # Front controller
-  install -m 644 "${REPO_DIR}/public/index.php" "${PUBLIC}/index.php"
-  install -m 644 "${REPO_DIR}/nexvue-web-router.php" "${WEBROOT}/nexvue-web-router.php"
+  install -m 644 "${REPO_DIR}/web-node/public/index.php" "${PUBLIC}/index.php"
+  install -m 644 "${REPO_DIR}/web-node/nexvue-web-router.php" "${WEBROOT}/nexvue-web-router.php"
   # HTML pages (not web-enumerable — DocumentRoot is public/)
-  install -m 644 "${REPO_DIR}/index.html" \
-                 "${REPO_DIR}/multiview.html" \
-                 "${REPO_DIR}/metrics.html" \
-                 "${REPO_DIR}/services.html" \
-                 "${REPO_DIR}/channels.html" \
-                 "${REPO_DIR}/login.html" \
-                 "${REPO_DIR}/forgot.html" \
-                 "${REPO_DIR}/reset.html" \
-                 "${REPO_DIR}/users.html" \
+  install -m 644 "${REPO_DIR}/web-node/index.html" \
+                 "${REPO_DIR}/web-node/multiview.html" \
+                 "${REPO_DIR}/web-node/metrics.html" \
+                 "${REPO_DIR}/web-node/services.html" \
+                 "${REPO_DIR}/web-node/channels.html" \
+                 "${REPO_DIR}/web-node/login.html" \
+                 "${REPO_DIR}/web-node/forgot.html" \
+                 "${REPO_DIR}/web-node/reset.html" \
+                 "${REPO_DIR}/web-node/users.html" \
                  "${PAGES}/"
   # Browser assets
-  install -m 644 "${REPO_DIR}/nexvue-captions.js" \
-                 "${REPO_DIR}/nexvue-qr.js" \
-                 "${REPO_DIR}/nexvue-ui.js" \
-                 "${REPO_DIR}/nexvue-vu.js" \
-                 "${REPO_DIR}/nexvue-auth-gate.js" \
-                 "${REPO_DIR}/nexvue-share-ui.js" \
-                 "${REPO_DIR}/chart.umd.min.js" \
+  install -m 644 "${REPO_DIR}/web-node/nexvue-captions.js" \
+                 "${REPO_DIR}/web-node/nexvue-qr.js" \
+                 "${REPO_DIR}/web-node/nexvue-ui.js" \
+                 "${REPO_DIR}/web-node/nexvue-vu.js" \
+                 "${REPO_DIR}/web-node/nexvue-auth-gate.js" \
+                 "${REPO_DIR}/web-node/nexvue-share-ui.js" \
+                 "${REPO_DIR}/web-node/chart.umd.min.js" \
                  "${ASSETS}/"
   # PHP APIs + lib (served only via /api/* front door; JWKS vhost can reach them)
-  install -m 644 "${REPO_DIR}/nexvue-metrics.php" \
-                 "${REPO_DIR}/nexvue-status.php" \
-                 "${REPO_DIR}/nexvue-mediamtx-api.php" \
-                 "${REPO_DIR}/nexvue-captions.php" \
-                 "${REPO_DIR}/nexvue-logo.php" \
-                 "${REPO_DIR}/nexvue-version.php" \
-                 "${REPO_DIR}/nexvue-ops.php" \
-                 "${REPO_DIR}/nexvue-auth-lib.php" \
-                 "${REPO_DIR}/nexvue-auth.php" \
-                 "${REPO_DIR}/nexvue-jwks.php" \
+  install -m 644 "${REPO_DIR}/web-node/nexvue-metrics.php" \
+                 "${REPO_DIR}/web-node/nexvue-status.php" \
+                 "${REPO_DIR}/web-node/nexvue-mediamtx-api.php" \
+                 "${REPO_DIR}/web-node/nexvue-captions.php" \
+                 "${REPO_DIR}/web-node/nexvue-logo.php" \
+                 "${REPO_DIR}/web-node/nexvue-version.php" \
+                 "${REPO_DIR}/web-node/nexvue-ops.php" \
+                 "${REPO_DIR}/web-node/nexvue-auth-lib.php" \
+                 "${REPO_DIR}/web-node/nexvue-auth.php" \
+                 "${REPO_DIR}/web-node/nexvue-jwks.php" \
                  "${REPO_DIR}/VERSION" \
                  "${WEBROOT}/"
   # Remove legacy flat copies left from pre-2.0 installs (safe allowlist only).

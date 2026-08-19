@@ -15,6 +15,12 @@ declare(strict_types=1);
 
 $lib = __DIR__ . '/nexvue-auth-lib.php';
 if (!is_file($lib)) {
+    // Repo checkout: lib lives under web-node/ (this script stays at repo
+    // root — it's a CLI installer helper, not served web content).
+    $lib = __DIR__ . '/web-node/nexvue-auth-lib.php';
+}
+if (!is_file($lib)) {
+    // Deployed box: setup.sh installs the lib here regardless of repo layout.
     $lib = '/usr/local/share/nexvue/nexvue-auth-lib.php';
 }
 if (!is_file($lib)) {

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NexVUE Portal — Stations</title>
+<script src="/assets/nexvue-ui.js"></script>
+<style>
+  :root {
+    --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
+    --text: #d6dde6; --dim: #98a6b5; --muted: #b0bbc8;
+    --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5; --on-acc: #08131a;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f5f7; --panel: #ffffff; --edge: #cdd5de;
+    --text: #1c232b; --dim: #5a6675; --muted: #3d4a58;
+    --ok: #1f9d5c; --bad: #c62828; --acc: #0b7ea4; --on-acc: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  nav.topnav {
+    display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--edge);
+  }
+  nav.topnav a { color: var(--dim); text-decoration: none; font-size: 13px; }
+  nav.topnav a:hover, nav.topnav a.active { color: var(--acc); }
+  nav.topnav .spacer { flex: 1; }
+  .theme-toggle {
+    background: transparent; color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 5px 9px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  main { padding: 16px; max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 16px; margin: 0 0 12px; color: var(--acc); }
+  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 14px; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--edge); }
+  th { color: var(--dim); font-weight: 500; }
+  .ok-dot { color: var(--ok); }
+  .bad-dot { color: var(--bad); }
+  input { background: var(--bg); color: var(--text); border: 1px solid var(--edge); border-radius: 4px; padding: 7px 9px; font: inherit; }
+  button { background: var(--acc); color: var(--on-acc); border: none; border-radius: 4px; padding: 7px 12px; font: inherit; font-weight: 600; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--bad); border: 1px solid var(--edge); font-weight: 400; }
+  .token-box { background: var(--bg); border: 1px solid var(--acc); border-radius: 4px; padding: 10px; margin-top: 10px; font-size: 12px; word-break: break-all; }
+  .err { color: var(--bad); font-size: 12px; }
+  .empty { color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span style="color:var(--acc);font-weight:600;">NexVUE Portal</span>
+  <a href="/catalog">Catalog</a>
+  <a href="/stations" class="active">Stations</a>
+  <a href="/users">Users</a>
+  <span class="spacer"></span>
+  <span id="nav-who" hidden></span>
+  <a href="#" id="nav-logout" hidden>Sign out</a>
+  <button type="button" class="theme-toggle" id="theme-toggle">Light</button>
+</nav>
+<main>
+  <h1>Stations</h1>
+  <div class="panel">
+    <div id="stations"><p class="empty">Loading…</p></div>
+  </div>
+
+  <h1>Adopt a station</h1>
+  <div class="panel">
+    <p class="meta" style="color:var(--dim);font-size:12px;margin-top:0;">
+      Generates a one-time enrollment code. Paste it into the edge station's
+      own Settings → Adopt this station form — the edge calls out to this
+      portal to complete enrollment; nothing here reaches the edge directly.
+    </p>
+    <form id="token-form">
+      <input id="station-name" placeholder="Station name (e.g. Studio A)" required>
+      <button type="submit">Generate code</button>
+    </form>
+    <div class="err" id="token-err"></div>
+    <div class="token-box" id="token-box" style="display:none;"></div>
+  </div>
+</main>
+<script src="/assets/nexvue-portal-auth-gate.js"></script>
+<script>
+(function () {
+  function renderStations(stations) {
+    const el = document.getElementById("stations");
+    if (!stations.length) {
+      el.innerHTML = '<p class="empty">No stations adopted yet.</p>';
+      return;
+    }
+    const table = document.createElement("table");
+    table.innerHTML = "<tr><th>Name</th><th>Status</th><th>Edge URL</th><th>Version</th><th>Last heartbeat</th><th>Channels</th></tr>";
+    for (const s of stations) {
+      const tr = document.createElement("tr");
+      const dot = s.last_heartbeat_at ? '<span class="ok-dot">●</span>' : '<span class="bad-dot">●</span>';
+      tr.innerHTML =
+        "<td>" + escapeHtml(s.name) + "</td>" +
+        "<td>" + dot + " " + escapeHtml(s.status) + "</td>" +
+        "<td>" + escapeHtml(s.edge_base_url) + "</td>" +
+        "<td>" + escapeHtml(s.edge_version || "—") + "</td>" +
+        "<td>" + escapeHtml(s.last_heartbeat_at || "never") + "</td>" +
+        "<td>" + (s.channels || []).length + "</td>";
+      table.appendChild(tr);
+    }
+    el.textContent = "";
+    el.appendChild(table);
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function loadStations() {
+    return NexVuePortal.api("stations_list").then(function (data) {
+      renderStations(data.stations || []);
+    });
+  }
+
+  NexVuePortal.requirePage({ roles: ["org_admin"] }).then(function () {
+    loadStations();
+  });
+
+  document.getElementById("token-form").addEventListener("submit", async function (ev) {
+    ev.preventDefault();
+    const err = document.getElementById("token-err");
+    err.textContent = "";
+    const name = document.getElementById("station-name").value;
+    try {
+      const data = await NexVuePortal.api("enroll_token_create", { name: name });
+      const box = document.getElementById("token-box");
+      box.style.display = "block";
+      box.textContent = "Enrollment code (expires " + data.expires_at + "):\n" + data.token;
+      document.getElementById("station-name").value = "";
+      loadStations();
+    } catch (e) {
+      err.textContent = e.message || "failed";
+    }
+  });
+})();
+</script>
+</body>
+</html>

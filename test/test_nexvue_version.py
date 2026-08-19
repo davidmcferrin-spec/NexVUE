@@ -20,7 +20,7 @@ class TestVersion(unittest.TestCase):
         self.assertRegex(raw, VERSION_RE)
 
     def test_version_php_present(self):
-        self.assertTrue((ROOT / "nexvue-version.php").is_file())
+        self.assertTrue((ROOT / "web-node" / "nexvue-version.php").is_file())
         self.assertTrue((ROOT / "nexvue-ops-update.sh").is_file())
 
     def test_stamp_roundtrip_shape(self):

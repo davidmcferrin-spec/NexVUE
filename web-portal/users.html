@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NexVUE Portal — Users</title>
+<script src="/assets/nexvue-ui.js"></script>
+<style>
+  :root {
+    --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
+    --text: #d6dde6; --dim: #98a6b5; --muted: #b0bbc8;
+    --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5; --on-acc: #08131a;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f5f7; --panel: #ffffff; --edge: #cdd5de;
+    --text: #1c232b; --dim: #5a6675; --muted: #3d4a58;
+    --ok: #1f9d5c; --bad: #c62828; --acc: #0b7ea4; --on-acc: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  nav.topnav {
+    display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--edge);
+  }
+  nav.topnav a { color: var(--dim); text-decoration: none; font-size: 13px; }
+  nav.topnav a:hover, nav.topnav a.active { color: var(--acc); }
+  nav.topnav .spacer { flex: 1; }
+  .theme-toggle {
+    background: transparent; color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 5px 9px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  main { padding: 16px; max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 16px; margin: 0 0 12px; color: var(--acc); }
+  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 14px; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--edge); }
+  th { color: var(--dim); font-weight: 500; }
+  input, select { background: var(--bg); color: var(--text); border: 1px solid var(--edge); border-radius: 4px; padding: 7px 9px; font: inherit; }
+  button { background: var(--acc); color: var(--on-acc); border: none; border-radius: 4px; padding: 7px 12px; font: inherit; font-weight: 600; cursor: pointer; }
+  form.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .chk-list { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; font-size: 13px; }
+  .err { color: var(--bad); font-size: 12px; }
+  .ok-msg { color: var(--ok); font-size: 12px; }
+  .empty { color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span style="color:var(--acc);font-weight:600;">NexVUE Portal</span>
+  <a href="/catalog">Catalog</a>
+  <a href="/stations">Stations</a>
+  <a href="/users" class="active">Users</a>
+  <span class="spacer"></span>
+  <span id="nav-who" hidden></span>
+  <a href="#" id="nav-logout" hidden>Sign out</a>
+  <button type="button" class="theme-toggle" id="theme-toggle">Light</button>
+</nav>
+<main>
+  <h1>Portal users</h1>
+  <div class="panel">
+    <div id="users"><p class="empty">Loading…</p></div>
+  </div>
+
+  <h1>Add a user</h1>
+  <div class="panel">
+    <form id="create-form" class="row">
+      <input id="new-username" placeholder="Username" required>
+      <input id="new-password" type="password" placeholder="Password (min 8)" required minlength="8">
+      <select id="new-role">
+        <option value="org_viewer">org_viewer</option>
+        <option value="org_operator">org_operator</option>
+        <option value="org_admin">org_admin</option>
+      </select>
+      <button type="submit">Create</button>
+    </form>
+    <div class="err" id="create-err"></div>
+  </div>
+
+  <h1>Catalog access (org_viewer)</h1>
+  <div class="panel">
+    <form id="acl-form" class="row">
+      <select id="acl-user"></select>
+      <select id="acl-station"></select>
+      <button type="submit">Grant selected channels</button>
+    </form>
+    <div class="chk-list" id="acl-channels"></div>
+    <div class="err" id="acl-err"></div>
+    <div class="ok-msg" id="acl-ok"></div>
+  </div>
+</main>
+<script src="/assets/nexvue-portal-auth-gate.js"></script>
+<script>
+(function () {
+  let usersCache = [];
+  let stationsCache = [];
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function renderUsers(users) {
+    const el = document.getElementById("users");
+    if (!users.length) {
+      el.innerHTML = '<p class="empty">No users.</p>';
+      return;
+    }
+    const table = document.createElement("table");
+    table.innerHTML = "<tr><th>Username</th><th>Role</th><th>Email</th><th>Disabled</th></tr>";
+    for (const u of users) {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" + escapeHtml(u.username) + "</td>" +
+        "<td>" + escapeHtml(u.role) + "</td>" +
+        "<td>" + escapeHtml(u.email || "—") + "</td>" +
+        "<td>" + (u.disabled_at ? "yes" : "no") + "</td>";
+      table.appendChild(tr);
+    }
+    el.textContent = "";
+    el.appendChild(table);
+  }
+
+  function populateAclSelectors() {
+    const userSel = document.getElementById("acl-user");
+    userSel.textContent = "";
+    for (const u of usersCache.filter(function (u) { return u.role === "org_viewer"; })) {
+      const opt = document.createElement("option");
+      opt.value = u.id;
+      opt.textContent = u.username;
+      userSel.appendChild(opt);
+    }
+    const stationSel = document.getElementById("acl-station");
+    stationSel.textContent = "";
+    for (const s of stationsCache) {
+      const opt = document.createElement("option");
+      opt.value = s.id;
+      opt.textContent = s.name;
+      stationSel.appendChild(opt);
+    }
+    renderAclChannels();
+  }
+
+  function renderAclChannels() {
+    const stationId = document.getElementById("acl-station").value;
+    const station = stationsCache.find(function (s) { return s.id === stationId; });
+    const box = document.getElementById("acl-channels");
+    box.textContent = "";
+    if (!station) return;
+    for (const ch of station.channels || []) {
+      const label = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = ch.channel_base;
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(" " + (ch.alias || ch.channel_base)));
+      box.appendChild(label);
+    }
+  }
+
+  function loadAll() {
+    return Promise.all([
+      NexVuePortal.api("users_list"),
+      NexVuePortal.api("stations_list"),
+    ]).then(function (results) {
+      usersCache = results[0].users || [];
+      stationsCache = results[1].stations || [];
+      renderUsers(usersCache);
+      populateAclSelectors();
+    });
+  }
+
+  NexVuePortal.requirePage({ roles: ["org_admin"] }).then(function () {
+    loadAll();
+  });
+
+  document.getElementById("acl-station").addEventListener("change", renderAclChannels);
+
+  document.getElementById("create-form").addEventListener("submit", async function (ev) {
+    ev.preventDefault();
+    const err = document.getElementById("create-err");
+    err.textContent = "";
+    try {
+      await NexVuePortal.api("user_create", {
+        username: document.getElementById("new-username").value,
+        password: document.getElementById("new-password").value,
+        role: document.getElementById("new-role").value,
+      });
+      document.getElementById("new-username").value = "";
+      document.getElementById("new-password").value = "";
+      loadAll();
+    } catch (e) {
+      err.textContent = e.message || "failed";
+    }
+  });
+
+  document.getElementById("acl-form").addEventListener("submit", async function (ev) {
+    ev.preventDefault();
+    const err = document.getElementById("acl-err");
+    const ok = document.getElementById("acl-ok");
+    err.textContent = "";
+    ok.textContent = "";
+    const userId = document.getElementById("acl-user").value;
+    const stationId = document.getElementById("acl-station").value;
+    const channels = Array.from(document.querySelectorAll("#acl-channels input:checked")).map(function (cb) {
+      return cb.value;
+    });
+    if (!userId || !stationId) {
+      err.textContent = "select a viewer and a station";
+      return;
+    }
+    try {
+      await NexVuePortal.api("catalog_acl_put", {
+        portal_user_id: userId,
+        station_id: stationId,
+        channels: channels,
+      });
+      ok.textContent = "Saved (" + channels.length + " channel(s) granted).";
+    } catch (e) {
+      err.textContent = e.message || "failed";
+    }
+  });
+})();
+</script>
+</body>
+</html>

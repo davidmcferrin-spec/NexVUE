@@ -1,0 +1,19 @@
+# /etc/systemd/system/nexvue-portal-heartbeat.timer
+#
+# Fires nexvue-portal-heartbeat.service every NEXVUE_PORTAL_HEARTBEAT_INTERVAL_S
+# (default 300s — override lives in nexvue.env, read by the service itself,
+# not here; this fixed cadence is just the outer poll tick). setup.sh
+# enables this unconditionally on every station — the service no-ops until
+# an admin adopts the station, so there is nothing to configure up front.
+
+[Unit]
+Description=NexVUE cloud portal heartbeat timer
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=300
+AccuracySec=30
+Persistent=false
+
+[Install]
+WantedBy=timers.target

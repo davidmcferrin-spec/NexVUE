@@ -13,9 +13,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ROUTER = ROOT / "nexvue-web-router.php"
-PUBLIC_INDEX = ROOT / "public" / "index.php"
-LIB = ROOT / "nexvue-auth-lib.php"
+ROUTER = ROOT / "web-node" / "nexvue-web-router.php"
+PUBLIC_INDEX = ROOT / "web-node" / "public" / "index.php"
+LIB = ROOT / "web-node" / "nexvue-auth-lib.php"
 PHP = shutil.which("php")
 
 
@@ -33,7 +33,7 @@ class TestWebRouterFiles(unittest.TestCase):
         self.assertIn("front-door smoke", setup)
 
     def test_html_uses_path_nav_and_assets(self) -> None:
-        player = (ROOT / "index.html").read_text(encoding="utf-8")
+        player = (ROOT / "web-node" / "index.html").read_text(encoding="utf-8")
         self.assertIn('href="/player"', player)
         self.assertIn('href="/settings"', player)
         self.assertIn('src="/assets/nexvue-ui.js"', player)
@@ -41,11 +41,22 @@ class TestWebRouterFiles(unittest.TestCase):
         self.assertIn("/api/status", player)
 
     def test_js_api_base(self) -> None:
-        gate = (ROOT / "nexvue-auth-gate.js").read_text(encoding="utf-8")
+        gate = (ROOT / "web-node" / "nexvue-auth-gate.js").read_text(encoding="utf-8")
         self.assertIn('AUTH_URL = "/api/auth"', gate)
         self.assertIn('"/login"', gate)
-        ui = (ROOT / "nexvue-ui.js").read_text(encoding="utf-8")
+        ui = (ROOT / "web-node" / "nexvue-ui.js").read_text(encoding="utf-8")
         self.assertIn('LOGO_SRC = "/api/logo"', ui)
+
+    def test_login_page_has_non_blocking_portal_nudge(self) -> None:
+        # Phase 4 — local sign-in must never be hidden/blocked by the nudge;
+        # it only becomes visible via JS after a successful portal_status
+        # check (adopted + reachable), never rendered "on" by default.
+        login = (ROOT / "web-node" / "login.html").read_text(encoding="utf-8")
+        self.assertIn('id="portal-nudge"', login)
+        self.assertNotIn('id="portal-nudge show"', login)
+        self.assertIn("portal_status", login)
+        self.assertIn('id="login-form"', login)
+        self.assertNotIn('id="login-box" class="hide"', login)
 
 
 @unittest.skipUnless(PHP and ROUTER.is_file() and LIB.is_file(), "php CLI missing")

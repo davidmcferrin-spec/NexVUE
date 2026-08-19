@@ -346,6 +346,160 @@ function auth_build_jwks(string $pubPem, string $kid): array {
     ];
 }
 
+/** Where the cached portal JWKS lives — same www-data-owned dir as our own keys. */
+function auth_portal_jwks_cache_path(): string {
+    return auth_dir() . '/portal-jwks-cache.json';
+}
+
+/**
+ * Overwrite the cached portal JWKS (called after a successful enroll or
+ * heartbeat response). $jwks must be a decoded {"keys":[...]} array.
+ */
+function auth_portal_jwks_cache_write(array $jwks): void {
+    if (!isset($jwks['keys']) || !is_array($jwks['keys'])) {
+        throw new InvalidArgumentException('portal jwks missing keys[]');
+    }
+    $dir = auth_dir();
+    if (!is_dir($dir)) {
+        if (!@mkdir($dir, 0750, true) && !is_dir($dir)) {
+            throw new RuntimeException('cannot create auth dir: ' . $dir);
+        }
+    }
+    $payload = json_encode(
+        ['fetched_at' => auth_now_iso(), 'keys' => $jwks['keys']],
+        JSON_UNESCAPED_SLASHES
+    );
+    if ($payload === false) {
+        throw new RuntimeException('portal jwks encode failed');
+    }
+    $path = auth_portal_jwks_cache_path();
+    $tmp = $path . '.tmp.' . getmypid();
+    if (file_put_contents($tmp, $payload) === false || !@rename($tmp, $path)) {
+        @unlink($tmp);
+        throw new RuntimeException('cannot write portal jwks cache');
+    }
+}
+
+/**
+ * The full set of keys MediaMTX should trust for this station: the local
+ * key (always present, always valid — local sessions, local share links,
+ * and the encoder's own NEXVUE_PUBLISH_JWT all verify against this
+ * regardless of adoption state) plus a locally-cached copy of the portal's
+ * public key when adopted. Never makes a network call — a portal outage
+ * never breaks JWT verification, it just means no *new* portal key shows
+ * up here until the next successful heartbeat/enroll refreshes the cache.
+ *
+ * @return array{keys: list<array<string,mixed>>}
+ */
+function auth_merged_jwks(): array {
+    $keys = auth_ensure_keys()['jwks']['keys'];
+    $cachePath = auth_portal_jwks_cache_path();
+    if (is_readable($cachePath)) {
+        $raw = @file_get_contents($cachePath);
+        $cached = is_string($raw) ? json_decode($raw, true) : null;
+        if (is_array($cached) && isset($cached['keys']) && is_array($cached['keys'])) {
+            foreach ($cached['keys'] as $k) {
+                if (is_array($k) && isset($k['kid']) && is_string($k['kid'])) {
+                    $keys[] = $k;
+                }
+            }
+        }
+    }
+    return ['keys' => $keys];
+}
+
+/**
+ * Outbound HTTPS POST to the portal (or any external URL) with a JSON body.
+ * Real TLS verification (unlike nexvue-ops.php's loopback-only MediaMTX
+ * helper) since this crosses the open internet. Never throws — callers
+ * check ['status'] (0 = could not connect / DNS / TLS failure).
+ *
+ * @return array{status:int, body:string}
+ */
+function auth_portal_http_post(string $url, array $body, ?string $bearer = null, int $timeoutS = 8): array {
+    $scheme = parse_url($url, PHP_URL_SCHEME);
+    if (!in_array($scheme, ['https', 'http'], true)) {
+        return ['status' => 0, 'body' => ''];
+    }
+    $json = json_encode($body, JSON_UNESCAPED_SLASHES);
+    if ($json === false) {
+        return ['status' => 0, 'body' => ''];
+    }
+    $headers = "Content-Type: application/json\r\n";
+    if ($bearer !== null && $bearer !== '') {
+        $headers .= 'Authorization: Bearer ' . $bearer . "\r\n";
+    }
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'header' => $headers,
+            'content' => $json,
+            'timeout' => $timeoutS,
+            'ignore_errors' => true,
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+        ],
+    ]);
+    $out = @file_get_contents($url, false, $ctx);
+    $status = 0;
+    if (isset($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
+        $status = (int)$m[1];
+    }
+    return ['status' => $status, 'body' => is_string($out) ? $out : ''];
+}
+
+/** Raw NEXVUE_PORTAL_* fields from station env, blank when never adopted. */
+function auth_read_portal_env(): array {
+    return [
+        'url' => auth_read_env_key('NEXVUE_PORTAL_URL'),
+        'station_id' => auth_read_env_key('NEXVUE_PORTAL_STATION_ID'),
+        'station_api_key' => auth_read_env_key('NEXVUE_PORTAL_STATION_API_KEY'),
+        'adopted_at' => auth_read_env_key('NEXVUE_PORTAL_ADOPTED_AT'),
+        'heartbeat_interval_s' => auth_read_env_key('NEXVUE_PORTAL_HEARTBEAT_INTERVAL_S'),
+    ];
+}
+
+/** True once NEXVUE_PORTAL_ADOPTED_AT + NEXVUE_PORTAL_URL are both set. */
+function auth_portal_adopted(): bool {
+    $env = auth_read_portal_env();
+    return $env['url'] !== '' && $env['adopted_at'] !== '';
+}
+
+/**
+ * Where nexvue-portal-heartbeat.php records outbound-call outcomes, and
+ * where the browser-facing portal_status action reads from — so the
+ * browser never needs to reach the portal directly to know if it's up.
+ * Lives in the same www-data-owned auth dir as the JWKS cache, so the
+ * heartbeat script needs no root/sudo — it only ever reads world-readable
+ * env files and writes inside a directory it already owns.
+ */
+function auth_portal_heartbeat_status_path(): string {
+    $o = getenv('NEXVUE_PORTAL_HEARTBEAT_STATUS');
+    if (is_string($o) && $o !== '') {
+        return $o;
+    }
+    return auth_dir() . '/portal-heartbeat-status.json';
+}
+
+/** @return array{ok: bool, at: ?string} */
+function auth_portal_heartbeat_status(): array {
+    $path = auth_portal_heartbeat_status_path();
+    if (!is_readable($path)) {
+        return ['ok' => false, 'at' => null];
+    }
+    $raw = @file_get_contents($path);
+    $data = is_string($raw) ? json_decode($raw, true) : null;
+    if (!is_array($data)) {
+        return ['ok' => false, 'at' => null];
+    }
+    return [
+        'ok' => !empty($data['ok']),
+        'at' => isset($data['at']) && is_string($data['at']) ? $data['at'] : null,
+    ];
+}
+
 function auth_jwt_encode(array $claims, ?int $ttlS = null): string {
     $keys = auth_ensure_keys();
     $now = time();

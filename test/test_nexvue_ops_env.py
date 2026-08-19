@@ -255,7 +255,7 @@ class TestApplyPatch(unittest.TestCase):
         # channel_put gates on nexvue-ops.php EDITABLE_KEYS before the Python
         # writer runs — keep the two allowlists identical.
         import re
-        php = (SPEC_PATH.parent / "nexvue-ops.php").read_text(encoding="utf-8")
+        php = (SPEC_PATH.parent / "web-node" / "nexvue-ops.php").read_text(encoding="utf-8")
         m = re.search(
             r"const\s+EDITABLE_KEYS\s*=\s*\[(.*?)\];",
             php,

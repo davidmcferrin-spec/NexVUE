@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NexVUE Portal — Catalog</title>
+<script src="/assets/nexvue-ui.js"></script>
+<style>
+  :root {
+    --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
+    --text: #d6dde6; --dim: #98a6b5; --muted: #b0bbc8;
+    --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5; --on-acc: #08131a;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f5f7; --panel: #ffffff; --edge: #cdd5de;
+    --text: #1c232b; --dim: #5a6675; --muted: #3d4a58;
+    --ok: #1f9d5c; --bad: #c62828; --acc: #0b7ea4; --on-acc: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  nav.topnav {
+    display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--edge);
+  }
+  nav.topnav a { color: var(--dim); text-decoration: none; font-size: 13px; }
+  nav.topnav a:hover, nav.topnav a.active { color: var(--acc); }
+  nav.topnav .spacer { flex: 1; }
+  .theme-toggle {
+    background: transparent; color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 5px 9px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  main { padding: 16px; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 16px; margin: 0 0 12px; color: var(--acc); }
+  .station { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 14px; margin-bottom: 12px; }
+  .station h2 { font-size: 14px; margin: 0 0 10px; }
+  .channels { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ch-btn {
+    background: var(--bg); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 8px 12px; font: inherit; font-size: 13px; cursor: pointer; text-decoration: none;
+  }
+  .ch-btn:hover { border-color: var(--acc); color: var(--acc); }
+  .empty { color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span style="color:var(--acc);font-weight:600;">NexVUE Portal</span>
+  <a href="/catalog" class="active">Catalog</a>
+  <a href="/stations" data-auth-role="org_admin" hidden>Stations</a>
+  <a href="/users" data-auth-role="org_admin" hidden>Users</a>
+  <span class="spacer"></span>
+  <span id="nav-who" hidden></span>
+  <a href="#" id="nav-logout" hidden>Sign out</a>
+  <button type="button" class="theme-toggle" id="theme-toggle">Light</button>
+</nav>
+<main>
+  <h1>Stream catalog</h1>
+  <div id="list"><p class="empty">Loading…</p></div>
+</main>
+<script src="/assets/nexvue-portal-auth-gate.js"></script>
+<script>
+(function () {
+  function render(stations) {
+    const list = document.getElementById("list");
+    list.textContent = "";
+    if (!stations.length) {
+      const p = document.createElement("p");
+      p.className = "empty";
+      p.textContent = "No stations visible yet. An org admin can adopt a station or grant you access.";
+      list.appendChild(p);
+      return;
+    }
+    for (const s of stations) {
+      const box = document.createElement("div");
+      box.className = "station";
+      const h2 = document.createElement("h2");
+      h2.textContent = s.name;
+      box.appendChild(h2);
+      const row = document.createElement("div");
+      row.className = "channels";
+      for (const ch of s.channels) {
+        const a = document.createElement("a");
+        a.className = "ch-btn";
+        a.href = "/watch?station=" + encodeURIComponent(s.id) +
+          "&channel=" + encodeURIComponent(ch.channel_base) +
+          "&name=" + encodeURIComponent(s.name);
+        a.textContent = ch.alias || ch.channel_base;
+        row.appendChild(a);
+      }
+      box.appendChild(row);
+      list.appendChild(box);
+    }
+  }
+
+  NexVuePortal.requirePage({}).then(function () {
+    return NexVuePortal.api("catalog_list");
+  }).then(function (data) {
+    render(data.stations || []);
+  }).catch(function (e) {
+    document.getElementById("list").textContent = "Error: " + (e.message || e);
+  });
+})();
+</script>
+</body>
+</html>

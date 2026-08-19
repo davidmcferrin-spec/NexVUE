@@ -168,9 +168,49 @@ this box can't get additional ports opened.
   (`NEXVUE_STATUS_BIND=127.0.0.1:9998`) are loopback-bound; Player uses
   `nexvue-mediamtx-api.php` + `nexvue-status.php`. Remaining: Entra OIDC,
   CORS, portal relays. (TLS landed early — see README TLS section.)
-- **Phase 4: fleet** — config mgmt; portal ops via **outbound** edge
-  heartbeats (status + MediaMTX summary). No inbound TRUSTED monitoring
-  agent (DMZ cannot pull TRUSTED).
+- **Phase 4: fleet / cloud portal — first slice landed.** Repo split:
+  `web-node/` holds everything from Phases 1-3 (moved as a group, same
+  flat relative layout, zero code changes — `setup.sh` source paths
+  updated, deployed box layout unchanged); `web-portal/` is a brand-new,
+  fully self-contained app (own SQLite `portal.db`, own RSA signing
+  keypair, own bcrypt sessions — never `require_once`s anything from
+  `web-node/`) installed on a **separate** box via `sudo ./setup.sh --portal`
+  (Apache+PHP only — no DeckLink/GStreamer/MediaMTX/encoder anything).
+  Multi-tenant from day one: `orgs` → `portal_users` (`org_admin` /
+  `org_operator` / `org_viewer`) → `stations` → `station_channels` →
+  `catalog_acl` (NULL channel = all, same convention as edge
+  `users.channels`), all org-scoped by construction.
+  **Portal becomes the viewer-JWT issuer once a station is adopted** —
+  `nexvue-jwks.php` on the edge now serves a **merged** JWKS (local key,
+  always present, plus a locally-cached portal key once adopted) via
+  `auth_merged_jwks()`; `mediamtx.yml`'s `authJWTJWKS` never changes, no
+  network call happens at JWT-verification time, so a portal outage never
+  breaks local login, local share links, or the encoder's own
+  `NEXVUE_PUBLISH_JWT` (deliberately kept local-only, unaffected by
+  adoption). Portal mints viewer JWTs **independently** from its own
+  synced catalog/ACL — no live call to the edge per stream-open.
+  Enrollment (`portal_enroll` action on `nexvue-auth.php`, admin-gated) and
+  the recurring heartbeat (`nexvue-portal-heartbeat.php` +
+  `nexvue-portal-heartbeat.timer`, 300s default, runs as plain `www-data` —
+  no root needed) are both **edge-initiated outbound only**; no
+  portal-to-edge inbound call exists anywhere. Heartbeat pushes station
+  status + channel catalog, portal echoes back its current JWKS each time
+  (key rotation propagates for free, no separate endpoint). Login page
+  shows a non-blocking "sign in via portal" nudge when adopted+reachable
+  (`portal_status`, public action) — local sign-in and `/s/<token>` share
+  links are never affected either way.
+  Portal UI: `/login`, `/catalog` (role-filtered stream list), `/watch`
+  (single-stream WHEP viewer — includes the multiopus SDP-munge fix
+  extracted into `nexvue-portal-whep.js` since every edge publishes 8ch
+  positioned Opus; full VU/CC/stats deferred), `/stations` + `/users`
+  (`org_admin`: enrollment-token issuance, portal user + catalog ACL
+  management).
+  Explicit non-goals for this slice: fleet health dashboards, cross-site
+  multi-pane Multiview, org billing/self-serve signup, portal viewers
+  landing on the edge's real Player UI (deferred — would need
+  `nexvue-web-router.php`'s session gate to accept a portal JWT), instant
+  key-rotation/revocation push (bounded by heartbeat interval instead),
+  multi-org membership per portal user.
 
 ## Known open items / risks
 

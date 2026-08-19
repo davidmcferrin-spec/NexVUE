@@ -98,11 +98,21 @@ def munge_whep_offer_sdp(sdp: str) -> str:
 
 class TestMultiopusFmtp(unittest.TestCase):
     def test_fmtp_matches_js_source(self):
-        js = (Path(__file__).resolve().parent.parent / "nexvue-vu.js").read_text(
+        js = (Path(__file__).resolve().parent.parent / "web-node" / "nexvue-vu.js").read_text(
             encoding="utf-8"
         )
         for ch, fmtp in MULTICHANNEL_OPUS_FMTP.items():
             self.assertIn(f"{ch}: \"{fmtp}\"", js, f"JS missing MediaMTX fmtp for {ch}ch")
+
+    def test_fmtp_matches_portal_whep_copy(self) -> None:
+        # nexvue-portal-whep.js extracts just the SDP-munge logic from
+        # nexvue-vu.js (see its own docstring) — the fmtp table must stay
+        # byte-identical between the two copies.
+        js = (Path(__file__).resolve().parent.parent / "web-portal" / "nexvue-portal-whep.js").read_text(
+            encoding="utf-8"
+        )
+        for ch, fmtp in MULTICHANNEL_OPUS_FMTP.items():
+            self.assertIn(f"{ch}: \"{fmtp}\"", js, f"portal copy missing MediaMTX fmtp for {ch}ch")
 
     def test_munge_adds_all_channel_counts(self):
         out = munge_whep_offer_sdp(SAMPLE_OFFER)

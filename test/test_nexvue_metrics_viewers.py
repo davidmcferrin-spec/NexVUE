@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-METRICS_PHP = ROOT / "nexvue-metrics.php"
+METRICS_PHP = ROOT / "web-node" / "nexvue-metrics.php"
 PHP = shutil.which("php")
 
 

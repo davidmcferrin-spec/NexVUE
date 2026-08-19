@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OPS_PHP = ROOT / "nexvue-ops.php"
+OPS_PHP = ROOT / "web-node" / "nexvue-ops.php"
 PHP = shutil.which("php")
 UUID_A = "11111111-1111-1111-1111-111111111111"
 UUID_B = "22222222-2222-2222-2222-222222222222"

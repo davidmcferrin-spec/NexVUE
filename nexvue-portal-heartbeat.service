@@ -1,0 +1,38 @@
+# /etc/systemd/system/nexvue-portal-heartbeat.service
+#
+# NexVUE cloud portal heartbeat (Phase 4) — periodic OUTBOUND-only sync to
+# an adopted portal: station status/version + channel catalog out, portal's
+# current JWKS back (so key rotation propagates without a separate portal
+# request). No-ops immediately when this station has never been adopted
+# (portal_enroll in nexvue-auth.php never ran) — safe to enable on every
+# station unconditionally.
+#
+# Runs as www-data (same user as Apache/PHP): only ever reads world-readable
+# /etc/nexvue env files and writes inside the already www-data-owned auth
+# dir (/var/lib/nexvue/auth/) for the JWKS cache + heartbeat-status.json.
+# No root, no sudo — nothing here can touch DeckLink/GStreamer/MediaMTX.
+#
+# Never fails hard on a portal outage (see nexvue-portal-heartbeat.php) —
+# Restart=on-failure exists only as a backstop for a genuine crash, not for
+# ordinary "portal unreachable" outcomes.
+
+[Unit]
+Description=NexVUE cloud portal heartbeat (outbound sync; no-op unless adopted)
+After=network-online.target apache2.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+ExecStart=/usr/bin/php /usr/local/bin/nexvue-portal-heartbeat.php
+
+Restart=on-failure
+RestartSec=30
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/etc/nexvue
+ReadWritePaths=/var/lib/nexvue/auth

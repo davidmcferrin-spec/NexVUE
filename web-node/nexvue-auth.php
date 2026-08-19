@@ -13,6 +13,13 @@
  * API key: Bearer NEXVUE_API_KEY (or legacy NEXVUE_SYNC_KEY) / X-NexVUE-Key
  *   may call export/import and api_ping without a browser session.
  *
+ * Portal adoption (Phase 4): portal_status is public (reads nexvue.env +
+ *   the heartbeat status file only — never calls the portal live). Admin:
+ *   portal_enroll makes the one-time OUTBOUND exchange call to the portal
+ *   and persists the result (NEXVUE_PORTAL_* via sudo wrapper, portal JWKS
+ *   cached for nexvue-jwks.php). The portal never calls the edge to start
+ *   this — see nexvue-portal-heartbeat.php for the recurring outbound sync.
+ *
  * CLI include: when PHP_SAPI is cli and NEXVUE_AUTH_HTTP is unset, returns
  * after loading the lib (unit tests).
  */
@@ -65,6 +72,35 @@ function auth_api_require_admin_or_sync(): void {
     }
 }
 
+/**
+ * Run an allowlisted root helper via sudo -n (no shell) — mirrors
+ * nexvue-ops.php's sudo_run(). Only used by portal_enroll, which needs to
+ * persist NEXVUE_PORTAL_* into the root-owned station env.
+ *
+ * @return array{code:int, stdout:string, stderr:string}
+ */
+function auth_api_sudo_run(array $argv, ?string $stdin = null): array {
+    $cmd = ['/usr/bin/sudo', '-n'];
+    foreach ($argv as $a) {
+        $cmd[] = $a;
+    }
+    $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $proc = proc_open($cmd, $descriptors, $pipes, null, null, ['bypass_shell' => true]);
+    if (!is_resource($proc)) {
+        return ['code' => -1, 'stdout' => '', 'stderr' => 'failed to start privileged helper'];
+    }
+    if ($stdin !== null) {
+        fwrite($pipes[0], $stdin);
+    }
+    fclose($pipes[0]);
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $code = proc_close($proc);
+    return ['code' => $code, 'stdout' => (string)$stdout, 'stderr' => (string)$stderr];
+}
+
 if (PHP_SAPI === 'cli' && getenv('NEXVUE_AUTH_HTTP') === false) {
     return;
 }
@@ -77,7 +113,7 @@ if ($action === '') {
 
 // Hot paths (me / whep_jwt / logout): skip migrate — session cache + existing DB.
 try {
-    if (!in_array($action, ['me', 'whep_jwt', 'logout', 'api_ping'], true)) {
+    if (!in_array($action, ['me', 'whep_jwt', 'logout', 'api_ping', 'portal_status'], true)) {
         auth_migrate();
     }
 } catch (Throwable $e) {
@@ -460,6 +496,93 @@ try {
             auth_api_fail(400, 'shares must be an array');
         }
         auth_api_ok(auth_shares_import($shares));
+    }
+
+    // Portal / fleet discovery (Phase 4) — public, no session. Never reaches
+    // the portal itself: reads nexvue.env + the heartbeat's last-known-good
+    // status file, so this stays instant even if the portal is down.
+    if ($action === 'portal_status') {
+        $env = auth_read_portal_env();
+        $adopted = auth_portal_adopted();
+        $reachable = false;
+        if ($adopted) {
+            $reachable = auth_portal_heartbeat_status()['ok'];
+        }
+        auth_api_ok([
+            'adopted' => $adopted,
+            'portal_reachable' => $reachable,
+            'portal_url' => $adopted ? $env['url'] : null,
+        ]);
+    }
+
+    // Adopt this station into a portal's fleet. Admin-only, one-time,
+    // edge-initiated OUTBOUND call — the portal never calls the edge to
+    // start this. On success, persists NEXVUE_PORTAL_* (root-owned station
+    // env, via sudo wrapper) and caches the portal's JWKS locally so
+    // nexvue-jwks.php can start trusting portal-issued viewer JWTs without
+    // ever needing a live call to the portal at verification time.
+    if ($action === 'portal_enroll') {
+        auth_require_roles(['admin']);
+        $portalUrl = rtrim(trim((string)($body['portal_url'] ?? '')), '/');
+        $token = trim((string)($body['enrollment_token'] ?? ''));
+        $edgeBaseUrl = rtrim(trim((string)($body['edge_base_url'] ?? '')), '/');
+        if ($portalUrl === '' || !preg_match('#^https://#i', $portalUrl)) {
+            auth_api_fail(400, 'portal_url must be an https:// URL');
+        }
+        if ($token === '') {
+            auth_api_fail(400, 'enrollment_token required');
+        }
+        if ($edgeBaseUrl === '' || !preg_match('#^https://#i', $edgeBaseUrl)) {
+            auth_api_fail(400, 'edge_base_url must be an https:// URL');
+        }
+        $edgeVersion = '';
+        $vp = __DIR__ . '/VERSION';
+        if (is_readable($vp)) {
+            $edgeVersion = trim((string)file_get_contents($vp));
+        }
+        $r = auth_portal_http_post($portalUrl . '/api/portal', [
+            'action' => 'enroll_exchange',
+            'enrollment_token' => $token,
+            'edge_base_url' => $edgeBaseUrl,
+            'edge_version' => $edgeVersion,
+        ]);
+        if ($r['status'] === 0) {
+            auth_api_fail(502, 'could not reach portal (network/TLS error)');
+        }
+        $data = json_decode($r['body'], true);
+        if (!is_array($data) || empty($data['ok'])) {
+            $msg = is_array($data) ? (string)($data['error'] ?? 'enrollment rejected') : 'enrollment rejected';
+            auth_api_fail($r['status'] >= 400 ? $r['status'] : 502, $msg);
+        }
+        $stationId = (string)($data['station_id'] ?? '');
+        $stationKey = (string)($data['station_api_key'] ?? '');
+        $portalJwks = $data['portal_jwks'] ?? null;
+        if ($stationId === '' || $stationKey === '' || !is_array($portalJwks)) {
+            auth_api_fail(502, 'portal returned an incomplete enrollment response');
+        }
+        $patch = [
+            'url' => $portalUrl,
+            'station_id' => $stationId,
+            'station_api_key' => $stationKey,
+            'adopted_at' => auth_now_iso(),
+        ];
+        if (isset($data['heartbeat_interval_s']) && is_numeric($data['heartbeat_interval_s'])) {
+            $patch['heartbeat_interval_s'] = (string)(int)$data['heartbeat_interval_s'];
+        }
+        $wr = auth_api_sudo_run(
+            ['/usr/local/bin/nexvue-ops-portal-write.sh'],
+            json_encode($patch, JSON_UNESCAPED_SLASHES)
+        );
+        if ($wr['code'] !== 0) {
+            auth_api_fail(500, 'enrolled with portal but failed to persist locally: ' . trim($wr['stderr']));
+        }
+        try {
+            auth_portal_jwks_cache_write($portalJwks);
+        } catch (Throwable $e) {
+            // Non-fatal — the station IS enrolled (env write already
+            // succeeded); the next heartbeat response refreshes the cache.
+        }
+        auth_api_ok(['station_id' => $stationId, 'portal_url' => $portalUrl]);
     }
 
     auth_api_fail(400, 'unknown action');

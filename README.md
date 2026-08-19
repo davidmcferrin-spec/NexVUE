@@ -172,6 +172,10 @@ Reading it back is Apache + PHP (next step). See "Usage Metrics Dashboard".
 
 ### 5. Apache web UI (player / multiviewer / metrics / ops)
 
+The node's web UI (pages, JS assets, PHP APIs) lives under [`web-node/`](web-node/)
+in this repo — a separate [`web-portal/`](web-portal/) holds the central
+portal's own web app, installed with `sudo ./setup.sh --portal` instead.
+
 Drop the UI files into Apache's docroot (HTTPS `:443` — HTTP `:80` is
 closed). Metrics and ops PHP scripts must sit next to the HTML so relative
 `fetch()` paths resolve:
@@ -182,6 +186,7 @@ store as `www-data`, and installs ops sudoers. Manual docroot copy is only
 for atypical layouts (`NEXVUE_WEBROOT`):
 
 ```bash
+cd web-node
 sudo cp index.html multiview.html metrics.html login.html users.html \
         nexvue-metrics.php nexvue-status.php nexvue-mediamtx-api.php \
         nexvue-captions.php \
@@ -769,6 +774,7 @@ sudo systemctl enable --now nexvue-metrics
 **2. PHP + dashboard** (prefer `sudo ./setup.sh`, which installs Apache +
 mod_php and copies the UI). Manual:
 ```bash
+cd web-node
 sudo cp nexvue-metrics.php metrics.html index.html multiview.html /var/www/html/
 sudo systemctl restart apache2
 ```
@@ -1312,7 +1318,30 @@ and implemented — see the decisions list above the collapsed spec.
 | 1.5 | **Rolled back** (slate/selector). Split-pipeline encode (`nexvue-encode.py`) is the production healer. See "Phase 1.5 supervisor" below. |
 | 2 | **Edge local auth landed** (bcrypt users + roles, share links, MediaMTX JWT/JWKS, sync-shaped export/import). Central PHP portal (catalog + fleet sync client) still future; Entra OIDC remains Phase 3. |
 | 3 | DMZ exposure: TLS on 443, `webrtcAdditionalHosts` = public FQDN, single UDP 8189 rule + ICE-TCP fallback; MediaMTX API + status daemon already loopback-bound (`nexvue-mediamtx-api.php` / `nexvue-status.php`). Remaining: Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
-| 4 | Fleet rollout: per-station config management; portal ops dashboard fed by **outbound** edge heartbeats (encoder-alive, signal-present, session counts). No inbound probe from TRUSTED — DMZ edge pushes out only. |
+| 4 | **First slice landed.** Cloud portal (`web-portal/`, `sudo ./setup.sh --portal` on a separate box) — multi-tenant catalog + identity front door. Portal becomes the viewer-JWT issuer for an adopted station via a merged JWKS on the edge (`nexvue-jwks.php`), so MediaMTX config never changes and a portal outage never breaks local login/share links/publish. Enrollment + heartbeat are edge-initiated outbound only. See CLAUDE.md's Phase 4 entry for the full design. Remaining: fleet health dashboards, cross-site Multiview, Entra ID OIDC. |
+
+## Cloud portal (Phase 4)
+
+A NexVUE **portal** is a separate box from any edge node — install it with
+`sudo ./setup.sh --portal` (Apache + PHP + its own SQLite `portal.db`; no
+DeckLink/GStreamer/MediaMTX). Multi-tenant: orgs → portal users
+(`org_admin`/`org_operator`/`org_viewer`) → adopted stations → catalog ACL.
+
+**Adopt a station**: on the portal, `/stations` (org_admin) generates a
+one-time enrollment code. Paste it into the edge's own Settings → Adopt this
+station — the edge calls the portal *outbound* to complete enrollment; the
+portal never calls an edge directly, either then or afterward (the recurring
+heartbeat is edge-initiated too). Once adopted, the edge keeps working
+exactly as before if the portal ever goes down — local admin login, local
+share links, and the encoder's own publish credential are untouched by
+adoption. Portal viewers browse `/catalog` and watch via `/watch`, which
+connects **directly** to the edge's own WHEP endpoint with a portal-minted,
+90-second-TTL JWT — video never transits the portal.
+
+The repo is split accordingly: `web-node/` is the edge's own web UI (moved
+from repo root, deployed layout on the box unchanged), `web-portal/` is the
+portal's, and they never share code at runtime — each is a standalone
+deployable.
 
 ## Known limitations (accepted for Phase 1)
 

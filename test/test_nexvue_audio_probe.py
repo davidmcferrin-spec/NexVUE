@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OPS_PHP = ROOT / "nexvue-ops.php"
+OPS_PHP = ROOT / "web-node" / "nexvue-ops.php"
 PROBE_SH = ROOT / "nexvue-ops-audio-probe.sh"
 PHP = shutil.which("php")
 BASH = shutil.which("bash") or (
