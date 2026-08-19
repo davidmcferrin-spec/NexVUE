@@ -224,7 +224,16 @@ this box can't get additional ports opened.
   Hung `set_state(NULL)` after `DECKLINK_HANG_KILL_S` exits for systemd.
   Capture retry / auto-park probe runs only after capture reaches NULL
   (off-thread); shutdown waits out an in-flight async NULL so the next
-  start does not lose the exclusive-open race.
+  start does not lose the exclusive-open race. The async NULL poll
+  (`null_poll_action`) only treats the pipeline as safely down on an actual
+  `Gst.State.NULL` — a `Gst.StateChangeReturn.FAILURE` from `get_state()`
+  (routine right after a `not-negotiated`/ERROR bus message) re-issues
+  `set_state(NULL)` and keeps waiting instead of being treated as "done".
+  Getting this wrong wedged a real station (`nynycof1nexvue01`, 2026-08-19):
+  the very first not-negotiated race after a restart dropped every
+  reference to a not-actually-NULL pipeline, and every subsequent open
+  attempt failed `set_state PLAYING` immediately — forever, since a
+  locked/busy probe never triggers auto-park (only `unlocked` does).
   `setup.sh` seeds channel `.env` stubs and `enable --now`s
   `mediamtx` / `nexvue-status` / `nexvue-metrics` /
   `nexvue-decklink-configure` / `nexvue-encode@0..(MAX_CHANNELS-1)` (default

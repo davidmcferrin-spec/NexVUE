@@ -201,6 +201,36 @@ def capture_open_status(
     return "wait"
 
 
+def null_poll_action(
+    *,
+    is_null: bool,
+    change_failed: bool,
+    now: float,
+    deadline: float,
+) -> str:
+    """wait | retry_null | done | hang_exit — what one NULL-transition poll
+    tick should do while driving a pipeline down asynchronously.
+
+    A failed state-change attempt (``change_failed``, i.e. GStreamer's
+    get_state() returned FAILURE) does NOT mean the pipeline reached NULL —
+    decklinkvideosrc can report this right after a not-negotiated/ERROR bus
+    message while still holding the DeckLink exclusive-open handle.
+    Treating FAILURE as "done" here was a real production incident: every
+    reference to a not-actually-NULL pipeline got dropped on the very first
+    retry after a not-negotiated race, wedging the card so every subsequent
+    open attempt failed immediately — forever, since a locked/busy probe
+    never triggers auto-park. ``retry_null`` re-issues set_state(NULL) and
+    keeps waiting for the real transition instead.
+    """
+    if is_null:
+        return "done"
+    if now >= deadline:
+        return "hang_exit"
+    if change_failed:
+        return "retry_null"
+    return "wait"
+
+
 def video_hold_kind(
     *,
     has_frame: bool,
@@ -1201,17 +1231,28 @@ class EncodeRuntime:
             if self._cap_null_poll_id == 0:
                 return False
             ret, state, _pending = pipeline.get_state(0)
-            if state == Gst.State.NULL or ret == Gst.StateChangeReturn.FAILURE:
+            action = null_poll_action(
+                is_null=(state == Gst.State.NULL),
+                change_failed=(ret == Gst.StateChangeReturn.FAILURE),
+                now=time.monotonic(),
+                deadline=deadline,
+            )
+            if action == "done":
                 self._cap_null_poll_id = 0
                 on_done()
                 return False
-            if time.monotonic() >= deadline:
+            if action == "hang_exit":
                 log.error(
                     "%s set_state(NULL) hung %ss — exiting for systemd restart",
                     label,
                     hang_s,
                 )
                 os._exit(1)
+            if action == "retry_null":
+                try:
+                    pipeline.set_state(Gst.State.NULL)
+                except Exception:  # noqa: BLE001
+                    pass
             return True
 
         self._cap_null_poll_id = GLib.timeout_add(50, _poll)

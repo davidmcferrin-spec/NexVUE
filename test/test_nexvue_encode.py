@@ -153,6 +153,40 @@ class TestPipelineAssembly(unittest.TestCase):
         self.assertIn("x264enc tune=zerolatency", blob)
 
 
+class TestNullPollAction(unittest.TestCase):
+    """Regression coverage for a real production incident: a channel wedged
+    forever after a not-negotiated race because a FAILED state-change
+    attempt was treated as "safely reached NULL", releasing every reference
+    to a pipeline that still held the DeckLink exclusive-open handle."""
+
+    def test_null_state_is_done_even_if_change_reported_failure(self) -> None:
+        # GStreamer can report the state as NULL with a stale/failed last
+        # return code — the actual state wins.
+        d = mod.null_poll_action(is_null=True, change_failed=True, now=0.0, deadline=5.0)
+        self.assertEqual(d, "done")
+
+    def test_failed_change_before_null_retries_not_done(self) -> None:
+        d = mod.null_poll_action(is_null=False, change_failed=True, now=0.0, deadline=5.0)
+        self.assertEqual(d, "retry_null")
+
+    def test_ordinary_async_wait_keeps_waiting(self) -> None:
+        d = mod.null_poll_action(is_null=False, change_failed=False, now=0.0, deadline=5.0)
+        self.assertEqual(d, "wait")
+
+    def test_deadline_reached_exits_even_with_failure(self) -> None:
+        d = mod.null_poll_action(is_null=False, change_failed=True, now=5.0, deadline=5.0)
+        self.assertEqual(d, "hang_exit")
+
+    def test_deadline_reached_without_failure_still_exits(self) -> None:
+        d = mod.null_poll_action(is_null=False, change_failed=False, now=6.0, deadline=5.0)
+        self.assertEqual(d, "hang_exit")
+
+    def test_null_wins_over_deadline(self) -> None:
+        # Reaching NULL right as the deadline lands must never hard-exit.
+        d = mod.null_poll_action(is_null=True, change_failed=False, now=5.0, deadline=5.0)
+        self.assertEqual(d, "done")
+
+
 class TestCapturePolicy(unittest.TestCase):
     def test_been_live_always_retries(self) -> None:
         d = mod.decide_capture_failure(
