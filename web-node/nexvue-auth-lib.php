@@ -16,6 +16,8 @@
  * Raw share token is stored (token column) so admins/sharers can re-copy the
  * same URL; revoke/delete/expiry remain the access controls.
  * User channel ACL: users.channels JSON (NULL = all ch0–ch7).
+ * Cloudflare TURN (Settings): turn_config singleton in this DB — never
+ * nexvue.env. whep_jwt returns short-lived ice_servers when enabled.
  */
 
 declare(strict_types=1);
@@ -27,7 +29,12 @@ const NEXVUE_AUTH_RESET_TTL_S = 3600;
 const NEXVUE_AUTH_MAX_CHANNELS = 8; // ch0..ch7 (+ lo)
 /** Keep expired share rows this long after expires_at, then hard-delete. */
 const NEXVUE_AUTH_SHARE_PURGE_GRACE_S = 604800; // 7 days
-const NEXVUE_AUTH_SCHEMA_VERSION = 3;
+const NEXVUE_AUTH_SCHEMA_VERSION = 4;
+/** Cloudflare Realtime TURN credential TTL (max 48h; 24h leaves refresh room). */
+const NEXVUE_TURN_TTL_S = 86400;
+/** Remint cached ICE servers when fewer than this many seconds remain. */
+const NEXVUE_TURN_CACHE_REFRESH_S = 3600;
+const NEXVUE_TURN_CF_URL = 'https://rtc.live.cloudflare.com/v1/turn/keys/%s/credentials/generate-ice-servers';
 
 function auth_dir(): string {
     $o = getenv('NEXVUE_AUTH_DIR');
@@ -218,6 +225,10 @@ SQL);
             $db->exec("ALTER TABLE share_links ADD COLUMN page TEXT NOT NULL DEFAULT 'player'");
         }
         $ver = 3;
+    }
+    if ($ver < 4) {
+        auth_turn_ensure_table();
+        $ver = 4;
     }
     $db->exec('PRAGMA user_version = ' . (string)NEXVUE_AUTH_SCHEMA_VERSION);
     $done = true;
@@ -1958,5 +1969,351 @@ function auth_try_mail_share(string $email, string $shareUrl, string $shareName,
         return @mail($email, $subject, $body, $headers);
     } catch (Throwable $e) {
         return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cloudflare Realtime TURN (Settings → Cloudflare TURN). Stored in auth.db,
+// never in nexvue.env. Admin UI is the only writer; Player/Multiview mint
+// short-lived iceServers via whep_jwt.
+// ---------------------------------------------------------------------------
+
+function auth_turn_ensure_table(): void {
+    $db = auth_db();
+    $db->exec(<<<'SQL'
+CREATE TABLE IF NOT EXISTS turn_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled INTEGER NOT NULL DEFAULT 0,
+  key_id TEXT NOT NULL DEFAULT '',
+  api_token TEXT NOT NULL DEFAULT '',
+  cache_json TEXT,
+  cache_expires_at TEXT,
+  updated_at TEXT NOT NULL
+);
+SQL);
+}
+
+/** @return array{id:int,enabled:int,key_id:string,api_token:string,cache_json:?string,cache_expires_at:?string,updated_at:string} */
+function auth_turn_row(): array {
+    auth_turn_ensure_table();
+    $db = auth_db();
+    $row = $db->querySingle('SELECT * FROM turn_config WHERE id = 1', true);
+    if (!is_array($row) || $row === []) {
+        $now = auth_now_iso();
+        $ins = $db->prepare(
+            'INSERT INTO turn_config (id, enabled, key_id, api_token, updated_at) VALUES (1, 0, \'\', \'\', :u)'
+        );
+        $ins->bindValue(':u', $now, SQLITE3_TEXT);
+        $ins->execute();
+        return [
+            'id' => 1,
+            'enabled' => 0,
+            'key_id' => '',
+            'api_token' => '',
+            'cache_json' => null,
+            'cache_expires_at' => null,
+            'updated_at' => $now,
+        ];
+    }
+    return $row;
+}
+
+/** Public Settings payload — never includes the API token. */
+function auth_turn_public(?array $row = null): array {
+    $row = $row ?? auth_turn_row();
+    $token = (string)($row['api_token'] ?? '');
+    $hint = '';
+    if ($token !== '') {
+        $hint = strlen($token) <= 4 ? '••••' : ('…' . substr($token, -4));
+    }
+    return [
+        'enabled' => !empty($row['enabled']),
+        'key_id' => (string)($row['key_id'] ?? ''),
+        'has_token' => $token !== '',
+        'token_hint' => $hint,
+    ];
+}
+
+function auth_turn_sanitize_key_id(string $raw): string {
+    $v = trim($raw);
+    if ($v === '') {
+        return '';
+    }
+    if (strlen($v) < 8 || strlen($v) > 128 || !preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/', $v)) {
+        throw new InvalidArgumentException('Enter the Cloudflare TURN key ID');
+    }
+    return $v;
+}
+
+function auth_turn_sanitize_token(string $raw): string {
+    $v = trim($raw);
+    if ($v === '') {
+        return '';
+    }
+    if (strlen($v) < 16 || strlen($v) > 512) {
+        throw new InvalidArgumentException('Enter the Cloudflare TURN API token');
+    }
+    if (preg_match('/[\x00-\x1f\x7f]/', $v)) {
+        throw new InvalidArgumentException('Enter the Cloudflare TURN API token');
+    }
+    return $v;
+}
+
+/**
+ * Persist Settings. Blank api_token keeps the stored secret. Changing key or
+ * token clears the ICE-server cache so the next play remints.
+ *
+ * @param array{enabled?:mixed,key_id?:mixed,api_token?:mixed} $in
+ * @return array{enabled:bool,key_id:string,has_token:bool,token_hint:string}
+ */
+function auth_turn_put(array $in): array {
+    $row = auth_turn_row();
+    $enabled = !empty($in['enabled']);
+    $keyId = auth_turn_sanitize_key_id((string)($in['key_id'] ?? $row['key_id']));
+    $incoming = array_key_exists('api_token', $in) ? auth_turn_sanitize_token((string)$in['api_token']) : '';
+    $token = $incoming !== '' ? $incoming : (string)$row['api_token'];
+    if ($enabled && ($keyId === '' || $token === '')) {
+        throw new InvalidArgumentException('Save a TURN key ID and API token before enabling');
+    }
+    $changed = ($keyId !== (string)$row['key_id']) || ($incoming !== '');
+    $now = auth_now_iso();
+    $db = auth_db();
+    $st = $db->prepare(
+        'UPDATE turn_config SET enabled=:e, key_id=:k, api_token=:t, '
+        . 'cache_json=:cj, cache_expires_at=:ce, updated_at=:u WHERE id=1'
+    );
+    $st->bindValue(':e', $enabled ? 1 : 0, SQLITE3_INTEGER);
+    $st->bindValue(':k', $keyId, SQLITE3_TEXT);
+    $st->bindValue(':t', $token, SQLITE3_TEXT);
+    if ($changed) {
+        $st->bindValue(':cj', null, SQLITE3_NULL);
+        $st->bindValue(':ce', null, SQLITE3_NULL);
+    } else {
+        $cj = $row['cache_json'] ?? null;
+        $ce = $row['cache_expires_at'] ?? null;
+        $st->bindValue(':cj', $cj, $cj === null ? SQLITE3_NULL : SQLITE3_TEXT);
+        $st->bindValue(':ce', $ce, $ce === null ? SQLITE3_NULL : SQLITE3_TEXT);
+    }
+    $st->bindValue(':u', $now, SQLITE3_TEXT);
+    $st->execute();
+    return auth_turn_public();
+}
+
+function auth_turn_url_blocked(string $url): bool {
+    return (bool)preg_match('/:53(?:\?|$|\/)/', $url);
+}
+
+/**
+ * Drop Cloudflare :53 STUN/TURN URLs (browser ICE can stall on them).
+ *
+ * @param list<array<string,mixed>> $servers
+ * @return list<array<string,mixed>>
+ */
+function auth_turn_filter_ice_servers(array $servers): array {
+    $out = [];
+    foreach ($servers as $srv) {
+        if (!is_array($srv)) {
+            continue;
+        }
+        $urls = $srv['urls'] ?? ($srv['url'] ?? null);
+        if (is_string($urls)) {
+            $urls = [$urls];
+        }
+        if (!is_array($urls)) {
+            continue;
+        }
+        $kept = [];
+        foreach ($urls as $u) {
+            if (!is_string($u) || $u === '' || auth_turn_url_blocked($u)) {
+                continue;
+            }
+            $kept[] = $u;
+        }
+        if ($kept === []) {
+            continue;
+        }
+        $item = ['urls' => array_values($kept)];
+        if (isset($srv['username']) && is_string($srv['username']) && $srv['username'] !== '') {
+            $item['username'] = $srv['username'];
+        }
+        if (isset($srv['credential']) && is_string($srv['credential']) && $srv['credential'] !== '') {
+            $item['credential'] = $srv['credential'];
+        }
+        $out[] = $item;
+    }
+    return $out;
+}
+
+/**
+ * Accept both Cloudflare response shapes:
+ *   { "iceServers": [ {urls, username, credential}, ... ] }
+ *   { "iceServers": { "urls": [...], "username": "...", "credential": "..." } }
+ *
+ * @return list<array<string,mixed>>
+ */
+function auth_turn_parse_cf_response(string $json): array {
+    $data = json_decode($json, true);
+    if (!is_array($data)) {
+        throw new RuntimeException('Cloudflare TURN returned invalid JSON');
+    }
+    $raw = $data['iceServers'] ?? $data['ice_servers'] ?? null;
+    if ($raw === null) {
+        $err = isset($data['error']) && is_string($data['error']) ? $data['error'] : 'missing iceServers';
+        throw new RuntimeException('Cloudflare TURN: ' . $err);
+    }
+    $list = [];
+    if (isset($raw['urls']) || isset($raw['url'])) {
+        $list[] = $raw;
+    } elseif (is_array($raw)) {
+        foreach ($raw as $item) {
+            if (is_array($item)) {
+                $list[] = $item;
+            }
+        }
+    }
+    $filtered = auth_turn_filter_ice_servers($list);
+    if ($filtered === []) {
+        throw new RuntimeException('Cloudflare TURN returned no usable ICE servers');
+    }
+    return $filtered;
+}
+
+/**
+ * @return array{status:int,body:string}
+ */
+function auth_turn_http_post(string $url, string $token, array $body): array {
+    $stub = getenv('NEXVUE_TURN_HTTP_STUB');
+    if (is_string($stub) && $stub !== '' && is_file($stub)) {
+        $statusRaw = getenv('NEXVUE_TURN_HTTP_STATUS');
+        $status = is_string($statusRaw) && ctype_digit($statusRaw) ? (int)$statusRaw : 200;
+        return ['status' => $status, 'body' => (string)file_get_contents($stub)];
+    }
+    if (getenv('NEXVUE_TURN_HTTP_FAIL') === '1') {
+        return ['status' => 0, 'body' => ''];
+    }
+    $scheme = parse_url($url, PHP_URL_SCHEME);
+    if (!in_array($scheme, ['https', 'http'], true)) {
+        return ['status' => 0, 'body' => ''];
+    }
+    $json = json_encode($body, JSON_UNESCAPED_SLASHES);
+    if ($json === false) {
+        return ['status' => 0, 'body' => ''];
+    }
+    $headers = "Content-Type: application/json\r\nAuthorization: Bearer " . $token . "\r\n";
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'header' => $headers,
+            'content' => $json,
+            'timeout' => 8,
+            'ignore_errors' => true,
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+        ],
+    ]);
+    $out = @file_get_contents($url, false, $ctx);
+    $status = 0;
+    if (isset($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
+        $status = (int)$m[1];
+    }
+    return ['status' => $status, 'body' => is_string($out) ? $out : ''];
+}
+
+/** @return array{ice_servers:list<array<string,mixed>>,expires_at:string}|null */
+function auth_turn_cache_read(array $row): ?array {
+    $exp = (string)($row['cache_expires_at'] ?? '');
+    $json = (string)($row['cache_json'] ?? '');
+    if ($exp === '' || $json === '') {
+        return null;
+    }
+    $ts = strtotime($exp);
+    if ($ts === false || $ts <= time() + NEXVUE_TURN_CACHE_REFRESH_S) {
+        return null;
+    }
+    $servers = json_decode($json, true);
+    if (!is_array($servers) || $servers === []) {
+        return null;
+    }
+    return ['ice_servers' => $servers, 'expires_at' => $exp];
+}
+
+/** @param list<array<string,mixed>> $servers */
+function auth_turn_cache_write(array $servers, string $expiresAt): void {
+    $db = auth_db();
+    $st = $db->prepare('UPDATE turn_config SET cache_json=:j, cache_expires_at=:e WHERE id=1');
+    $st->bindValue(':j', json_encode(array_values($servers), JSON_UNESCAPED_SLASHES), SQLITE3_TEXT);
+    $st->bindValue(':e', $expiresAt, SQLITE3_TEXT);
+    $st->execute();
+}
+
+/**
+ * Mint (or return cached) ICE servers. Override key/token for Settings → Test
+ * without requiring the master switch. Cache is written only for stored creds.
+ *
+ * @return array{ice_servers:list<array<string,mixed>>,expires_at:string}
+ */
+function auth_turn_mint(bool $force = false, ?string $keyId = null, ?string $token = null): array {
+    $row = auth_turn_row();
+    $useKey = ($keyId !== null && trim($keyId) !== '')
+        ? auth_turn_sanitize_key_id($keyId)
+        : (string)$row['key_id'];
+    $useTok = ($token !== null && trim($token) !== '')
+        ? auth_turn_sanitize_token($token)
+        : (string)$row['api_token'];
+    if ($useKey === '' || $useTok === '') {
+        throw new InvalidArgumentException('Enter a TURN key ID and API token');
+    }
+    $usingStored = ($useKey === (string)$row['key_id'] && $useTok === (string)$row['api_token']);
+    if (!$force && $usingStored) {
+        $cached = auth_turn_cache_read($row);
+        if ($cached !== null) {
+            return $cached;
+        }
+    }
+    $url = sprintf(NEXVUE_TURN_CF_URL, rawurlencode($useKey));
+    $r = auth_turn_http_post($url, $useTok, ['ttl' => NEXVUE_TURN_TTL_S]);
+    if ($r['status'] < 200 || $r['status'] >= 300) {
+        $err = 'Cloudflare TURN request failed';
+        $j = json_decode($r['body'], true);
+        if (is_array($j) && isset($j['error']) && is_string($j['error']) && $j['error'] !== '') {
+            $err = 'Cloudflare TURN: ' . $j['error'];
+        } elseif ($r['status'] === 0) {
+            $err = 'Could not reach Cloudflare TURN (check outbound HTTPS)';
+        } elseif ($r['status'] === 401 || $r['status'] === 403) {
+            $err = 'Cloudflare TURN rejected the key ID or API token';
+        } elseif ($r['status'] > 0) {
+            $err = 'Cloudflare TURN returned HTTP ' . $r['status'];
+        }
+        throw new RuntimeException($err);
+    }
+    $servers = auth_turn_parse_cf_response($r['body']);
+    $expires = gmdate('Y-m-d\TH:i:s\Z', time() + NEXVUE_TURN_TTL_S);
+    if ($usingStored) {
+        auth_turn_cache_write($servers, $expires);
+    }
+    return ['ice_servers' => $servers, 'expires_at' => $expires];
+}
+
+/**
+ * Viewer path: empty ice_servers when off or mint fails (WHEP still works).
+ *
+ * @return array{enabled:bool,ice_servers:list<array<string,mixed>>,expires_at:string}
+ */
+function auth_turn_ice_servers_for_viewer(): array {
+    $row = auth_turn_row();
+    if (empty($row['enabled'])) {
+        return ['enabled' => false, 'ice_servers' => [], 'expires_at' => ''];
+    }
+    try {
+        $minted = auth_turn_mint(false);
+        return [
+            'enabled' => true,
+            'ice_servers' => $minted['ice_servers'],
+            'expires_at' => $minted['expires_at'],
+        ];
+    } catch (Throwable $e) {
+        return ['enabled' => true, 'ice_servers' => [], 'expires_at' => ''];
     }
 }

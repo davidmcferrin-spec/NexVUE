@@ -30,7 +30,7 @@ declare(strict_types=1);
 
 const NEXVUE_PORTAL_ROLES = ['org_admin', 'org_operator', 'org_viewer'];
 const NEXVUE_PORTAL_VIEWER_JWT_TTL_S = 90;
-const NEXVUE_PORTAL_SCHEMA_VERSION = 1;
+const NEXVUE_PORTAL_SCHEMA_VERSION = 2;
 const NEXVUE_PORTAL_MAX_CHANNEL_ID = 7;
 /** Enrollment tokens are single-use and short-lived — an admin generates
  *  one right before pasting it into the edge's Settings → Adopt form. */
@@ -195,6 +195,22 @@ SQL);
             ]);
         }
         $ver = 1;
+    }
+    if ($ver < 2) {
+        $cols = [];
+        $info = $db->query('PRAGMA table_info(stations)');
+        if ($info) {
+            while ($c = $info->fetchArray(SQLITE3_ASSOC)) {
+                $cols[(string)$c['name']] = true;
+            }
+        }
+        if (!isset($cols['ice_servers_json'])) {
+            $db->exec('ALTER TABLE stations ADD COLUMN ice_servers_json TEXT');
+        }
+        if (!isset($cols['ice_servers_expires_at'])) {
+            $db->exec('ALTER TABLE stations ADD COLUMN ice_servers_expires_at TEXT');
+        }
+        $ver = 2;
     }
     $db->exec('PRAGMA user_version = ' . (string)NEXVUE_PORTAL_SCHEMA_VERSION);
     $done = true;
@@ -618,6 +634,58 @@ function portal_station_touch_heartbeat(string $id, string $edgeVersion): void {
     $st->bindValue(':up', $now, SQLITE3_TEXT);
     $st->bindValue(':id', $id, SQLITE3_TEXT);
     $st->execute();
+}
+
+/**
+ * Cache short-lived Cloudflare ICE servers pushed by the edge heartbeat.
+ * Empty $servers clears the cache (TURN off on the station).
+ *
+ * @param list<array<string,mixed>> $servers
+ */
+function portal_station_ice_servers_store(string $id, array $servers, string $expiresAt): void {
+    $now = portal_now_iso();
+    $json = null;
+    $exp = null;
+    if ($servers !== []) {
+        $encoded = json_encode(array_values($servers), JSON_UNESCAPED_SLASHES);
+        if (is_string($encoded)) {
+            $json = $encoded;
+            $exp = $expiresAt !== '' ? $expiresAt : null;
+        }
+    }
+    $db = portal_db();
+    $st = $db->prepare(
+        'UPDATE stations SET ice_servers_json=:j, ice_servers_expires_at=:e, updated_at=:u WHERE id=:id'
+    );
+    $st->bindValue(':j', $json, $json === null ? SQLITE3_NULL : SQLITE3_TEXT);
+    $st->bindValue(':e', $exp, $exp === null ? SQLITE3_NULL : SQLITE3_TEXT);
+    $st->bindValue(':u', $now, SQLITE3_TEXT);
+    $st->bindValue(':id', $id, SQLITE3_TEXT);
+    $st->execute();
+}
+
+/**
+ * Viewer ICE servers if the heartbeat cache is still valid.
+ *
+ * @return list<array<string,mixed>>
+ */
+function portal_station_ice_servers_for_viewer(?array $station): array {
+    if ($station === null) {
+        return [];
+    }
+    $exp = (string)($station['ice_servers_expires_at'] ?? '');
+    if ($exp !== '') {
+        $ts = strtotime($exp);
+        if ($ts !== false && $ts <= time() + 60) {
+            return [];
+        }
+    }
+    $raw = (string)($station['ice_servers_json'] ?? '');
+    if ($raw === '') {
+        return [];
+    }
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : [];
 }
 
 /**

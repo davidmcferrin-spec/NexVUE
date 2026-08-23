@@ -111,13 +111,23 @@ function main(): int {
     if (is_readable($vp)) {
         $edgeVersion = trim((string)file_get_contents($vp));
     }
+    $payload = [
+        'status' => 'active',
+        'edge_version' => $edgeVersion,
+        'channels' => heartbeat_collect_channels(),
+        'ice_servers' => [],
+        'ice_servers_expires_at' => '',
+    ];
+    try {
+        $turn = auth_turn_ice_servers_for_viewer();
+        $payload['ice_servers'] = $turn['ice_servers'];
+        $payload['ice_servers_expires_at'] = $turn['expires_at'];
+    } catch (Throwable $e) {
+        // TURN mint is best-effort — catalog sync must still run.
+    }
     $r = auth_portal_http_post(
         $env['url'] . '/api/portal?action=station_heartbeat',
-        [
-            'status' => 'active',
-            'edge_version' => $edgeVersion,
-            'channels' => heartbeat_collect_channels(),
-        ],
+        $payload,
         $env['station_api_key']
     );
     if ($r['status'] < 200 || $r['status'] >= 300) {

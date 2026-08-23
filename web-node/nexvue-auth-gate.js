@@ -3,8 +3,8 @@
  *
  * Usage (after nexvue-ui.js):
  *   await NexVueAuth.requirePage({ roles: ['admin','operator'], allowShare: false });
- *   const jwt = await NexVueAuth.whepJwt('ch0');
- *   const url = NexVueAuth.whepUrl(path, jwt); // always https://<host>:8889/...
+ *   const sess = await NexVueAuth.whepJwt('ch0'); // { jwt, ice_servers, turn }
+ *   const url = NexVueAuth.whepUrl(path, sess.jwt); // always https://<host>:8889/...
  */
 (function (global) {
   "use strict";
@@ -231,8 +231,34 @@
   }
 
   function whepJwt(path) {
-    return api("whep_jwt", { path: path }).then(function (data) {
-      return data.jwt;
+    return api("whep_jwt", { path: path });
+  }
+
+  function iceServersFrom(sess) {
+    if (!sess || !Array.isArray(sess.ice_servers)) return [];
+    return sess.ice_servers;
+  }
+
+  function waitIceGathering(pc, timeoutMs) {
+    var ms = Number(timeoutMs);
+    if (!Number.isFinite(ms) || ms < 0) ms = 2000;
+    return new Promise(function (resolve) {
+      if (!pc || pc.iceGatheringState === "complete") {
+        resolve();
+        return;
+      }
+      var done = false;
+      function finish() {
+        if (done) return;
+        done = true;
+        try { pc.removeEventListener("icegatheringstatechange", check); } catch (e) { /* ignore */ }
+        resolve();
+      }
+      function check() {
+        if (pc.iceGatheringState === "complete") finish();
+      }
+      pc.addEventListener("icegatheringstatechange", check);
+      setTimeout(finish, ms);
     });
   }
 
@@ -299,6 +325,8 @@
     me: me,
     requirePage: requirePage,
     whepJwt: whepJwt,
+    iceServersFrom: iceServersFrom,
+    waitIceGathering: waitIceGathering,
     whepBase: whepBase,
     whepUrl: whepUrl,
     whepFetchHint: whepFetchHint,

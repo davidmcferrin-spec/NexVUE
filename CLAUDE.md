@@ -153,7 +153,9 @@ this box can't get additional ports opened.
 - **Phase 2: edge local auth landed** — bcrypt users (admin/operator/sharer/viewer),
   per-user channel ACL, named revocable share links with mandatory expiry
   (Users admin UI + Player/Multiview Share for admin/sharer; sharer sees own
-  tokens only; Multiview shares ≤4 channels and auto-tune panes on open;
+  tokens only; Player shares auto-play the first token channel on open
+  (logged-in Player stays idle with a Select-a-channel overlay);
+  Multiview shares ≤4 channels and auto-tune panes on open;
   Multiview Fullscreen is frameless (html:fullscreen hides chrome/borders);
   Player / Multiview **▢ Fill window** (`html.theater`, `localStorage.nexvue-theater`)
   is the same chrome-hide inside the tab; Player **⧉ PiP** is native
@@ -196,7 +198,9 @@ this box can't get additional ports opened.
   (`NEXVUE_STATUS_BIND=127.0.0.1:9998`) are loopback-bound; Player uses
   `nexvue-mediamtx-api.php` + `nexvue-status.php`. Public ICE hosts
   (`webrtcAdditionalHosts`) are set from Settings → Public reachability
-  (admin). Remaining: Entra OIDC, CORS, portal relays. (TLS landed early —
+  (admin). Optional Settings → Cloudflare TURN (admin) stores the TURN key
+  in `auth.db` and mints client `ice_servers` on `whep_jwt` / portal
+  heartbeat — no MediaMTX restart, never a `.env`. Remaining: Entra OIDC, CORS, portal relays. (TLS landed early —
   see README TLS section.)
 - **Phase 4: fleet / cloud portal — first slice landed.** Repo split:
   `web-node/` holds everything from Phases 1-3 (moved as a group, same
@@ -224,7 +228,8 @@ this box can't get additional ports opened.
   `nexvue-portal-heartbeat.timer`, 300s default, runs as plain `www-data` —
   no root needed) are both **edge-initiated outbound only**; no
   portal-to-edge inbound call exists anywhere. Heartbeat pushes station
-  status + channel catalog, portal echoes back its current JWKS each time
+  status + channel catalog + optional Cloudflare `ice_servers` (when TURN
+  is on), portal echoes back its current JWKS each time
   (key rotation propagates for free, no separate endpoint). Login page
   shows a non-blocking "sign in via portal" nudge when adopted+reachable
   (`portal_status`, public action) — local sign-in and `/s/<token>` share
@@ -338,10 +343,11 @@ this box can't get additional ports opened.
   detaches it; Multiview shows the audio-focused pane).
   Top nav: Player / Multiview / Metrics / Services / Settings / Users.
   Login at `/login` (session cookie); share links use `/player?t=` /
-  `/multiview?t=` or `/s/<token>` (Multiview shares ≤4 channels, auto-tune
+  `/multiview?t=` or `/s/<token>` (Player share auto-plays first channel;
+  logged-in Player prompts Select a channel; Multiview shares ≤4 channels, auto-tune
   panes; Fill window + Fullscreen near-frameless; Player PiP; admin edit name/channels/expiry; delete
   after revoke/expiry; purge 7d post-expiry). Roles: admin
-  (Users+Services+Settings including Public reachability + Certificates+Metrics+all shares), operator (Settings+Metrics; no Public reachability or Certificates),
+  (Users+Services+Settings including Public reachability + Certificates + Cloudflare TURN + Metrics+all shares), operator (Settings+Metrics; no Public reachability, Certificates, or Cloudflare TURN),
   sharer / UI **Viewer+Share** (watch + own share links via Player/Multiview
   Share), viewer (watch). Per-user channel ACL on Users (`users.channels`;
   null = all). MediaMTX JWT via local JWKS; encoders use `NEXVUE_PUBLISH_JWT`.
@@ -385,8 +391,17 @@ this box can't get additional ports opened.
   `NEXVUE_PUBLIC_IP` in `/etc/nexvue/nexvue.env` and patches MediaMTX
   `webrtcAdditionalHosts` (drops deprecated `webrtcICEHostNAT1To1IPs`) via
   `nexvue-ops-network-write.sh`, then restarts `mediamtx` only. Blank = LAN-only.
+  **Test** (`network_test`) is advisory: DNS A, this box's WAN IPv4, TCP
+  443/8889 on the typed name or IP. Does not write config and never blocks
+  Save. Hairpin NAT can fail the TCP checks even when off-site works.
   Public hostname is also the Let's Encrypt DNS name (Certificates has no
   separate field; `NEXVUE_TLS_DOMAIN` is a write-through alias).
+  Settings **Cloudflare TURN** (admin only — hidden from operators) writes
+  `turn_config` in `auth.db` (enable, key ID, API token — token never
+  echoed back). Player / Multiview receive `ice_servers` on `whep_jwt`;
+  adopted stations push a cached blob on the outbound heartbeat so portal
+  `/watch` can use the same relay. Toggle applies on the next play; no
+  MediaMTX restart. Does not replace Public hostname or 8189 forwards.
   Settings **Certificates** (admin only — hidden from operators) uses
   `nexvue-ops-tls.sh` + pinned `lego` TLS-ALPN-01 on `:443` (Apache stopped
   only for that window) or a validated PEM upload onto `/etc/nexvue/tls/`.

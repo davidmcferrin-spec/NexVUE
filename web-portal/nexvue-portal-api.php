@@ -148,6 +148,12 @@ try {
         }
         portal_station_touch_heartbeat($station['id'], $edgeVersion);
         portal_station_channels_upsert($station['id'], $channels);
+        if (array_key_exists('ice_servers', $body)) {
+            $ice = $body['ice_servers'];
+            $iceList = is_array($ice) ? $ice : [];
+            $iceExp = (string)($body['ice_servers_expires_at'] ?? '');
+            portal_station_ice_servers_store($station['id'], $iceList, $iceExp);
+        }
         $keys = portal_ensure_keys();
         portal_api_ok(['portal_jwks' => $keys['jwks']]);
     }
@@ -197,6 +203,7 @@ try {
             'expires_in' => NEXVUE_PORTAL_VIEWER_JWT_TTL_S,
             'whep_url' => $whepUrl,
             'path' => $channelBase,
+            'ice_servers' => portal_station_ice_servers_for_viewer($station),
         ]);
     }
 

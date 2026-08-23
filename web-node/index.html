@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theater-page>
+<html lang="en" data-theater-page class="player-idle">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -8,6 +8,8 @@
   Phase 1 bring-up tool (v3).
   Adds: Auto/HI/LO rendition selection with stats-driven auto-switching.
         LO availability is detected live from the MediaMTX API (chNlo ready).
+  Idle sessions stay disconnected and show #pick-overlay until a channel
+  click. Share links (?t=) auto-play the first channel on the token.
   Auto-switch policy (reference implementation for the Phase 2 portal player):
     - down HI->LO: packet-loss rate >3% for 3 consecutive seconds
     - up   LO->HI: loss <0.5% for 20 consecutive seconds
@@ -172,14 +174,16 @@
     width: 100%; height: 100%; display: block; object-fit: contain;
     background: #000; border: 1px solid var(--edge); border-radius: 4px;
   }
-  #kicked-overlay {
+  .stage-overlay {
     position: absolute; inset: 0; z-index: 2;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 8px; padding: 24px; text-align: center;
     background: var(--overlay-scrim); border: 1px solid var(--edge); border-radius: 4px;
     color: var(--text); pointer-events: none;
   }
-  #kicked-overlay[hidden] { display: none; }
+  .stage-overlay[hidden] { display: none; }
+  #pick-overlay .pick-title { color: var(--acc); font-weight: 600; font-size: 16px; }
+  #pick-overlay .pick-hint { color: var(--muted); font-size: 13px; max-width: 36em; }
   #kicked-overlay .kicked-title { color: var(--bad); font-weight: 600; font-size: 16px; }
   #kicked-overlay .kicked-reason { color: var(--muted); font-size: 13px; max-width: 36em; }
   #kicked-overlay .kicked-hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
@@ -244,6 +248,20 @@
   html.theater .theater-exit { display: block; }
   html.theater .theater-exit:hover,
   html.theater .theater-exit:focus-visible { opacity: 1; border-color: var(--acc); color: var(--acc); }
+  /* Idle / kicked: keep nav + channel bar visible so Fill-window users can
+     pick a channel. Controls stay hidden until a session is up. */
+  html.theater.player-idle,
+  html.theater.player-idle body {
+    background: var(--bg);
+  }
+  html.theater.player-idle body {
+    padding: 16px 16px 0;
+  }
+  html.theater.player-idle .topnav,
+  html.theater.player-idle .bar:not(.controls) {
+    display: flex;
+  }
+  html.theater.player-idle .theater-exit { display: none; }
   /* In-flow flex row (not position:fixed). iOS Chrome/Safari pin fixed
      bottom:0 to the layout viewport, which sits above the visual window
      when the browser toolbar is showing — the bar looked detached. */
@@ -325,7 +343,7 @@
 <div class="bar">
   <span id="channels"></span>
   <button id="disconnect">Disconnect</button>
-  <span id="state">idle</span>
+  <span id="state">select a channel</span>
 </div>
 
 <div class="bar controls">
@@ -372,7 +390,11 @@
     <video id="video" autoplay playsinline muted></video>
     <!-- muted: autoplay policy + Web Audio owns playout (VU/solo/SAP). No native controls. -->
     <div id="cc-overlay" hidden aria-live="polite"></div>
-    <div id="kicked-overlay" hidden role="status" aria-live="polite">
+    <div id="pick-overlay" class="stage-overlay" role="status" aria-live="polite">
+      <div class="pick-title">Select a channel</div>
+      <div class="pick-hint">Choose a channel in the bar above to start watching</div>
+    </div>
+    <div id="kicked-overlay" class="stage-overlay" hidden role="status" aria-live="polite">
       <div class="kicked-title">Disconnected by an administrator</div>
       <div class="kicked-reason" id="kicked-reason"></div>
       <div class="kicked-hint">Select a channel to reconnect</div>
@@ -600,10 +622,24 @@
     return null;
   }
 
+  function isKickedVisible() {
+    const el = $("kicked-overlay");
+    return !!(el && !el.hidden);
+  }
+
+  function syncIdleUi() {
+    const idle = !currentBase;
+    const kicked = isKickedVisible();
+    const pick = $("pick-overlay");
+    if (pick) pick.hidden = !idle || kicked;
+    document.documentElement.classList.toggle("player-idle", idle || kicked);
+  }
+
   function hideKickedOverlay() {
     const el = $("kicked-overlay");
     el.hidden = true;
     $("kicked-reason").textContent = "";
+    syncIdleUi();
   }
 
   function showKickedOverlay(reason) {
@@ -614,6 +650,9 @@
     reasonEl.textContent = decodeKickReason(reason || "");
     reasonEl.hidden = !reasonEl.textContent;
     el.hidden = false;
+    const pick = $("pick-overlay");
+    if (pick) pick.hidden = true;
+    syncIdleUi();
   }
 
   function decodeKickReason(s) {
@@ -727,6 +766,7 @@
     ["s-viewers", "s-chout", "s-allout"].forEach(id => $(id).textContent = "—");
     document.querySelectorAll("button.ch").forEach(b => b.classList.remove("active"));
     updateQualityUI();
+    syncIdleUi();
   }
 
   async function openSession(path) {
@@ -738,7 +778,20 @@
     setState(`connecting ${path}…`);
     updateQualityUI();
 
-    pc = new RTCPeerConnection();
+    let sess;
+    try {
+      sess = await NexVueAuth.whepJwt(path);
+    } catch (err) {
+      const raw = err && err.message ? err.message : String(err);
+      const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
+      setState(`error: ${msg}`, "bad");
+      if (!intentionalDisconnect && currentBase) {
+        maybeReconnect(currentBase, rendition, `error: ${msg}`);
+      }
+      return;
+    }
+    const iceServers = NexVueAuth.iceServersFrom(sess);
+    pc = new RTCPeerConnection(iceServers.length ? { iceServers } : {});
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
     pc.ontrack = ev => {
@@ -779,23 +832,12 @@
     };
 
     try {
-      const jwt = await NexVueAuth.whepJwt(path);
-      const url = NexVueAuth.whepUrl(path, jwt);
+      const url = NexVueAuth.whepUrl(path, sess.jwt);
       const offer = await pc.createOffer();
       // Chrome won't advertise multiopus; MediaMTX rejects >2ch Opus without it.
       const prepared = await NexVueVu.prepareWhepOffer(offer);
       await pc.setLocalDescription({ type: "offer", sdp: prepared.sdp });
-      await new Promise(resolve => {
-        if (pc.iceGatheringState === "complete") return resolve();
-        const check = () => {
-          if (pc.iceGatheringState === "complete") {
-            pc.removeEventListener("icegatheringstatechange", check);
-            resolve();
-          }
-        };
-        pc.addEventListener("icegatheringstatechange", check);
-        setTimeout(resolve, 2000);
-      });
+      await NexVueAuth.waitIceGathering(pc, iceServers.length ? 12000 : 2000);
 
       const res = await fetch(url, {
         method: "POST",
@@ -848,7 +890,9 @@
   async function connectChannel(base, btn) {
     teardown();
     currentBase = base;
-    btn.classList.add("active");
+    const activeBtn = btn || document.querySelector(`button.ch[data-path="${base}"]`);
+    if (activeBtn) activeBtn.classList.add("active");
+    syncIdleUi();
     // In auto mode always start on HI; the stats loop will step down if the
     // link can't carry it. Manual LO is honored if the path exists.
     if (qualityMode === "auto") rendition = "hi";
@@ -859,6 +903,23 @@
     openSession(pathFor(rendition));
     // Refresh layout/embeds in the background; ontrack also applies current map.
     loadChannelMeta().then(() => applyVuForBase(base)).catch(() => {});
+  }
+
+  // Share links: start the first channel on the token (order preserved at
+  // create). Extra shared channels stay as buttons. Logged-in sessions wait
+  // for an explicit click — see #pick-overlay.
+  function autoPlayFromShare() {
+    if (!authUser || authUser.auth !== "share") return;
+    const raw = Array.isArray(authUser.channels) ? authUser.channels : [];
+    for (const c of raw) {
+      let b = String(c || "").toLowerCase();
+      if (/^ch[0-7]lo$/.test(b)) b = b.slice(0, -2);
+      if (!/^ch[0-7]$/.test(b)) continue;
+      if (!NexVueAuth.channelAllowed(b, authUser)) continue;
+      const btn = document.querySelector(`button.ch[data-path="${b}"]`);
+      connectChannel(b, btn);
+      return;
+    }
   }
 
   function switchRendition(newRend, reason) {
@@ -1345,6 +1406,7 @@
   }
 
   renderChannelButtons({}, {});
+  autoPlayFromShare();
   pollInputStatus();
   loadChannelButtons().then(() => pollInputStatus());
   // Settings may change in another tab — refresh role/embeds when we regain focus.
@@ -1353,8 +1415,9 @@
   });
   $("disconnect").addEventListener("click", () => {
     teardown();
-    setState("idle");
+    setState("select a channel");
   });
+  syncIdleUi();
 
   // ---- Session metrics drawer -------------------------------------------------------
   // Hover/focus explainers for metric tiles (2s delay; fixed so drawer overflow

@@ -158,6 +158,8 @@ class TestPortalHeartbeat(unittest.TestCase):
         self.assertTrue(status["ok"])
         self.assertEqual(len(_StubHandler.received), 1)
         self.assertEqual(_StubHandler.received[0]["channels"][0]["channel_base"], "ch0")
+        self.assertEqual(_StubHandler.received[0]["ice_servers"], [])
+        self.assertIn("ice_servers_expires_at", _StubHandler.received[0])
 
     def test_success_refreshes_jwks_cache(self) -> None:
         _StubHandler.response_body = {

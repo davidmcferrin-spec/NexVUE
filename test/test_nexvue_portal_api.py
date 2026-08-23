@@ -172,6 +172,34 @@ class TestPortalApiHappyPath(unittest.TestCase):
         self.assertEqual(status, 200, jwt_resp)
         self.assertTrue(jwt_resp["jwt"])
         self.assertEqual(jwt_resp["whep_url"], "https://edge-alpha.example.com:8889/ch0/whep")
+        self.assertEqual(jwt_resp.get("ice_servers"), [])
+
+        status, hb_ice = self._request(
+            "POST",
+            "station_heartbeat",
+            {
+                "edge_version": "2.5.0",
+                "channels": [
+                    {"channel_base": "ch0", "alias": "Program", "lo_enabled": True},
+                    {"channel_base": "ch1", "alias": "Preview", "lo_enabled": False},
+                ],
+                "ice_servers": [
+                    {
+                        "urls": ["turns:turn.cloudflare.com:443?transport=tcp"],
+                        "username": "portal-test",
+                        "credential": "portal-cred",
+                    }
+                ],
+                "ice_servers_expires_at": "2099-01-01T00:00:00Z",
+            },
+            bearer=station_key,
+        )
+        self.assertEqual(status, 200, hb_ice)
+        status, jwt_turn = self._request(
+            "POST", "viewer_jwt", {"station_id": station_id, "channel_base": "ch0"}
+        )
+        self.assertEqual(status, 200, jwt_turn)
+        self.assertEqual(jwt_turn["ice_servers"][0]["username"], "portal-test")
 
         # 7. Admin creates an org_viewer with NO catalog grant yet.
         status, viewer = self._request(

@@ -3,8 +3,8 @@
  * nexvue-ops.php — JSON API for NexVUE Services + Channels ops UI.
  *
  * Phase 2 local auth: session cookie required. Roles:
- *   admin — Services + Settings + kick + branding + support/update + public reachability + certificates
- *   operator — Settings + kick + branding (not public hostname/IP, not certificates)
+ *   admin — Services + Settings + kick + branding + support/update + public reachability + certificates + Cloudflare TURN
+ *   operator — Settings + kick + branding (not public hostname/IP, not certificates, not Cloudflare TURN)
  *   any auth (user or share) — aliases, kick_check (Player/Multiview)
  *
  * Privileged work goes through allowlisted sudo wrappers only
@@ -14,8 +14,9 @@
  *   services | journal | journal_clear | audio_probe | channels_list | channel_get | channel_put
  *   | channels_bulk | restart | restart_encoders | set_enabled | set_running | aliases
  *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete | support_bundle
- *   | update_status | update_repo | network_get | network_put
+ *   | update_status | update_repo | network_get | network_put | network_test
  *   | tls_status | tls_issue | tls_upload
+ *   | turn_get | turn_put | turn_test
  *
  * support_bundle returns application/zip (not JSON): builds a redacted
  * journals+config+state zip via nexvue-ops-support-bundle.sh for the
@@ -27,6 +28,15 @@
  * NEXVUE_TLS_DOMAIN is a write-through alias. Port 80 is never used. Upload
  * installs PEMs to /etc/nexvue/tls and reloads apache2 + mediamtx.
  * Status, issue, and upload are admin-only (panel hidden from operators).
+ *
+ * network_test is an advisory probe (DNS A, this box's WAN IPv4, TCP 443/8889
+ * on the typed name or IP). It does not write config and never blocks Save.
+ * Hairpin NAT can make the TCP checks fail even when off-site viewers work.
+ *
+ * turn_get / turn_put / turn_test persist Cloudflare Realtime TURN in auth.db
+ * (never nexvue.env). Admin-only, same gate as Public reachability. Turn on
+ * mints short-lived iceServers for Player / Multiview via whep_jwt; MediaMTX
+ * is not restarted.
  *
  * update_status / update_repo call nexvue-ops-update.sh (git fetch + hard-reset
  * to origin/NEXVUE_UPDATE_BRANCH + setup.sh). Admin-only — same gate as
@@ -630,6 +640,299 @@ function network_read_settings(): array {
     return ['hostname' => '', 'ip' => ''];
 }
 
+function network_is_rfc1918(string $ip): bool {
+    $parts = explode('.', $ip);
+    if (count($parts) !== 4) {
+        return false;
+    }
+    $a = (int)$parts[0];
+    $b = (int)$parts[1];
+    if ($a === 10) {
+        return true;
+    }
+    if ($a === 192 && $b === 168) {
+        return true;
+    }
+    if ($a === 172 && $b >= 16 && $b <= 31) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * @return list<string>
+ */
+function network_dns_a(string $hostname): array {
+    $stub = getenv('NEXVUE_NETWORK_TEST_DNS_STUB');
+    if (is_string($stub) && $stub !== '') {
+        $map = json_decode($stub, true);
+        if (!is_array($map)) {
+            return [];
+        }
+        $raw = $map[$hostname] ?? [];
+        if (!is_array($raw)) {
+            return [];
+        }
+        $out = [];
+        foreach ($raw as $ip) {
+            if (is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+                $out[] = $ip;
+            }
+        }
+        return array_values(array_unique($out));
+    }
+    $recs = @dns_get_record($hostname, DNS_A);
+    if (!is_array($recs)) {
+        return [];
+    }
+    $out = [];
+    foreach ($recs as $rec) {
+        $ip = isset($rec['ip']) && is_string($rec['ip']) ? $rec['ip'] : '';
+        if ($ip !== '' && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+            $out[] = $ip;
+        }
+    }
+    return array_values(array_unique($out));
+}
+
+function network_extract_ipv4(string $body): string {
+    $text = trim(str_replace("\r\n", "\n", $body));
+    if ($text === '') {
+        return '';
+    }
+    if (preg_match('/^ip=(\d{1,3}(?:\.\d{1,3}){3})\s*$/m', $text, $m)) {
+        $ip = $m[1];
+        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false ? $ip : '';
+    }
+    $line = trim(explode("\n", $text, 2)[0]);
+    if (filter_var($line, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+        return $line;
+    }
+    return '';
+}
+
+function network_http_get(string $url, float $timeout = 3.0): string {
+    $scheme = parse_url($url, PHP_URL_SCHEME);
+    if (!in_array($scheme, ['https', 'http'], true)) {
+        return '';
+    }
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'timeout' => $timeout,
+            'ignore_errors' => true,
+            'header' => "User-Agent: NexVUE-network-test\r\n",
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+        ],
+    ]);
+    $out = @file_get_contents($url, false, $ctx);
+    return is_string($out) ? $out : '';
+}
+
+function network_wan_ipv4(): string {
+    $stub = getenv('NEXVUE_NETWORK_TEST_WAN_STUB');
+    if (is_string($stub) && $stub !== '') {
+        return network_extract_ipv4($stub);
+    }
+    if (getenv('NEXVUE_NETWORK_TEST_WAN_FAIL') === '1') {
+        return '';
+    }
+    $urls = [
+        'https://cloudflare.com/cdn-cgi/trace',
+        'https://1.1.1.1/cdn-cgi/trace',
+        'https://api.ipify.org',
+    ];
+    foreach ($urls as $url) {
+        $ip = network_extract_ipv4(network_http_get($url, 3.0));
+        if ($ip !== '') {
+            return $ip;
+        }
+    }
+    return '';
+}
+
+function network_tcp_open(string $host, int $port, float $timeout = 2.0): bool {
+    if ($host === '' || ($port !== 443 && $port !== 8889)) {
+        return false;
+    }
+    $stub = getenv('NEXVUE_NETWORK_TEST_TCP_STUB');
+    if (is_string($stub) && $stub !== '') {
+        $map = json_decode($stub, true);
+        if (!is_array($map)) {
+            return false;
+        }
+        return !empty($map[$host . ':' . $port]);
+    }
+    $target = 'tcp://' . $host . ':' . $port;
+    $errno = 0;
+    $errstr = '';
+    $fp = @stream_socket_client($target, $errno, $errstr, $timeout);
+    if (is_resource($fp)) {
+        fclose($fp);
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Advisory reachability probe. Never required to Save.
+ *
+ * @return array{
+ *   hostname: string,
+ *   ip: string,
+ *   status: string,
+ *   summary: string,
+ *   checks: list<array{id:string,label:string,status:string,detail:string}>
+ * }
+ */
+function network_probe(string $hostname, string $ip): array {
+    $checks = [];
+    $dnsIps = [];
+    if ($hostname !== '') {
+        $dnsIps = network_dns_a($hostname);
+        if ($dnsIps === []) {
+            $checks[] = [
+                'id' => 'dns',
+                'label' => 'DNS',
+                'status' => 'err',
+                'detail' => $hostname . ' did not resolve to an IPv4 address',
+            ];
+        } else {
+            $listed = implode(', ', $dnsIps);
+            $status = 'ok';
+            $detail = $hostname . ' → ' . $listed;
+            if ($ip !== '' && !in_array($ip, $dnsIps, true)) {
+                $status = 'warn';
+                $detail .= ' (does not match Public IP ' . $ip . ')';
+            } elseif ($ip !== '') {
+                $detail .= ' (matches Public IP)';
+            }
+            $checks[] = [
+                'id' => 'dns',
+                'label' => 'DNS',
+                'status' => $status,
+                'detail' => $detail,
+            ];
+        }
+    } else {
+        $checks[] = [
+            'id' => 'dns',
+            'label' => 'DNS',
+            'status' => 'skip',
+            'detail' => 'No Public hostname — skipped',
+        ];
+    }
+
+    $wan = network_wan_ipv4();
+    if ($wan === '') {
+        $checks[] = [
+            'id' => 'wan',
+            'label' => 'WAN IP',
+            'status' => 'warn',
+            'detail' => 'Could not learn this box\'s WAN IPv4 (outbound check failed)',
+        ];
+    } elseif ($ip !== '' && network_is_rfc1918($ip)) {
+        $checks[] = [
+            'id' => 'wan',
+            'label' => 'WAN IP',
+            'status' => 'ok',
+            'detail' => 'Internet sees ' . $wan . ' (Public IP ' . $ip . ' is private / NAT — expected)',
+        ];
+    } elseif ($ip !== '' && $wan === $ip) {
+        $checks[] = [
+            'id' => 'wan',
+            'label' => 'WAN IP',
+            'status' => 'ok',
+            'detail' => $wan . ' matches Public IP',
+        ];
+    } elseif ($ip !== '') {
+        $checks[] = [
+            'id' => 'wan',
+            'label' => 'WAN IP',
+            'status' => 'warn',
+            'detail' => 'Internet sees ' . $wan . ' (does not match Public IP ' . $ip . ')',
+        ];
+    } elseif ($dnsIps !== [] && in_array($wan, $dnsIps, true)) {
+        $checks[] = [
+            'id' => 'wan',
+            'label' => 'WAN IP',
+            'status' => 'ok',
+            'detail' => $wan . ' matches DNS',
+        ];
+    } elseif ($dnsIps !== []) {
+        $checks[] = [
+            'id' => 'wan',
+            'label' => 'WAN IP',
+            'status' => 'warn',
+            'detail' => 'Internet sees ' . $wan . ' (not in DNS ' . implode(', ', $dnsIps) . ')',
+        ];
+    } else {
+        $checks[] = [
+            'id' => 'wan',
+            'label' => 'WAN IP',
+            'status' => 'ok',
+            'detail' => 'Internet sees ' . $wan,
+        ];
+    }
+
+    $tcpHost = $hostname !== '' ? $hostname : $ip;
+    foreach ([443, 8889] as $port) {
+        $id = 'tcp_' . $port;
+        $label = 'TCP ' . $port;
+        if ($tcpHost === '') {
+            $checks[] = [
+                'id' => $id,
+                'label' => $label,
+                'status' => 'skip',
+                'detail' => 'No hostname or IP — skipped',
+            ];
+            continue;
+        }
+        if (network_tcp_open($tcpHost, $port)) {
+            $checks[] = [
+                'id' => $id,
+                'label' => $label,
+                'status' => 'ok',
+                'detail' => $tcpHost . ':' . $port . ' accepted a connection',
+            ];
+        } else {
+            $checks[] = [
+                'id' => $id,
+                'label' => $label,
+                'status' => 'warn',
+                'detail' => $tcpHost . ':' . $port . ' did not accept from this box (hairpin NAT is common — try off-site)',
+            ];
+        }
+    }
+
+    $status = 'ok';
+    foreach ($checks as $c) {
+        if ($c['status'] === 'err') {
+            $status = 'err';
+            break;
+        }
+        if ($c['status'] === 'warn' && $status === 'ok') {
+            $status = 'warn';
+        }
+    }
+    $summary = 'Looks good from this box. Save is still required to apply. Off-site WHEP is the real media test.';
+    if ($status === 'err') {
+        $summary = 'DNS failed. Fix the name (or leave it blank) before expecting Let\'s Encrypt or off-site viewers.';
+    } elseif ($status === 'warn') {
+        $summary = 'Some checks look off. Save is still allowed — port probes from this box can fail even when off-site works.';
+    }
+    return [
+        'hostname' => $hostname,
+        'ip' => $ip,
+        'status' => $status,
+        'summary' => $summary,
+        'checks' => $checks,
+    ];
+}
+
 /**
  * Parse AUDIO_EMBEDS (comma list of 1–8). Blank / all → [1..8].
  *
@@ -828,8 +1131,9 @@ function ops_require_auth(string $action): void {
     $adminOnly = [
         'services', 'journal', 'journal_clear', 'set_enabled', 'set_running',
         'support_bundle', 'update_status', 'update_repo',
-        'network_get', 'network_put',
+        'network_get', 'network_put', 'network_test',
         'tls_status', 'tls_issue', 'tls_upload',
+        'turn_get', 'turn_put', 'turn_test',
     ];
     try {
         if ($hot) {
@@ -1702,6 +2006,28 @@ if ($action === 'network_put') {
     exit;
 }
 
+if ($action === 'network_test') {
+    try {
+        $hostname = network_sanitize_hostname((string)($body['hostname'] ?? ''));
+        $ip = network_sanitize_ip((string)($body['ip'] ?? ''));
+    } catch (InvalidArgumentException $e) {
+        fail(400, $e->getMessage());
+    }
+    if ($hostname === '' && $ip === '') {
+        echo json_encode([
+            'ok' => true,
+            'hostname' => '',
+            'ip' => '',
+            'status' => 'ok',
+            'summary' => 'Nothing to test — leave both blank for LAN-only.',
+            'checks' => [],
+        ]);
+        exit;
+    }
+    echo json_encode(array_merge(['ok' => true], network_probe($hostname, $ip)));
+    exit;
+}
+
 // ---- tls_status / tls_issue / tls_upload (Certificates) -----------------------
 
 function tls_helper_or_fail(): string {
@@ -1783,6 +2109,49 @@ if ($action === 'tls_upload') {
         fail($status, $err);
     }
     echo json_encode($decoded);
+    exit;
+}
+
+// ---- turn_get / turn_put / turn_test (admin-only Cloudflare TURN) -------------
+
+if ($action === 'turn_get') {
+    echo json_encode(array_merge(['ok' => true], auth_turn_public()));
+    exit;
+}
+
+if ($action === 'turn_put') {
+    try {
+        $pub = auth_turn_put([
+            'enabled' => !empty($body['enabled']),
+            'key_id' => (string)($body['key_id'] ?? ''),
+            'api_token' => (string)($body['api_token'] ?? ''),
+        ]);
+    } catch (InvalidArgumentException $e) {
+        fail(400, $e->getMessage());
+    } catch (Throwable $e) {
+        fail(500, 'failed to save Cloudflare TURN settings');
+    }
+    echo json_encode(array_merge(['ok' => true], $pub));
+    exit;
+}
+
+if ($action === 'turn_test') {
+    $keyId = trim((string)($body['key_id'] ?? ''));
+    $token = trim((string)($body['api_token'] ?? ''));
+    try {
+        $minted = auth_turn_mint(true, $keyId !== '' ? $keyId : null, $token !== '' ? $token : null);
+    } catch (InvalidArgumentException $e) {
+        fail(400, $e->getMessage());
+    } catch (RuntimeException $e) {
+        fail(400, $e->getMessage());
+    } catch (Throwable $e) {
+        fail(500, 'Cloudflare TURN test failed');
+    }
+    echo json_encode([
+        'ok' => true,
+        'ice_server_count' => count($minted['ice_servers']),
+        'expires_at' => $minted['expires_at'],
+    ]);
     exit;
 }
 

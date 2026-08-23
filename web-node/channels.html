@@ -14,7 +14,7 @@
   :root {
     --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
     --text: #d6dde6; --dim: #98a6b5; --muted: #b0bbc8;
-    --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5; --on-acc: #08131a;
+    --ok: #4cc38a; --bad: #e5484d; --warn: #e3b341; --acc: #56c4f5; --on-acc: #08131a;
     --row-hover: #1a222c; --row-selected: #1a2833;
     --backdrop: rgba(0, 0, 0, .55);
     --shadow: 0 16px 48px rgba(0, 0, 0, .45);
@@ -23,7 +23,7 @@
   html[data-theme="light"] {
     --bg: #f3f5f7; --panel: #ffffff; --edge: #cdd5de;
     --text: #1c232b; --dim: #5a6675; --muted: #3d4a58;
-    --ok: #1f9d5c; --bad: #c62828; --acc: #0b7ea4; --on-acc: #ffffff;
+    --ok: #1f9d5c; --bad: #c62828; --warn: #b8860b; --acc: #0b7ea4; --on-acc: #ffffff;
     --row-hover: #eef2f6; --row-selected: #dceef6;
     --backdrop: rgba(15, 23, 32, .4);
     --shadow: 0 16px 48px rgba(15, 23, 32, .18);
@@ -125,9 +125,19 @@
   }
   .network-grid label { color: var(--muted); font-size: 12px; }
   .network-grid input { width: 100%; }
-  #network-msg { color: var(--dim); font-size: 12px; }
-  #network-msg.err { color: var(--bad); }
-  #network-msg.ok { color: var(--ok); }
+  #network-msg, #turn-msg { color: var(--dim); font-size: 12px; }
+  #network-msg.err, #turn-msg.err { color: var(--bad); }
+  #network-msg.warn { color: var(--warn); }
+  #network-msg.ok, #turn-msg.ok { color: var(--ok); }
+  #network-test-out {
+    color: var(--muted); font-size: 12px; margin: 8px 0 0; max-width: 56em;
+    line-height: 1.45; white-space: pre-wrap;
+  }
+  #network-test-out:empty { display: none; }
+  .turn-check {
+    display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 13px;
+  }
+  .turn-check input { margin: 0; }
   .tls-help { color: var(--muted); font-size: 12px; margin: 0 0 12px; max-width: 56em; }
   .tls-status {
     color: var(--text); font-size: 13px; margin: 0 0 14px; max-width: 56em;
@@ -446,6 +456,8 @@
     Tell off-site viewers how to reach this station. The hostname is also the
     Let's Encrypt certificate name. Leave both blank for LAN-only.
     IT still needs to forward ports <strong>8889</strong> and <strong>8189</strong> to this box.
+    <strong>Test</strong> checks DNS and this box's WAN IP; port probes from here
+    can fail even when off-site works. Test never blocks Save.
     Saving reconnects viewers; live encodes keep running.
   </p>
   <div class="network-grid">
@@ -460,7 +472,42 @@
   </div>
   <div class="bar">
     <button type="button" class="primary" id="network-save">Save</button>
+    <button type="button" id="network-test">Test</button>
     <span id="network-msg" aria-live="polite"></span>
+  </div>
+  <div id="network-test-out" aria-live="polite"></div>
+</div>
+
+<div class="panel" id="turn-panel" hidden>
+  <h2>Cloudflare TURN</h2>
+  <p class="network-help">
+    Optional relay for viewers who cannot reach this station on port
+    <strong>8189</strong> (hotel Wi-Fi, some cellular, locked-down offices).
+    Direct 8189 is still preferred when it works. Does not replace Public
+    hostname or the firewall forwards. Create a TURN key under Cloudflare
+    Realtime, then paste the key ID and API token here. Stored in the auth
+    database — never in a channel or station <code>.env</code>.
+  </p>
+  <div class="network-grid">
+    <label for="turn-enable" tabindex="0"
+      data-tip="When on, Player and Multiview request short-lived Cloudflare ICE servers before WHEP. ICE still prefers a direct 8189 path and only relays when that fails. Off = today's behavior, no Cloudflare calls.">Use Cloudflare TURN</label>
+    <label class="turn-check">
+      <input type="checkbox" id="turn-enable" aria-describedby="turn-msg">
+      Relay viewers who cannot reach port 8189
+    </label>
+    <label for="turn-key-id" tabindex="0"
+      data-tip="TURN Token ID from the Cloudflare dashboard (Realtime → TURN). Not the account API token used for other Cloudflare products unless that token is scoped to this TURN key.">TURN key ID</label>
+    <input type="text" id="turn-key-id" autocomplete="off" spellcheck="false"
+      placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" aria-describedby="turn-msg">
+    <label for="turn-token" tabindex="0"
+      data-tip="API token that can mint credentials for this TURN key. Shown once on save; leave blank to keep the stored token. Never written to nexvue.env.">API token</label>
+    <input type="password" id="turn-token" autocomplete="new-password" spellcheck="false"
+      placeholder="paste token — leave blank to keep saved" aria-describedby="turn-msg">
+  </div>
+  <div class="bar">
+    <button type="button" class="primary" id="turn-save">Save</button>
+    <button type="button" id="turn-test">Test</button>
+    <span id="turn-msg" aria-live="polite"></span>
   </div>
 </div>
 
@@ -1872,13 +1919,29 @@
   const networkHost = document.getElementById("network-hostname");
   const networkIp = document.getElementById("network-ip");
   const networkSave = document.getElementById("network-save");
+  const networkTest = document.getElementById("network-test");
   const networkMsg = document.getElementById("network-msg");
+  const networkTestOut = document.getElementById("network-test-out");
   const me = NexVueAuth.currentUser();
   const isAdmin = !!(me && me.role === "admin");
 
   function setNetworkMsg(text, cls) {
     networkMsg.textContent = text || "";
     networkMsg.className = cls || "";
+  }
+
+  function setNetworkTestOut(lines) {
+    networkTestOut.textContent = lines || "";
+  }
+
+  function formatNetworkChecks(checks) {
+    return (checks || []).map((c) => {
+      const mark = c.status === "ok" ? "ok"
+        : c.status === "err" ? "fail"
+        : c.status === "skip" ? "—"
+        : "warn";
+      return (c.label || c.id) + " [" + mark + "] " + (c.detail || "");
+    }).join("\n");
   }
 
   function clientHostnameOk(raw) {
@@ -1916,6 +1979,35 @@
     networkPanel.hidden = false;
     wireFieldTip(document.querySelector('label[for="network-hostname"]'));
     wireFieldTip(document.querySelector('label[for="network-ip"]'));
+    networkTest.addEventListener("click", async () => {
+      const hostname = networkHost.value.trim();
+      const ip = networkIp.value.trim();
+      if (!clientHostnameOk(hostname)) {
+        setNetworkMsg("Enter a hostname like nexvue.example.com", "err");
+        setNetworkTestOut("");
+        networkHost.focus();
+        return;
+      }
+      if (!clientIpOk(ip)) {
+        setNetworkMsg("Enter an IPv4 address like 203.0.113.40", "err");
+        setNetworkTestOut("");
+        networkIp.focus();
+        return;
+      }
+      networkTest.disabled = true;
+      setNetworkMsg("Testing…");
+      setNetworkTestOut("");
+      try {
+        const data = await api("network_test", { hostname, ip });
+        const cls = data.status === "err" ? "err" : data.status === "warn" ? "warn" : "ok";
+        setNetworkMsg(data.summary || "Test finished", cls);
+        setNetworkTestOut(formatNetworkChecks(data.checks));
+      } catch (err) {
+        setNetworkMsg(err.message, "err");
+      } finally {
+        networkTest.disabled = false;
+      }
+    });
     networkSave.addEventListener("click", async () => {
       const hostname = networkHost.value.trim();
       const ip = networkIp.value.trim();
@@ -1959,6 +2051,80 @@
       }
     });
     loadNetwork();
+  }
+
+  // ---- Cloudflare TURN (admin-only, same gate as Public reachability) ---------
+
+  const turnPanel = document.getElementById("turn-panel");
+  const turnEnable = document.getElementById("turn-enable");
+  const turnKeyId = document.getElementById("turn-key-id");
+  const turnToken = document.getElementById("turn-token");
+  const turnSave = document.getElementById("turn-save");
+  const turnTest = document.getElementById("turn-test");
+  const turnMsg = document.getElementById("turn-msg");
+
+  function setTurnMsg(text, cls) {
+    turnMsg.textContent = text || "";
+    turnMsg.className = cls || "";
+  }
+
+  function applyTurnForm(data) {
+    turnEnable.checked = !!data.enabled;
+    turnKeyId.value = data.key_id || "";
+    turnToken.value = "";
+    turnToken.placeholder = data.has_token
+      ? ("saved" + (data.token_hint ? " (" + data.token_hint + ")" : "") + " — leave blank to keep")
+      : "paste token — leave blank to keep saved";
+  }
+
+  async function loadTurn() {
+    try {
+      const data = await api("turn_get", {});
+      applyTurnForm(data);
+    } catch (err) {
+      setTurnMsg(err.message, "err");
+    }
+  }
+
+  if (isAdmin) {
+    turnPanel.hidden = false;
+    wireFieldTip(document.querySelector('label[for="turn-enable"]'));
+    wireFieldTip(document.querySelector('label[for="turn-key-id"]'));
+    wireFieldTip(document.querySelector('label[for="turn-token"]'));
+    turnSave.addEventListener("click", async () => {
+      setTurnMsg("Saving…");
+      turnSave.disabled = true;
+      try {
+        const data = await api("turn_put", {
+          enabled: turnEnable.checked,
+          key_id: turnKeyId.value.trim(),
+          api_token: turnToken.value.trim(),
+        });
+        applyTurnForm(data);
+        setTurnMsg(data.enabled ? "Saved — TURN on for new sessions" : "Saved — TURN off", "ok");
+      } catch (err) {
+        setTurnMsg(err.message, "err");
+      } finally {
+        turnSave.disabled = false;
+      }
+    });
+    turnTest.addEventListener("click", async () => {
+      setTurnMsg("Testing Cloudflare…");
+      turnTest.disabled = true;
+      try {
+        const data = await api("turn_test", {
+          key_id: turnKeyId.value.trim(),
+          api_token: turnToken.value.trim(),
+        });
+        const n = data.ice_server_count || 0;
+        setTurnMsg("Cloudflare accepted the key — " + n + " ICE server(s)", "ok");
+      } catch (err) {
+        setTurnMsg(err.message, "err");
+      } finally {
+        turnTest.disabled = false;
+      }
+    });
+    loadTurn();
   }
 
   // ---- Certificates (admin-only, same gate as Public reachability) ------------

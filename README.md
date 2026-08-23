@@ -246,10 +246,14 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   `/multiview?t=<token>` (also `/s/<token>`) — raw token is stored so the
   **same URL** can be re-copied (or emailed) anytime while active; Create also
   auto-copies to the clipboard. Share viewers see remaining time next to
-  `share:<name>` in the top nav. Opening a Multiview share **auto-tunes**
+  `share:<name>` in the top nav. Opening a Player share **auto-plays** the
+  first channel on the token (order preserved from create; remaining
+  channels stay as buttons). Opening a Multiview share **auto-tunes**
   panes from the token's channel list (Dual for 1–2, Quad for 3–4; order
-  preserved from create). Admin can **Edit** name/channels/expiry (token URL
-  unchanged) and **Delete** revoked/expired rows; sharers can Delete their own
+  preserved from create). A logged-in Player session stays idle with a
+  **Select a channel** prompt until the viewer picks one. Admin can **Edit**
+  name/channels/expiry (token URL unchanged) and **Delete** revoked/expired
+  rows; sharers can Delete their own
   revoked/expired shares. Rows whose `expires_at` is more than **7 days** in
   the past are hard-deleted opportunistically on `shares_list` (no cron).
   Email uses `share_email` / `mail()` when an MTA is available
@@ -319,7 +323,11 @@ signaling port (8889). Opening only 8889 gets you a session that negotiates
 then plays nothing. Off-LAN viewers also need Settings → **Public
 reachability** (admin) so MediaMTX advertises the public hostname and/or
 NAT IP in ICE candidates — without that, signaling succeeds and video stays
-black.
+black. Viewers on networks that block **8189** entirely (UDP and TCP) can
+use Settings → **Cloudflare TURN** (admin): the browser allocates a
+Cloudflare relay and MediaMTX sends media out to it. That does not replace
+the 8889/8189 forwards or Public reachability; ICE still prefers a direct
+8189 path when it works.
 
 ### Viewer ports (LAN or DMZ)
 
@@ -360,8 +368,10 @@ journalctl -fu nexvue-encode@0
 Then from a LAN machine:
 
 - **Built-in player:** `https://<edge-ip>:8889/ch0`
-- **Test player with stats:** open `/player` via Apache (top nav → Player),
-  click a channel. Session tiles (resolution/fps, bitrate, RTT, loss, SDI
+- **Test player with stats:** open `/player` via Apache (top nav → Player)
+  and click a channel (the stage prompts **Select a channel** until you do;
+  a `?t=` share link auto-plays the first shared channel). Session tiles
+  (resolution/fps, bitrate, RTT, loss, SDI
   input, …) live in a bottom drawer — click **Session metrics** to expand
   (collapsed by default). Hover a tile title for ~2s for a short explainer.
   Click the **NexVUE** brand for a QR code of the page URL (phone scan).
@@ -372,7 +382,9 @@ Then from a LAN machine:
   pinned right). **▢ Fill window** hides nav, control bars, and the collapsed
   metrics drawer so the video occupies the browser window (not OS fullscreen;
   `localStorage.nexvue-theater`, Esc or **✕ Exit fill** to leave;
-  double-click the video also toggles it). **⧉ PiP** floats the Player
+  double-click the video also toggles it). Until a channel is selected (or
+  after an admin kick), nav and the channel bar stay visible so the viewer
+  can pick one. **⧉ PiP** floats the Player
   `<video>` over other desktop windows (browser Picture-in-Picture; audio
   stays in the tab via Web Audio; CC/VU overlays do not follow the PiP
   window). Hidden when the browser has no PiP API.
@@ -413,7 +425,11 @@ Then from a LAN machine:
   `NEXVUE_PUBLIC_HOSTNAME` / `NEXVUE_PUBLIC_IP` and MediaMTX
   `webrtcAdditionalHosts`, then restarts `mediamtx` so off-LAN viewers get
   media; the hostname is also the Let's Encrypt certificate name;
-  operators do not see this panel); **Certificates** (Let's Encrypt
+  **Test** is an advisory DNS / WAN-IP / TCP 443+8889 probe and never
+  blocks Save; operators do not see this panel); **Cloudflare TURN** (admin-only, same)
+  gate — enable/disable, TURN key ID, API token, Test; stored in `auth.db`,
+  never a `.env`; Player / Multiview / portal watch get short-lived
+  `ice_servers` on the next session; no MediaMTX restart); **Certificates** (Let's Encrypt
   via pinned `lego` TLS-ALPN-01 on `:443`, or upload a PEM pair — both write
   `/etc/nexvue/tls/{fullchain,privkey}.pem` and reload Apache + MediaMTX;
   Issue uses Public hostname, no separate DNS field; the panel is
@@ -1397,7 +1413,7 @@ and implemented — see the decisions list above the collapsed spec.
 | 1 (this) | Single edge, LAN WHEP, no auth. Prove stability + latency. |
 | 1.5 | **Rolled back** (slate/selector). Split-pipeline encode (`nexvue-encode.py`) is the production healer. See "Phase 1.5 supervisor" below. |
 | 2 | **Edge local auth landed** (bcrypt users + roles, share links, MediaMTX JWT/JWKS, sync-shaped export/import). Central PHP portal (catalog + fleet sync client) still future; Entra OIDC remains Phase 3. |
-| 3 | DMZ exposure: TLS on 443, Settings → Certificates (admin) issues Let's Encrypt via lego TLS-ALPN-01 or uploads PEMs, Settings → Public reachability (admin) sets `webrtcAdditionalHosts` to the public FQDN and/or NAT IP, single UDP 8189 rule + ICE-TCP fallback; MediaMTX API + status daemon already loopback-bound (`nexvue-mediamtx-api.php` / `nexvue-status.php`). Remaining: Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
+| 3 | DMZ exposure: TLS on 443, Settings → Certificates (admin) issues Let's Encrypt via lego TLS-ALPN-01 or uploads PEMs, Settings → Public reachability (admin) sets `webrtcAdditionalHosts` to the public FQDN and/or NAT IP, single UDP 8189 rule + ICE-TCP fallback; Settings → Cloudflare TURN (admin, optional) mints client ICE servers from `auth.db` for viewers who cannot reach 8189; MediaMTX API + status daemon already loopback-bound (`nexvue-mediamtx-api.php` / `nexvue-status.php`). Remaining: Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
 | 4 | **First slice landed.** Cloud portal (`web-portal/`, `sudo ./setup.sh --portal` on a separate box) — multi-tenant catalog + identity front door. Portal becomes the viewer-JWT issuer for an adopted station via a merged JWKS on the edge (`nexvue-jwks.php`), so MediaMTX config never changes and a portal outage never breaks local login/share links/publish. Enrollment + heartbeat are edge-initiated outbound only. See CLAUDE.md's Phase 4 entry for the full design. Remaining: fleet health dashboards, cross-site Multiview, Entra ID OIDC. |
 
 ## Cloud portal (Phase 4)
@@ -1416,7 +1432,9 @@ exactly as before if the portal ever goes down — local admin login, local
 share links, and the encoder's own publish credential are untouched by
 adoption. Portal viewers browse `/catalog` and watch via `/watch`, which
 connects **directly** to the edge's own WHEP endpoint with a portal-minted,
-90-second-TTL JWT — video never transits the portal.
+90-second-TTL JWT — video never transits the portal. When the edge has
+Cloudflare TURN on, the heartbeat caches `ice_servers` on the portal so
+`/watch` can use the same relay without a portal-to-edge call.
 
 The repo is split accordingly: `web-node/` is the edge's own web UI (moved
 from repo root, deployed layout on the box unchanged), `web-portal/` is the

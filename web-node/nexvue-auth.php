@@ -3,7 +3,7 @@
  * nexvue-auth.php — JSON API for NexVUE local auth + share links.
  *
  * Public: login, logout, me, forgot, reset, share_redeem
- * Authed: whep_jwt, change_password
+ * Authed: whep_jwt (JWT + optional Cloudflare ice_servers), change_password
  * Admin: users_*, user_reset_link, users_export/import, shares_export/import
  * Admin + sharer: shares_list, share_create, share_revoke, share_delete,
  *   share_email (sharer: own only). Admin: share_update (name/channels/expiry;
@@ -260,10 +260,13 @@ try {
         auth_session_release();
         auth_ensure_keys();
         $jwt = auth_mint_viewer_jwt($sub, [$base]);
+        $turn = auth_turn_ice_servers_for_viewer();
         auth_api_ok([
             'jwt' => $jwt,
             'expires_in' => NEXVUE_AUTH_JWT_TTL_S,
             'path' => $path,
+            'ice_servers' => $turn['ice_servers'],
+            'turn' => $turn['enabled'] && $turn['ice_servers'] !== [],
         ]);
     }
 

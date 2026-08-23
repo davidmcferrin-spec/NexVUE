@@ -92,7 +92,8 @@
       return;
     }
 
-    pc = new RTCPeerConnection();
+    const iceServers = NexVuePortalWhep.iceServersFrom(jwtResp);
+    pc = new RTCPeerConnection(iceServers.length ? { iceServers } : {});
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
     pc.ontrack = function (ev) {
@@ -112,17 +113,7 @@
       const offer = await pc.createOffer();
       const prepared = await NexVuePortalWhep.prepareWhepOffer(offer);
       await pc.setLocalDescription({ type: "offer", sdp: prepared.sdp });
-      await new Promise(function (resolve) {
-        if (pc.iceGatheringState === "complete") return resolve();
-        const check = function () {
-          if (pc.iceGatheringState === "complete") {
-            pc.removeEventListener("icegatheringstatechange", check);
-            resolve();
-          }
-        };
-        pc.addEventListener("icegatheringstatechange", check);
-        setTimeout(resolve, 2000);
-      });
+      await NexVuePortalWhep.waitIceGathering(pc, iceServers.length ? 12000 : 2000);
       const url = jwtResp.whep_url + "?jwt=" + encodeURIComponent(jwtResp.jwt);
       const res = await fetch(url, {
         method: "POST",

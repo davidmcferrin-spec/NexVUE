@@ -54,6 +54,7 @@ class TestTheaterContracts(unittest.TestCase):
         self.assertIn('id="theater"', html)
         self.assertIn('id="theater-exit"', html)
         self.assertIn("html.theater .videowrap", html)
+        self.assertIn("html.theater.player-idle .bar:not(.controls)", html)
         self.assertIn('id="pip"', html)
         self.assertIn("togglePip", html)
         self.assertIn("enterpictureinpicture", html)

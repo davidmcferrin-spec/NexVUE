@@ -226,6 +226,92 @@ catch (Throwable $e) { echo json_encode(['error'=>$e->getMessage()]); }
         self.assertEqual(data["hostname"], "block.example.com")
         self.assertEqual(data["ip"], "203.0.113.9")
 
+    def test_extract_ipv4_trace_and_bare(self) -> None:
+        data = self._php(
+            "echo json_encode(["
+            "network_extract_ipv4(\"fl=x\\nip=203.0.113.40\\nts=1\\n\"),"
+            "network_extract_ipv4(\"198.51.100.7\\n\"),"
+            "network_extract_ipv4(\"not an ip\")"
+            "]);"
+        )
+        self.assertEqual(data, ["203.0.113.40", "198.51.100.7", ""])
+
+    def test_rfc1918(self) -> None:
+        data = self._php(
+            "echo json_encode(["
+            "network_is_rfc1918('10.1.2.3'),"
+            "network_is_rfc1918('192.168.1.1'),"
+            "network_is_rfc1918('172.16.0.1'),"
+            "network_is_rfc1918('203.0.113.40')"
+            "]);"
+        )
+        self.assertEqual(data, [True, True, True, False])
+
+    def test_probe_happy_path(self) -> None:
+        dns = json.dumps({"nexvue.example.com": ["203.0.113.40"]})
+        tcp = json.dumps({
+            "nexvue.example.com:443": True,
+            "nexvue.example.com:8889": True,
+        })
+        data = self._php(
+            f"""
+putenv('NEXVUE_NETWORK_TEST_DNS_STUB={dns}');
+putenv('NEXVUE_NETWORK_TEST_WAN_STUB=203.0.113.40');
+putenv('NEXVUE_NETWORK_TEST_TCP_STUB={tcp}');
+echo json_encode(network_probe('nexvue.example.com', '203.0.113.40'));
+"""
+        )
+        self.assertEqual(data["status"], "ok")
+        ids = {c["id"]: c for c in data["checks"]}
+        self.assertEqual(ids["dns"]["status"], "ok")
+        self.assertIn("matches Public IP", ids["dns"]["detail"])
+        self.assertEqual(ids["wan"]["status"], "ok")
+        self.assertEqual(ids["tcp_443"]["status"], "ok")
+        self.assertEqual(ids["tcp_8889"]["status"], "ok")
+
+    def test_probe_dns_fail(self) -> None:
+        data = self._php(
+            """
+putenv('NEXVUE_NETWORK_TEST_DNS_STUB={}');
+putenv('NEXVUE_NETWORK_TEST_WAN_STUB=203.0.113.40');
+putenv('NEXVUE_NETWORK_TEST_TCP_STUB={}');
+echo json_encode(network_probe('missing.example.com', ''));
+"""
+        )
+        self.assertEqual(data["status"], "err")
+        self.assertEqual(data["checks"][0]["id"], "dns")
+        self.assertEqual(data["checks"][0]["status"], "err")
+
+    def test_probe_wan_mismatch_and_tcp_warn(self) -> None:
+        dns = json.dumps({"nexvue.example.com": ["203.0.113.40"]})
+        data = self._php(
+            f"""
+putenv('NEXVUE_NETWORK_TEST_DNS_STUB={dns}');
+putenv('NEXVUE_NETWORK_TEST_WAN_STUB=198.51.100.1');
+putenv('NEXVUE_NETWORK_TEST_TCP_STUB={{}}');
+echo json_encode(network_probe('nexvue.example.com', '203.0.113.40'));
+"""
+        )
+        self.assertEqual(data["status"], "warn")
+        ids = {c["id"]: c for c in data["checks"]}
+        self.assertEqual(ids["wan"]["status"], "warn")
+        self.assertEqual(ids["tcp_443"]["status"], "warn")
+        self.assertIn("hairpin", ids["tcp_443"]["detail"])
+
+    def test_probe_rfc1918_ip_ok(self) -> None:
+        data = self._php(
+            """
+putenv('NEXVUE_NETWORK_TEST_DNS_STUB={}');
+putenv('NEXVUE_NETWORK_TEST_WAN_STUB=203.0.113.9');
+putenv('NEXVUE_NETWORK_TEST_TCP_STUB={"10.98.41.152:443":true,"10.98.41.152:8889":true}');
+echo json_encode(network_probe('', '10.98.41.152'));
+"""
+        )
+        self.assertEqual(data["status"], "ok")
+        ids = {c["id"]: c for c in data["checks"]}
+        self.assertEqual(ids["dns"]["status"], "skip")
+        self.assertIn("private / NAT", ids["wan"]["detail"])
+
 
 class TestWiring(unittest.TestCase):
     def test_setup_lists_helpers(self) -> None:
@@ -240,14 +326,17 @@ class TestWiring(unittest.TestCase):
 
     def test_ops_php_admin_only(self) -> None:
         text = OPS_PHP.read_text(encoding="utf-8")
-        self.assertIn("'network_get', 'network_put'", text)
+        self.assertIn("'network_get', 'network_put', 'network_test'", text)
         self.assertIn("function network_read_settings()", text)
+        self.assertIn("function network_probe(", text)
 
     def test_settings_panel_admin_gated(self) -> None:
         text = CHANNELS.read_text(encoding="utf-8")
         self.assertIn('id="network-panel"', text)
         self.assertIn('me.role === "admin"', text)
         self.assertIn("network_put", text)
+        self.assertIn("network_test", text)
+        self.assertIn('id="network-test"', text)
         self.assertIn("Let's Encrypt certificate name", text)
         self.assertTrue(ICE_PY.is_file())
 

@@ -149,10 +149,43 @@
     return { sdp: munged, multiopus: munged !== base };
   }
 
+  function iceServersFrom(sess) {
+    if (!sess || !Array.isArray(sess.ice_servers)) return [];
+    return sess.ice_servers;
+  }
+
+  function waitIceGathering(pc, timeoutMs) {
+    const ms = Number.isFinite(timeoutMs) && timeoutMs >= 0 ? timeoutMs : 2000;
+    return new Promise((resolve) => {
+      if (!pc || pc.iceGatheringState === "complete") {
+        resolve();
+        return;
+      }
+      let done = false;
+      function finish() {
+        if (done) return;
+        done = true;
+        try {
+          pc.removeEventListener("icegatheringstatechange", check);
+        } catch (e) {
+          /* ignore */
+        }
+        resolve();
+      }
+      function check() {
+        if (pc.iceGatheringState === "complete") finish();
+      }
+      pc.addEventListener("icegatheringstatechange", check);
+      setTimeout(finish, ms);
+    });
+  }
+
   global.NexVuePortalWhep = {
     MULTICHANNEL_OPUS_FMTP,
     mungeWhepOfferSdp,
     supportsMultiopus,
     prepareWhepOffer,
+    iceServersFrom,
+    waitIceGathering,
   };
 })(typeof window !== "undefined" ? window : globalThis);

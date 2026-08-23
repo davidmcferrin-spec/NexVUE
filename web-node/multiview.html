@@ -901,7 +901,21 @@
     setPaneStatus(pane, `connecting…`);
     emptyHidden(pane, true);
 
-    const pc = new RTCPeerConnection();
+    let sess;
+    try {
+      sess = await NexVueAuth.whepJwt(path);
+    } catch (err) {
+      const raw = err && err.message ? err.message : String(err);
+      const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
+      setPaneStatus(pane, "error: " + msg, "bad");
+      if (!pane.intentionalClose && pane.base) {
+        maybeReconnectPane(pane, "error: " + msg);
+      }
+      updateGlobalState();
+      return;
+    }
+    const iceServers = NexVueAuth.iceServersFrom(sess);
+    const pc = new RTCPeerConnection(iceServers.length ? { iceServers } : {});
     pane.pc = pc;
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
@@ -936,23 +950,12 @@
     };
 
     try {
-      const jwt = await NexVueAuth.whepJwt(path);
-      const url = NexVueAuth.whepUrl(path, jwt);
+      const url = NexVueAuth.whepUrl(path, sess.jwt);
       const offer = await pc.createOffer();
       // Chrome won't advertise multiopus; MediaMTX rejects >2ch Opus without it.
       const prepared = await NexVueVu.prepareWhepOffer(offer);
       await pc.setLocalDescription({ type: "offer", sdp: prepared.sdp });
-      await new Promise(resolve => {
-        if (pc.iceGatheringState === "complete") return resolve();
-        const check = () => {
-          if (pc.iceGatheringState === "complete") {
-            pc.removeEventListener("icegatheringstatechange", check);
-            resolve();
-          }
-        };
-        pc.addEventListener("icegatheringstatechange", check);
-        setTimeout(resolve, 2000);
-      });
+      await NexVueAuth.waitIceGathering(pc, iceServers.length ? 12000 : 2000);
       if (pane.pc !== pc) return;  // superseded
 
       const res = await fetch(url, {
