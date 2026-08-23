@@ -367,8 +367,10 @@ Then from a LAN machine:
   Click the **NexVUE** brand for a QR code of the page URL (phone scan).
   **CC** toggles a selectable closed-caption overlay (CEA-608/CC1 side
   channel — not burned into video; preference in `localStorage`).
-  **▢ Fill window** hides nav, control bars, and the collapsed metrics
-  drawer so the video occupies the browser window (not OS fullscreen;
+  Player tools sit in clustered groups (quality, mute/vol, CC/VU/Safe/Scope,
+  **Orient ▾** for mirror/flip/rotate, then icon-only Fill / Fullscreen / PiP
+  pinned right). **▢ Fill window** hides nav, control bars, and the collapsed
+  metrics drawer so the video occupies the browser window (not OS fullscreen;
   `localStorage.nexvue-theater`, Esc or **✕ Exit fill** to leave;
   double-click the video also toggles it). **⧉ PiP** floats the Player
   `<video>` over other desktop windows (browser Picture-in-Picture; audio
@@ -379,11 +381,12 @@ Then from a LAN machine:
   toggle; click a pane for audio (one unmuted at a time) and to focus the
   **Session metrics** bottom drawer on that pane. Same NexVUE brand → QR
   share. Global **CC** toggle matches the player preference key.
-  **▢ Fill window** is the same chrome-hide as fullscreen but stays inside
-  the tab (shared `nexvue-theater` pref with Player). **⛶ Fullscreen**
-  hides nav, control bar, pane borders, and per-pane channel selectors for
-  a frameless wall; the session-metrics drawer stays hidden unless it was
-  already open (Esc / button to exit).
+  Multiview uses the same clustered tool bar (layout, quality, overlays,
+  mute/vol, icon-only Fill / Fullscreen). **▢ Fill window** is the same
+  chrome-hide as fullscreen but stays inside the tab (shared `nexvue-theater`
+  pref with Player). **⛶ Fullscreen** hides nav, control bar, pane borders,
+  and per-pane channel selectors for a frameless wall; the session-metrics
+  drawer stays hidden unless it was already open (Esc / button to exit).
 - **Usage metrics:** top nav → Metrics (`/metrics` + `/api/metrics`
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
@@ -409,10 +412,12 @@ Then from a LAN machine:
   reachability** (public DNS hostname + NAT/public IPv4 — writes
   `NEXVUE_PUBLIC_HOSTNAME` / `NEXVUE_PUBLIC_IP` and MediaMTX
   `webrtcAdditionalHosts`, then restarts `mediamtx` so off-LAN viewers get
-  media; operators do not see this panel); **Certificates** (Let's Encrypt
+  media; the hostname is also the Let's Encrypt certificate name;
+  operators do not see this panel); **Certificates** (Let's Encrypt
   via pinned `lego` TLS-ALPN-01 on `:443`, or upload a PEM pair — both write
   `/etc/nexvue/tls/{fullchain,privkey}.pem` and reload Apache + MediaMTX;
-  Issue/Upload are admin-only, operators can read expiry); plus channel list
+  Issue uses Public hostname, no separate DNS field; the panel is
+  admin-only, same as Public reachability); plus channel list
   (LO column: yes/no; **Restart all encoders** for enabled slots);
   click a row (or use Bulk edit) to open a modal editor for
   `/etc/nexvue/channels/<N>.env`. Editor shows only live encode/player knobs
@@ -700,9 +705,11 @@ dots stay gray and **SDI input** shows `status unreachable`, check that
    - **Issue / Renew** runs pinned `lego` (`v5.3.1`) with **TLS-ALPN-01 on
      :443 only** (these stations cannot use port 80). Apache is stopped for
      the challenge window and started again even if lego fails; WHEP on
-     `:8889` stays up. Requires a public DNS name pointing at the box, an
-     email, and accepting the Let's Encrypt subscriber agreement. Writes
-     `NEXVUE_TLS_EMAIL` / `NEXVUE_TLS_DOMAIN`. `nexvue-tls-renew.timer`
+     `:8889` stays up. Requires the Public hostname (Settings → Public
+     reachability) already pointing at the box, an email for Let's Encrypt
+     notices, and accepting the subscriber agreement. Writes
+     `NEXVUE_TLS_EMAIL` and mirrors the hostname onto `NEXVUE_TLS_DOMAIN`.
+     `nexvue-tls-renew.timer`
      re-runs the same path when a Lego cert is within 30 days of expiry
      (no-op for self-signed or uploaded certs).
    - **Upload your own** accepts a PEM full chain + matching key, validates
@@ -1038,7 +1045,8 @@ expired; JWT auth is the lasting gate.
   does not extend to other ports). Top nav brand **NexVUE** (click for
   page-URL QR) /
   Player / Multiview / Metrics / Services / Settings. Player and Multiview
-  session metrics sit in a collapsed bottom drawer (`Session metrics`);
+  session metrics sit in a collapsed bottom drawer (`Session metrics`,
+  in-flow so iOS Chrome's toolbar does not detach it);
   Multiview focuses the audio-active pane. Hover a tile ~2s for
   an explainer. **VU meters** (right edge) follow channel `AUDIO_LAYOUT`
   (stereo / 5.1 / stereo+SAP / 5.1+SAP). Toolbar: **Main**/**SAP**,
@@ -1114,18 +1122,19 @@ expired; JWT auth is the lasting gate.
   `HTMLVideoElement.requestPictureInPicture()` — one floating video, audio
   remains on the tab, captions/VU stay on the page overlay (not in the PiP
   window). Multiview has no PiP (browsers allow one PiP video at a time).
-- **Mirror/flip/rotate persist through fullscreen.** Applied as an inline
-  `transform` on the video (not a CSS class), and the dedicated "⛶
-  Fullscreen" button fullscreens the wrapper `<div>`, not the `<video>`
-  element itself — fullscreening the video directly (e.g. via its native
-  player-bar control) lets the browser override the transform. Use the ⛶
-  button, not the native control, if mirror/flip/rotate need to survive
-  fullscreen. Player **⟲ 90° / 90° ⟳** rotate the view in 90° steps (CW from
-  upright) for portrait sources or a tilted monitor
-  (`localStorage.nexvue-video-rotate`). 90°/270° swap the video layout box
-  so the frame still fits. Multiview has no rotate controls. Native PiP
-  typically shows the untransformed decode (CSS mirror/flip/rotate stay on
-  the in-tab video).
+- **Mirror/flip/rotate persist through fullscreen.** Player **Orient ▾**
+  holds Mirror / Flip / 90° / Reset (parent stays lit while any transform
+  is on). Applied as an inline `transform` on the video (not a CSS class),
+  and the dedicated "⛶ Fullscreen" button fullscreens the wrapper `<div>`,
+  not the `<video>` element itself — fullscreening the video directly
+  (e.g. via its native player-bar control) lets the browser override the
+  transform. Use the ⛶ button, not the native control, if
+  mirror/flip/rotate need to survive fullscreen. **⟲ 90° / 90° ⟳** rotate
+  the view in 90° steps (CW from upright) for portrait sources or a tilted
+  monitor (`localStorage.nexvue-video-rotate`). 90°/270° swap the video
+  layout box so the frame still fits. Multiview has no rotate controls.
+  Native PiP typically shows the untransformed decode (CSS
+  mirror/flip/rotate stay on the in-tab video).
 - **Closed captions are a side channel**, not MediaMTX tracks. Encode writes
   `/run/nexvue/captions/<path>.json`; Apache serves SSE via
   `nexvue-captions.php`. HI/LO reconnect keeps the same channel subscription.

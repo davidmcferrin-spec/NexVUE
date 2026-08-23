@@ -202,25 +202,94 @@ class TestCertPair(unittest.TestCase):
             for k in env:
                 os.environ.pop(k, None)
 
+
+class TestCliConfig(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.td = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _env(self) -> dict[str, str]:
+        tls = self.td / "tls"
+        state = self.td / "state"
+        envf = self.td / "nexvue.env"
+        tls.mkdir()
+        state.mkdir()
+        envf.write_text("", encoding="utf-8")
+        return {
+            "NEXVUE_TLS_DIR": str(tls),
+            "NEXVUE_TLS_STATE_DIR": str(state),
+            "NEXVUE_STATION_ENV": str(envf),
+            "NEXVUE_LEGO": str(self.td / "missing-lego"),
+        }
+
     def test_cli_config_and_status(self) -> None:
         env = self._env()
+        (self.td / "nexvue.env").write_text(
+            "NEXVUE_PUBLIC_HOSTNAME=edge.example.com\n",
+            encoding="utf-8",
+        )
         r = _run_py(
             ["config"],
             env,
-            json.dumps({"email": "ops@example.com", "domain": "edge.example.com"}),
+            json.dumps({"email": "ops@example.com"}),
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         data = json.loads(r.stdout)
         self.assertTrue(data["ok"])
         text = (self.td / "nexvue.env").read_text(encoding="utf-8")
         self.assertIn("NEXVUE_TLS_EMAIL=ops@example.com", text)
+        self.assertIn("NEXVUE_TLS_DOMAIN=edge.example.com", text)
         st = _run_py(["status"], env)
         self.assertEqual(st.returncode, 0, st.stderr)
         status = json.loads(st.stdout)
         self.assertEqual(status["email"], "ops@example.com")
         self.assertEqual(status["resolved_domain"], "edge.example.com")
+        self.assertEqual(status["public_hostname"], "edge.example.com")
         self.assertEqual(status["challenge"], "tls-alpn-01")
         self.assertFalse(status["present"])
+
+    def test_cli_config_uses_public_hostname_not_body_domain(self) -> None:
+        env = self._env()
+        (self.td / "nexvue.env").write_text(
+            "NEXVUE_PUBLIC_HOSTNAME=nexvue.example.com\nNEXVUE_TLS_DOMAIN=old.example.com\n",
+            encoding="utf-8",
+        )
+        r = _run_py(
+            ["config"],
+            env,
+            json.dumps({"email": "ops@example.com", "domain": "ignored.example.com"}),
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = (self.td / "nexvue.env").read_text(encoding="utf-8")
+        self.assertIn("NEXVUE_TLS_DOMAIN=nexvue.example.com", text)
+        self.assertNotIn("ignored.example.com", text)
+        self.assertNotIn("old.example.com", text)
+
+    def test_cli_config_fails_without_hostname(self) -> None:
+        env = self._env()
+        r = _run_py(
+            ["config"],
+            env,
+            json.dumps({"email": "ops@example.com"}),
+        )
+        self.assertNotEqual(r.returncode, 0)
+        data = json.loads(r.stdout)
+        self.assertFalse(data.get("ok", True))
+        self.assertIn("Public hostname", data.get("error", ""))
+
+    def test_cli_config_legacy_body_domain(self) -> None:
+        env = self._env()
+        r = _run_py(
+            ["config"],
+            env,
+            json.dumps({"email": "ops@example.com", "domain": "legacy.example.com"}),
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = (self.td / "nexvue.env").read_text(encoding="utf-8")
+        self.assertIn("NEXVUE_TLS_DOMAIN=legacy.example.com", text)
 
 
 class TestShouldRenewLogic(unittest.TestCase):
@@ -245,6 +314,22 @@ class TestShouldRenewLogic(unittest.TestCase):
         cfg = {"email": "a@b.example", "domain": "", "public_hostname": "nexvue.example.com"}
         renew, _reason = self.mod.should_renew(info, cfg)
         self.assertTrue(renew)
+
+    def test_falls_back_to_legacy_tls_domain(self) -> None:
+        info = {"present": True, "source": "lego", "days_left": 5}
+        cfg = {"email": "a@b.example", "domain": "legacy.example.com", "public_hostname": ""}
+        renew, _reason = self.mod.should_renew(info, cfg)
+        self.assertTrue(renew)
+
+    def test_public_hostname_wins_over_stale_tls_domain(self) -> None:
+        self.assertEqual(
+            self.mod.resolve_domain({
+                "email": "a@b.example",
+                "domain": "old.example.com",
+                "public_hostname": "nexvue.example.com",
+            }),
+            "nexvue.example.com",
+        )
 
 
 class TestShellRenewSkip(unittest.TestCase):
@@ -315,8 +400,7 @@ class TestWiring(unittest.TestCase):
         text = OPS_PHP.read_text(encoding="utf-8")
         start = text.index("$adminOnly = [")
         block = text[start:text.index("];", start)]
-        self.assertIn("'tls_issue', 'tls_upload'", block)
-        self.assertNotIn("tls_status", block)
+        self.assertIn("'tls_status', 'tls_issue', 'tls_upload'", block)
         self.assertIn("if ($action === 'tls_status')", text)
 
     def test_settings_panel(self) -> None:
@@ -325,6 +409,10 @@ class TestWiring(unittest.TestCase):
         self.assertIn("tls_issue", text)
         self.assertIn("TLS-ALPN-01", text)
         self.assertIn("Let's Encrypt Subscriber Agreement", text)
+        self.assertNotIn('id="tls-domain"', text)
+        self.assertIn('id="tls-hostname"', text)
+        self.assertIn("Set a Public hostname under Public reachability first", text)
+        self.assertIn("admin-only, same gate as Public reachability", text)
 
     def test_wrapper_mentions_443_only(self) -> None:
         text = TLS_SH.read_text(encoding="utf-8")

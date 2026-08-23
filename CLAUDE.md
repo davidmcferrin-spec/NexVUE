@@ -281,7 +281,7 @@ this box can't get additional ports opened.
   self-signed pair if missing; never overwrites existing), points Apache
   HTTPS + MediaMTX WHEP/API at those paths (`root:ssl-cert`, key 640),
   and installs pinned `lego` v5.3.1 plus `nexvue-tls-renew.timer`.
-  Settings → Certificates (admin Issue/Upload; operators can read status)
+  Settings → Certificates (admin-only, same as Public reachability)
   either runs `lego run --tls` (TLS-ALPN-01 on `:443` only — these
   stations cannot use port 80; Apache is stopped for the challenge and
   always started again) or installs an uploaded PEM pair via
@@ -332,18 +332,22 @@ this box can't get additional ports opened.
   nav Light/Dark toggle. Metrics Chart.js colors follow the active theme.
   Top-nav **NexVUE** brand opens a QR of the page URL; optional station logo
   (Settings → Branding) sits to its right when uploaded
-  (`/var/lib/nexvue/branding`, served by `nexvue-logo.php`). Player and
+  (`/var/lib/nexvue/branding`, served by `nexvue-logo.php`).   Player and
   Multiview session metric tiles live in a collapsed bottom drawer
-  (Multiview shows the audio-focused pane).
+  (in-flow flex row, not `position:fixed` — iOS Chrome toolbar otherwise
+  detaches it; Multiview shows the audio-focused pane).
   Top nav: Player / Multiview / Metrics / Services / Settings / Users.
   Login at `/login` (session cookie); share links use `/player?t=` /
   `/multiview?t=` or `/s/<token>` (Multiview shares ≤4 channels, auto-tune
   panes; Fill window + Fullscreen near-frameless; Player PiP; admin edit name/channels/expiry; delete
   after revoke/expiry; purge 7d post-expiry). Roles: admin
-  (Users+Services+Settings including Public reachability + Certificates issue/upload+Metrics+all shares), operator (Settings including certificate status+Metrics),
+  (Users+Services+Settings including Public reachability + Certificates+Metrics+all shares), operator (Settings+Metrics; no Public reachability or Certificates),
   sharer / UI **Viewer+Share** (watch + own share links via Player/Multiview
   Share), viewer (watch). Per-user channel ACL on Users (`users.channels`;
   null = all). MediaMTX JWT via local JWKS; encoders use `NEXVUE_PUBLISH_JWT`.
+  Player/Multiview tool bars are clustered (quality, listen, overlays,
+  window icons pinned right). Player **Orient ▾** is a popover for
+  mirror/flip/rotate + Reset (parent `.active` while any transform is on).
   Player/Multiview **▢ Fill window** (`html.theater`,
   `localStorage.nexvue-theater`) hides nav/bars so video fills the tab;
   Player **⧉ PiP** is `requestPictureInPicture` (audio stays on the tab).
@@ -381,9 +385,12 @@ this box can't get additional ports opened.
   `NEXVUE_PUBLIC_IP` in `/etc/nexvue/nexvue.env` and patches MediaMTX
   `webrtcAdditionalHosts` (drops deprecated `webrtcICEHostNAT1To1IPs`) via
   `nexvue-ops-network-write.sh`, then restarts `mediamtx` only. Blank = LAN-only.
-  Settings **Certificates** (admin Issue/Upload; operators see status) uses
+  Public hostname is also the Let's Encrypt DNS name (Certificates has no
+  separate field; `NEXVUE_TLS_DOMAIN` is a write-through alias).
+  Settings **Certificates** (admin only — hidden from operators) uses
   `nexvue-ops-tls.sh` + pinned `lego` TLS-ALPN-01 on `:443` (Apache stopped
   only for that window) or a validated PEM upload onto `/etc/nexvue/tls/`.
+  Issue / renew read Public hostname.
  Services shows systemd enable state (`nexvue-ops-status.sh` prints
  `<is-active> <is-enabled>`) plus Enable/Disable (`set_enabled`, --now) and
  Start/Stop (`set_running`, runtime-only) toggles for `nexvue-encode@0-7`

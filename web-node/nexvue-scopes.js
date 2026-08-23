@@ -12,10 +12,17 @@
   "use strict";
 
   const PREF_ON = "nexvue-scopes-on";
-  const SAMPLE_W = 160;
-  const SAMPLE_H = 90;
   const WFM_W = 220;
   const WFM_H = 140;
+  const PLOT_L = 22;
+  const PLOT_R = 4;
+  const PLOT_T = 8;
+  const PLOT_B = 12;
+  const PLOT_W = WFM_W - PLOT_L - PLOT_R;
+  const PLOT_H = WFM_H - PLOT_T - PLOT_B;
+  // 1:1 with the WFM plot so every X column gets samples (no barcode gaps).
+  const SAMPLE_W = PLOT_W;
+  const SAMPLE_H = 90;
   const VEC_SIZE = 140;
   const FADE = 0.22;
 
@@ -110,10 +117,10 @@
     ctx.lineWidth = 1;
     ctx.font = "9px ui-monospace, Cascadia Mono, Consolas, monospace";
     [0, 50, 100].forEach(function (ire) {
-      const y = WFM_H - 12 - (ire / 100) * (WFM_H - 20);
+      const y = PLOT_T + PLOT_H - (ire / 100) * PLOT_H;
       ctx.beginPath();
-      ctx.moveTo(22, y);
-      ctx.lineTo(WFM_W - 4, y);
+      ctx.moveTo(PLOT_L, y);
+      ctx.lineTo(WFM_W - PLOT_R, y);
       ctx.stroke();
       ctx.fillText(String(ire), 2, y + 3);
     });
@@ -184,6 +191,14 @@
 
     const wfmCtx = wfm.getContext("2d", { alpha: false });
     const vecCtx = vec.getContext("2d", { alpha: false });
+    const wfmTrace = document.createElement("canvas");
+    wfmTrace.width = WFM_W;
+    wfmTrace.height = WFM_H;
+    const wfmTraceCtx = wfmTrace.getContext("2d", { alpha: false });
+    const vecTrace = document.createElement("canvas");
+    vecTrace.width = VEC_SIZE;
+    vecTrace.height = VEC_SIZE;
+    const vecTraceCtx = vecTrace.getContext("2d", { alpha: false });
     const sample = document.createElement("canvas");
     sample.width = SAMPLE_W;
     sample.height = SAMPLE_H;
@@ -194,13 +209,27 @@
     let handle = 0;
     let usingRaf = false;
 
-    function clearScopes() {
+    function clearTraces() {
+      wfmTraceCtx.fillStyle = "#0b1014";
+      wfmTraceCtx.fillRect(0, 0, WFM_W, WFM_H);
+      vecTraceCtx.fillStyle = "#0b1014";
+      vecTraceCtx.fillRect(0, 0, VEC_SIZE, VEC_SIZE);
+    }
+
+    function paintDisplay() {
       wfmCtx.fillStyle = "#0b1014";
       wfmCtx.fillRect(0, 0, WFM_W, WFM_H);
+      wfmCtx.drawImage(wfmTrace, 0, 0);
       drawWfmGraticule(wfmCtx);
       vecCtx.fillStyle = "#0b1014";
       vecCtx.fillRect(0, 0, VEC_SIZE, VEC_SIZE);
+      vecCtx.drawImage(vecTrace, 0, 0);
       drawVecGraticule(vecCtx, targets);
+    }
+
+    function clearScopes() {
+      clearTraces();
+      paintDisplay();
     }
 
     function sampleFrame() {
@@ -217,40 +246,34 @@
         return;
       }
 
-      wfmCtx.fillStyle = "rgba(11,16,20," + FADE + ")";
-      wfmCtx.fillRect(0, 0, WFM_W, WFM_H);
-      drawWfmGraticule(wfmCtx);
-      vecCtx.fillStyle = "rgba(11,16,20," + FADE + ")";
-      vecCtx.fillRect(0, 0, VEC_SIZE, VEC_SIZE);
-      drawVecGraticule(vecCtx, targets);
+      wfmTraceCtx.fillStyle = "rgba(11,16,20," + FADE + ")";
+      wfmTraceCtx.fillRect(0, 0, WFM_W, WFM_H);
+      vecTraceCtx.fillStyle = "rgba(11,16,20," + FADE + ")";
+      vecTraceCtx.fillRect(0, 0, VEC_SIZE, VEC_SIZE);
 
-      const plotL = 22;
-      const plotT = 8;
-      const plotW = WFM_W - plotL - 4;
-      const plotH = WFM_H - 20;
       const vcx = VEC_SIZE / 2;
       const vcy = VEC_SIZE / 2;
       const vr = VEC_SIZE / 2 - 10;
 
-      const wfmImg = wfmCtx.getImageData(0, 0, WFM_W, WFM_H);
+      const wfmImg = wfmTraceCtx.getImageData(0, 0, WFM_W, WFM_H);
       const wfmD = wfmImg.data;
-      const vecImg = vecCtx.getImageData(0, 0, VEC_SIZE, VEC_SIZE);
+      const vecImg = vecTraceCtx.getImageData(0, 0, VEC_SIZE, VEC_SIZE);
       const vecD = vecImg.data;
 
-      for (let i = 0; i < data.length; i += 16) {
+      for (let i = 0; i < data.length; i += 4) {
         const r = data[i] / 255;
         const g = data[i + 1] / 255;
         const b = data[i + 2] / 255;
         const ycc = rgbToYcbcr(r, g, b);
         const px = (i / 4) % SAMPLE_W;
-        const x = plotL + Math.floor((px / SAMPLE_W) * plotW);
-        const ire = Math.max(0, Math.min(109, yToIre(ycc.y)));
-        const y = plotT + plotH - Math.floor((Math.min(ire, 100) / 100) * plotH);
-        if (x >= 0 && x < WFM_W && y >= 0 && y < WFM_H) {
+        const x = PLOT_L + px;
+        const ire = Math.max(0, Math.min(100, yToIre(ycc.y)));
+        const y = PLOT_T + PLOT_H - 1 - Math.floor((ire / 100) * (PLOT_H - 1));
+        if (x >= PLOT_L && x < PLOT_L + PLOT_W && y >= PLOT_T && y < PLOT_T + PLOT_H) {
           const o = (y * WFM_W + x) * 4;
-          wfmD[o] = Math.min(255, wfmD[o] + 70);
-          wfmD[o + 1] = Math.min(255, wfmD[o + 1] + 200);
-          wfmD[o + 2] = Math.min(255, wfmD[o + 2] + 120);
+          wfmD[o] = Math.min(255, wfmD[o] + 50);
+          wfmD[o + 1] = Math.min(255, wfmD[o + 1] + 160);
+          wfmD[o + 2] = Math.min(255, wfmD[o + 2] + 95);
           wfmD[o + 3] = 255;
         }
         const vx = Math.round(vcx + ycc.cb * 2 * vr);
@@ -263,8 +286,9 @@
           vecD[o + 3] = 255;
         }
       }
-      wfmCtx.putImageData(wfmImg, 0, 0);
-      vecCtx.putImageData(vecImg, 0, 0);
+      wfmTraceCtx.putImageData(wfmImg, 0, 0);
+      vecTraceCtx.putImageData(vecImg, 0, 0);
+      paintDisplay();
     }
 
     function stopLoop() {
@@ -327,6 +351,8 @@
     PREF_ON,
     SAMPLE_W,
     SAMPLE_H,
+    PLOT_W,
+    PLOT_H,
     BAR75,
     rgbToYcbcr,
     yToIre,

@@ -3,7 +3,7 @@
 #
 # Usage:
 #   nexvue-ops-tls.sh status
-#   nexvue-ops-tls.sh issue    JSON stdin {email,domain,accept_tos}
+#   nexvue-ops-tls.sh issue    JSON stdin {email,accept_tos} (domain optional/legacy)
 #   nexvue-ops-tls.sh renew    timer: no-op unless a Lego cert is due
 #   nexvue-ops-tls.sh upload   JSON stdin {cert,key}
 #   nexvue-ops-tls.sh run      oneshot body (stop Apache, lego --tls, start Apache)
@@ -260,12 +260,12 @@ open(p, "w", encoding="utf-8").write(json.dumps(d) + "\n")
   trap cleanup EXIT
 
   local domain email
-  domain="$(read_env_key NEXVUE_TLS_DOMAIN)"
+  domain="$(read_env_key NEXVUE_PUBLIC_HOSTNAME)"
   if [[ -z "$domain" ]]; then
-    domain="$(read_env_key NEXVUE_PUBLIC_HOSTNAME)"
+    domain="$(read_env_key NEXVUE_TLS_DOMAIN)"
   fi
   email="$(read_env_key NEXVUE_TLS_EMAIL)"
-  [[ -n "$domain" ]] || fail_json "Set a DNS name (Settings → Certificates or Public reachability)"
+  [[ -n "$domain" ]] || fail_json "Set a Public hostname (Settings → Public reachability)"
   [[ -n "$email" ]] || fail_json "Set an email for Let's Encrypt notices"
   [[ -x "$LEGO" || -f "$LEGO" ]] || fail_json "lego is not installed — re-run sudo ./setup.sh"
 

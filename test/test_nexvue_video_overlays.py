@@ -46,6 +46,9 @@ class TestOverlayContracts(unittest.TestCase):
         self.assertIn("BAR75", js)
         self.assertIn("requestVideoFrameCallback", js)
         self.assertIn("NexVueScopes", js)
+        self.assertIn("i += 4", js)
+        self.assertNotIn("i += 16", js)
+        self.assertIn("const SAMPLE_W = PLOT_W", js)
 
     def test_player_has_safe_and_scope_toggles(self) -> None:
         html = PLAYER.read_text(encoding="utf-8")

@@ -4,7 +4,7 @@
  *
  * Phase 2 local auth: session cookie required. Roles:
  *   admin — Services + Settings + kick + branding + support/update + public reachability + certificates
- *   operator — Settings + kick + branding + certificate status (not public hostname/IP, not issue/upload)
+ *   operator — Settings + kick + branding (not public hostname/IP, not certificates)
  *   any auth (user or share) — aliases, kick_check (Player/Multiview)
  *
  * Privileged work goes through allowlisted sudo wrappers only
@@ -23,8 +23,10 @@
  *
  * tls_status / tls_issue / tls_upload call nexvue-ops-tls.sh. Issue uses lego
  * TLS-ALPN-01 on :443 (Apache stops for the challenge; WHEP :8889 stays up).
- * Port 80 is never used. Upload installs PEMs to /etc/nexvue/tls and reloads
- * apache2 + mediamtx. Issue/upload are admin-only; operators may read status.
+ * The cert name is Settings → Public hostname (NEXVUE_PUBLIC_HOSTNAME);
+ * NEXVUE_TLS_DOMAIN is a write-through alias. Port 80 is never used. Upload
+ * installs PEMs to /etc/nexvue/tls and reloads apache2 + mediamtx.
+ * Status, issue, and upload are admin-only (panel hidden from operators).
  *
  * update_status / update_repo call nexvue-ops-update.sh (git fetch + hard-reset
  * to origin/NEXVUE_UPDATE_BRANCH + setup.sh). Admin-only — same gate as
@@ -827,7 +829,7 @@ function ops_require_auth(string $action): void {
         'services', 'journal', 'journal_clear', 'set_enabled', 'set_running',
         'support_bundle', 'update_status', 'update_repo',
         'network_get', 'network_put',
-        'tls_issue', 'tls_upload',
+        'tls_status', 'tls_issue', 'tls_upload',
     ];
     try {
         if ($hot) {

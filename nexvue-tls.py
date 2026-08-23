@@ -6,7 +6,10 @@ Used by nexvue-ops-tls.sh (Settings → Certificates). Stdlib + openssl CLI only
 
 Commands:
   status              JSON: installed cert + config + job (no private key)
-  config              stdin JSON {email, domain} → nexvue.env
+  config              stdin JSON {email, domain?} → nexvue.env
+                      Domain is NEXVUE_PUBLIC_HOSTNAME (legacy: body domain
+                      or existing NEXVUE_TLS_DOMAIN). Writes TLS_DOMAIN as
+                      a write-through alias of that name.
   validate            stdin JSON {cert, key} → inspect + match (no write)
   install             stdin JSON {cert, key, source} → atomic install
   deploy              copy LEGO_CERT_PATH / LEGO_CERT_KEY_PATH into /etc/nexvue/tls
@@ -257,11 +260,15 @@ def apply_env_patch(text: str, email: str, domain: str) -> str:
 
 
 def resolve_domain(cfg: dict[str, str] | None = None) -> str:
+    """Public hostname is the station DNS name; TLS_DOMAIN is a legacy alias."""
     cfg = cfg or read_env_map()
-    domain = sanitize_domain(cfg.get("domain") or "")
-    if domain:
-        return domain
-    return sanitize_domain(cfg.get("public_hostname") or "")
+    try:
+        hostname = sanitize_domain(cfg.get("public_hostname") or "")
+    except ValueError:
+        hostname = ""
+    if hostname:
+        return hostname
+    return sanitize_domain(cfg.get("domain") or "")
 
 
 def inspect_pem(cert_pem: bytes) -> dict:
@@ -626,11 +633,15 @@ def cmd_config(_args: argparse.Namespace) -> int:
         return fail("body must be a JSON object")
     try:
         email = sanitize_email(str(body.get("email", "")), required=True)
-        domain = sanitize_domain(str(body.get("domain", "")), required=False)
+        cfg = read_env_map()
+        domain = sanitize_domain(cfg.get("public_hostname") or "")
         if domain == "":
-            domain = sanitize_domain(read_env_map().get("public_hostname") or "", required=True)
-        else:
-            domain = sanitize_domain(domain, required=True)
+            domain = sanitize_domain(str(body.get("domain", "")))
+        if domain == "":
+            domain = sanitize_domain(cfg.get("domain") or "")
+        if domain == "":
+            raise ValueError("Set a Public hostname under Settings → Public reachability")
+        domain = sanitize_domain(domain, required=True)
     except ValueError as exc:
         return fail(str(exc))
     env = station_env()

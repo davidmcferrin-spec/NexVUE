@@ -90,16 +90,23 @@ class TestApply(unittest.TestCase):
         self.assertIn("MAX_DEVICES=8\n", new_env)
         self.assertIn("NEXVUE_PUBLIC_HOSTNAME=nexvue.example.com\n", new_env)
         self.assertIn("NEXVUE_PUBLIC_IP=203.0.113.40\n", new_env)
+        self.assertIn("NEXVUE_TLS_DOMAIN=nexvue.example.com\n", new_env)
         self.assertIn("# --- Public reachability", new_env)
+        self.assertIn("# --- Certificates", new_env)
         self.assertIn("webrtcAdditionalHosts: [nexvue.example.com, 203.0.113.40]", new_yml)
         self.assertNotIn("old.example.com", new_yml)
 
     def test_updates_existing_env_keys(self) -> None:
-        env = "NEXVUE_PUBLIC_HOSTNAME=old.example.com\nNEXVUE_PUBLIC_IP=198.51.100.1\n"
+        env = (
+            "NEXVUE_PUBLIC_HOSTNAME=old.example.com\n"
+            "NEXVUE_PUBLIC_IP=198.51.100.1\n"
+            "NEXVUE_TLS_DOMAIN=old.example.com\n"
+        )
         yml = "webrtcIPsFromInterfaces: yes\n"
         new_env, new_yml = self.mod.apply("", "", env, yml)
         self.assertIn("NEXVUE_PUBLIC_HOSTNAME=\n", new_env)
         self.assertIn("NEXVUE_PUBLIC_IP=\n", new_env)
+        self.assertIn("NEXVUE_TLS_DOMAIN=\n", new_env)
         self.assertNotIn("old.example.com", new_env)
         self.assertIn("webrtcAdditionalHosts: []", new_yml)
 
@@ -123,7 +130,9 @@ class TestApply(unittest.TestCase):
             out = json.loads(r.stdout)
             self.assertTrue(out["ok"])
             self.assertEqual(out["hostname"], "edge.example.com")
-            self.assertIn("NEXVUE_PUBLIC_HOSTNAME=edge.example.com", env_path.read_text(encoding="utf-8"))
+            env_text = env_path.read_text(encoding="utf-8")
+            self.assertIn("NEXVUE_PUBLIC_HOSTNAME=edge.example.com", env_text)
+            self.assertIn("NEXVUE_TLS_DOMAIN=edge.example.com", env_text)
             self.assertIn(
                 "webrtcAdditionalHosts: [edge.example.com, 192.0.2.8]",
                 yml_path.read_text(encoding="utf-8"),
@@ -239,6 +248,7 @@ class TestWiring(unittest.TestCase):
         self.assertIn('id="network-panel"', text)
         self.assertIn('me.role === "admin"', text)
         self.assertIn("network_put", text)
+        self.assertIn("Let's Encrypt certificate name", text)
         self.assertTrue(ICE_PY.is_file())
 
 

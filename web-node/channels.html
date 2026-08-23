@@ -142,8 +142,10 @@
     max-width: 48em;
     margin-bottom: 12px;
   }
-  .tls-grid label { color: var(--muted); font-size: 12px; }
-  .tls-grid input[type="text"], .tls-grid input[type="email"] { width: 100%; }
+  .tls-grid label, .tls-grid .tls-host-label { color: var(--muted); font-size: 12px; }
+  .tls-grid input[type="email"] { width: 100%; }
+  .tls-hostname { color: var(--text); font-size: 13px; }
+  .tls-hostname.unset { color: var(--dim); }
   .tls-tos { color: var(--muted); font-size: 12px; margin: 0 0 12px; max-width: 48em; }
   .tls-tos input { margin-right: 8px; }
   .tls-upload-row { margin: 8px 0; color: var(--muted); font-size: 12px; }
@@ -441,13 +443,14 @@
 <div class="panel" id="network-panel" hidden>
   <h2>Public reachability</h2>
   <p class="network-help">
-    Tell off-site viewers how to reach this station. Leave both blank for LAN-only.
+    Tell off-site viewers how to reach this station. The hostname is also the
+    Let's Encrypt certificate name. Leave both blank for LAN-only.
     IT still needs to forward ports <strong>8889</strong> and <strong>8189</strong> to this box.
     Saving reconnects viewers; live encodes keep running.
   </p>
   <div class="network-grid">
     <label for="network-hostname" tabindex="0"
-      data-tip="DNS name viewers use for this station (for example nexvue.example.com). Optional. Leave blank if you only have a public IP. Do not include https:// or a path.">Public hostname</label>
+      data-tip="DNS name viewers use for this station (for example nexvue.example.com). Also used as the Let's Encrypt certificate name. Optional. Leave blank if you only have a public IP. Do not include https:// or a path.">Public hostname</label>
     <input type="text" id="network-hostname" autocomplete="off" spellcheck="false"
       placeholder="nexvue.example.com" aria-describedby="network-msg">
     <label for="network-ip" tabindex="0"
@@ -467,15 +470,14 @@
     Apache and MediaMTX share <code>/etc/nexvue/tls/{fullchain,privkey}.pem</code>.
     Let's Encrypt uses <strong>TLS-ALPN-01 on port 443</strong> (this page will
     disconnect for about a minute). Live video on <strong>:8889</strong> stays up.
-    Port 80 is not used. A public DNS name must already point at this box.
+    Port 80 is not used. The Public hostname must already point at this box.
   </p>
   <div class="tls-status" id="tls-status">Loading certificate…</div>
   <div id="tls-admin" hidden>
     <div class="tls-grid">
-      <label for="tls-domain" tabindex="0"
-        data-tip="Public DNS name on the certificate (for example nexvue.example.com). Prefills from Public reachability. Let's Encrypt cannot issue for a raw IP.">DNS name</label>
-      <input type="text" id="tls-domain" autocomplete="off" spellcheck="false"
-        placeholder="nexvue.example.com" aria-describedby="tls-msg">
+      <span class="tls-host-label" tabindex="0"
+        data-tip="Same as Public hostname under Public reachability. Let's Encrypt cannot issue for a raw IP.">Public hostname</span>
+      <div id="tls-hostname" class="tls-hostname unset">not set — add a Public hostname under Public reachability</div>
       <label for="tls-email" tabindex="0"
         data-tip="Let's Encrypt account email for expiry notices. Required to issue or renew.">Email</label>
       <input type="email" id="tls-email" autocomplete="off" spellcheck="false"
@@ -1937,6 +1939,9 @@
         const data = await api("network_put", { hostname, ip });
         networkHost.value = data.hostname || "";
         networkIp.value = data.ip || "";
+        if (typeof setTlsHostnameDisplay === "function") {
+          setTlsHostnameDisplay(data.hostname || "");
+        }
         if (data.restarted) {
           setNetworkMsg(
             (data.hostname || data.ip)
@@ -1956,12 +1961,12 @@
     loadNetwork();
   }
 
-  // ---- Certificates (status for admin+operator; issue/upload admin-only) ------
+  // ---- Certificates (admin-only, same gate as Public reachability) ------------
 
   const tlsPanel = document.getElementById("tls-panel");
   const tlsAdmin = document.getElementById("tls-admin");
   const tlsStatus = document.getElementById("tls-status");
-  const tlsDomain = document.getElementById("tls-domain");
+  const tlsHostname = document.getElementById("tls-hostname");
   const tlsEmail = document.getElementById("tls-email");
   const tlsTos = document.getElementById("tls-tos");
   const tlsIssue = document.getElementById("tls-issue");
@@ -2003,10 +2008,15 @@
     return lines.filter(Boolean).join("\n");
   }
 
+  function setTlsHostnameDisplay(host) {
+    const v = String(host || "").trim();
+    if (!tlsHostname) return;
+    tlsHostname.textContent = v || "not set — add a Public hostname under Public reachability";
+    tlsHostname.classList.toggle("unset", !v);
+  }
+
   function applyTlsForm(data) {
-    if (!tlsDomain.value) {
-      tlsDomain.value = data.domain || data.public_hostname || "";
-    }
+    setTlsHostnameDisplay(data.public_hostname || data.resolved_domain || data.domain || "");
     if (!tlsEmail.value) {
       tlsEmail.value = data.email || "";
     }
@@ -2016,9 +2026,7 @@
     const data = await api("tls_status", {});
     tlsStatus.textContent = formatTlsStatus(data);
     applyTlsForm(data);
-    if (isAdmin) {
-      tlsIssue.disabled = !!data.busy;
-    }
+    tlsIssue.disabled = !!data.busy;
     return data;
   }
 
@@ -2043,7 +2051,7 @@
           } else if (data.source === "lego") {
             setTlsMsg(tlsMsg, "Certificate installed. Reload if this tab still shows a warning.", "ok");
           }
-          if (isAdmin) tlsIssue.disabled = false;
+          tlsIssue.disabled = false;
         } else {
           setTlsMsg(tlsMsg, "Waiting for Let's Encrypt (this tab may drop while Apache is stopped)…", "");
         }
@@ -2052,7 +2060,7 @@
       }
       if (n >= 45) {
         stopTlsPoll();
-        if (isAdmin) tlsIssue.disabled = false;
+        tlsIssue.disabled = false;
         setTlsMsg(tlsMsg, "Timed out waiting for the request. Reload and check status.", "err");
       }
     }, 2000);
@@ -2062,17 +2070,19 @@
     tlsUpload.disabled = !(pendingTlsCert && pendingTlsKey);
   }
 
-  tlsPanel.hidden = false;
   if (isAdmin) {
+    tlsPanel.hidden = false;
     tlsAdmin.hidden = false;
-    wireFieldTip(document.querySelector('label[for="tls-domain"]'));
+    wireFieldTip(document.querySelector(".tls-host-label"));
     wireFieldTip(document.querySelector('label[for="tls-email"]'));
     tlsIssue.addEventListener("click", async () => {
-      const domain = tlsDomain.value.trim();
+      const hostname = (tlsHostname && tlsHostname.classList.contains("unset"))
+        ? ""
+        : ((tlsHostname && tlsHostname.textContent) || "").trim();
       const email = tlsEmail.value.trim();
-      if (!clientHostnameOk(domain) || !domain) {
-        setTlsMsg(tlsMsg, "Enter a DNS name like nexvue.example.com", "err");
-        tlsDomain.focus();
+      if (!clientHostnameOk(hostname) || !hostname) {
+        setTlsMsg(tlsMsg, "Set a Public hostname under Public reachability first", "err");
+        if (networkHost) networkHost.focus();
         return;
       }
       if (!email || !email.includes("@")) {
@@ -2090,7 +2100,7 @@
       tlsIssue.disabled = true;
       setTlsMsg(tlsMsg, "Starting Let's Encrypt…");
       try {
-        await api("tls_issue", { email, domain, accept_tos: true });
+        await api("tls_issue", { email, accept_tos: true });
         setTlsMsg(tlsMsg, "Request started — waiting for Let's Encrypt…", "");
         startTlsPoll();
       } catch (err) {
@@ -2143,10 +2153,10 @@
         updateTlsUploadEnable();
       }
     });
+    refreshTlsStatus().catch((err) => {
+      tlsStatus.textContent = err.message || "Could not read certificate status.";
+    });
   }
-  refreshTlsStatus().catch((err) => {
-    tlsStatus.textContent = err.message || "Could not read certificate status.";
-  });
 
   load();
 })();

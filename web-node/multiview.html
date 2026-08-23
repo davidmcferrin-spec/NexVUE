@@ -2,7 +2,7 @@
 <html lang="en" data-theater-page>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>NexVUE — Multiviewer</title>
 <!--
   Dual / quad WHEP multiviewer for wall monitors and confidence checks.
@@ -34,11 +34,15 @@
     --badge-bg: rgba(255, 255, 255, .9);
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; }
+  html, body {
+    height: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+  }
   body {
-    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    margin: 0; padding: 16px 16px 0; background: var(--bg); color: var(--text);
     font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
-    display: flex; flex-direction: column; min-height: 100vh;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   }
   .topnav {
     display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
@@ -87,6 +91,27 @@
     margin-bottom: 12px; flex-shrink: 0;
     box-sizing: border-box;
   }
+  .bar.controls { gap: 8px 0; }
+  .bar-cluster {
+    display: inline-flex; flex-wrap: nowrap; align-items: center;
+    gap: 4px; flex-shrink: 0;
+  }
+  .bar.controls .bar-cluster + .bar-cluster {
+    margin-left: 10px; padding-left: 10px;
+    border-left: 1px solid var(--edge);
+  }
+  .bar.controls .bar-cluster.window {
+    margin-left: auto; padding-left: 0; border-left: none;
+  }
+  .seg {
+    display: inline-flex; border: 1px solid var(--edge); border-radius: 4px;
+    overflow: hidden; background: var(--panel);
+  }
+  .seg button {
+    border: none; border-radius: 0; border-right: 1px solid var(--edge);
+  }
+  .seg button:last-child { border-right: none; }
+  .icon-btn { min-width: 36px; padding: 7px 8px; text-align: center; }
   input, button, select {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge);
     border-radius: 4px; padding: 7px 10px; font: inherit;
@@ -184,9 +209,19 @@
   }
   .pane.audio-active .audio-badge { display: block; }
 
+  /* In-flow flex row (not position:fixed). iOS Chrome/Safari pin fixed
+     bottom:0 to the layout viewport, which sits above the visual window
+     when the browser toolbar is showing — the bar looked detached. */
   .stats-drawer {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+    flex-shrink: 0; z-index: 50;
+    margin-inline: -16px;
     background: var(--panel); border-top: 1px solid var(--edge);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  html.theater .stats-drawer,
+  html:fullscreen .stats-drawer, html:-webkit-full-screen .stats-drawer,
+  body:fullscreen .stats-drawer, body:-webkit-full-screen .stats-drawer {
+    margin-inline: 0;
   }
   .stats-drawer #stats-toggle {
     width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -197,7 +232,7 @@
   .stats-drawer .caret { display: inline-block; transition: transform .15s ease; }
   .stats-drawer.open .caret { transform: rotate(180deg); }
   .stats-drawer .stats-panel {
-    display: none; max-height: 40vh; overflow: auto; padding: 0 16px 16px;
+    display: none; max-height: 40dvh; overflow: auto; padding: 0 16px 16px;
   }
   .stats-drawer.open .stats-panel { display: block; }
   #stats {
@@ -227,7 +262,7 @@
   html.theater, html.theater body,
   html:fullscreen, html:-webkit-full-screen,
   body:fullscreen, body:-webkit-full-screen {
-    width: 100%; height: 100%;
+    width: 100%; height: 100%; height: 100dvh;
     background: #000;
   }
   html.theater body,
@@ -241,7 +276,7 @@
   html.theater .stage,
   html:fullscreen .stage, html:-webkit-full-screen .stage,
   body:fullscreen .stage, body:-webkit-full-screen .stage {
-    flex: 1; min-height: 0; width: 100%; height: 100%;
+    flex: 1; min-height: 0; width: 100%; height: auto;
   }
   html.theater #grid,
   html:fullscreen #grid, html:-webkit-full-screen #grid,
@@ -317,27 +352,38 @@
   <button type="button" class="nav-logout" id="nav-logout" hidden>Logout</button>
 </nav>
 
-<div class="bar">
-  <span class="qlabel">layout:</span>
-  <button id="layout-dual" class="layout">Dual</button>
-  <button id="layout-quad" class="layout active">Quad</button>
-  <span style="border-left:1px solid var(--edge);height:20px"></span>
-  <span class="qlabel">quality:</span>
-  <button id="q-hi" class="q">HI</button>
-  <button id="q-lo" class="q active">LO</button>
-  <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
-  <button id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
-  <button id="safe" class="tgl" title="Title / action safe + center target (this browser only)">Safe</button>
-  <button id="scope" class="tgl" title="Waveform + vectorscope on the focused pane (this browser only)">Scope</button>
-  <button id="mute" class="tgl" title="Mute focused pane (this browser only)">Mute</button>
-  <span class="vol-wrap" title="Volume (this browser only — Web Audio)">
-    <span class="qlabel">vol</span>
-    <input type="range" id="volume" min="0" max="100" step="1" value="20" aria-label="Volume">
-    <span id="vol-pct">100%</span>
-  </span>
-  <button id="theater" class="tgl" title="Fill the browser window (hides chrome; not OS fullscreen)" aria-pressed="false">▢ Fill window</button>
-  <button id="fs" title="Fullscreen multiview (hides chrome for a frameless wall)">⛶ Fullscreen</button>
-  <span id="state">idle</span>
+<div class="bar controls">
+  <div class="bar-cluster layout">
+    <span class="seg" role="group" aria-label="Layout">
+      <button type="button" id="layout-dual" class="layout">Dual</button>
+      <button type="button" id="layout-quad" class="layout active">Quad</button>
+    </span>
+  </div>
+  <div class="bar-cluster watch">
+    <span class="seg" role="group" aria-label="Quality">
+      <button type="button" id="q-hi" class="q">HI</button>
+      <button type="button" id="q-lo" class="q active">LO</button>
+    </span>
+  </div>
+  <div class="bar-cluster overlays">
+    <button type="button" id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
+    <button type="button" id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
+    <button type="button" id="safe" class="tgl" title="Title / action safe + center target (this browser only)">Safe</button>
+    <button type="button" id="scope" class="tgl" title="Waveform + vectorscope on the focused pane (this browser only)">Scope</button>
+  </div>
+  <div class="bar-cluster listen">
+    <button type="button" id="mute" class="tgl" title="Mute focused pane (this browser only)">Mute</button>
+    <span class="vol-wrap" title="Volume (this browser only — Web Audio)">
+      <span class="qlabel">vol</span>
+      <input type="range" id="volume" min="0" max="100" step="1" value="20" aria-label="Volume">
+      <span id="vol-pct">100%</span>
+    </span>
+  </div>
+  <div class="bar-cluster window">
+    <button type="button" id="theater" class="tgl icon-btn" title="Fill the browser window (hides chrome; not OS fullscreen)" aria-label="Fill window" aria-pressed="false">▢</button>
+    <button type="button" id="fs" class="icon-btn" title="Fullscreen multiview (hides chrome for a frameless wall)" aria-label="Fullscreen">⛶</button>
+    <span id="state">idle</span>
+  </div>
 </div>
 
 <div class="stage">

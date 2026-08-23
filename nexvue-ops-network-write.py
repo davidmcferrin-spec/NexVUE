@@ -3,7 +3,8 @@
 nexvue-ops-network-write.py — persist public hostname / IP and patch MediaMTX.
 
 Writes NEXVUE_PUBLIC_HOSTNAME and NEXVUE_PUBLIC_IP to /etc/nexvue/nexvue.env
-and sets webrtcAdditionalHosts in mediamtx.yml. Restart is the caller's job
+and mirrors the hostname onto NEXVUE_TLS_DOMAIN (Let's Encrypt write-through).
+Also sets webrtcAdditionalHosts in mediamtx.yml. Restart is the caller's job
 (nexvue-ops.php runs nexvue-ops-restart.sh mediamtx after a successful write).
 
 JSON on stdin:
@@ -26,6 +27,7 @@ MEDIAMTX_YML = Path(os.environ.get("NEXVUE_MEDIAMTX_YML", "/etc/nexvue/mediamtx.
 
 HOSTNAME_KEY = "NEXVUE_PUBLIC_HOSTNAME"
 IP_KEY = "NEXVUE_PUBLIC_IP"
+TLS_DOMAIN_KEY = "NEXVUE_TLS_DOMAIN"
 
 ASSIGN_RE = re.compile(r"^(\s*)(#?)(\s*)([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 UNQUOTED_SAFE_RE = re.compile(r"^[A-Za-z0-9_./:+=,-]+$")
@@ -107,10 +109,11 @@ def _looks_ipv4(value: str) -> bool:
 
 
 def apply_env_patch(text: str, hostname: str, ip: str) -> str:
-    """Update or append the two public-reachability keys."""
+    """Update public-reachability keys and write-through NEXVUE_TLS_DOMAIN."""
     pending = {
         HOSTNAME_KEY: hostname,
         IP_KEY: ip,
+        TLS_DOMAIN_KEY: hostname,
     }
     lines = text.splitlines(keepends=True)
     new_lines: list[str] = []
@@ -134,14 +137,22 @@ def apply_env_patch(text: str, hostname: str, ip: str) -> str:
     if pending:
         if new_lines and not new_lines[-1].endswith("\n"):
             new_lines[-1] = new_lines[-1] + "\n"
-        if not any("# --- Public reachability" in ln for ln in new_lines):
-            if new_lines and new_lines[-1].strip():
-                new_lines.append("\n")
-            new_lines.append("# --- Public reachability (written by Settings) ---\n")
-        # Stable order: hostname then IP.
-        for key in (HOSTNAME_KEY, IP_KEY):
-            if key in pending:
-                new_lines.append(f"{key}={format_assignment_value(pending[key])}\n")
+        if HOSTNAME_KEY in pending or IP_KEY in pending:
+            if not any("# --- Public reachability" in ln for ln in new_lines):
+                if new_lines and new_lines[-1].strip():
+                    new_lines.append("\n")
+                new_lines.append("# --- Public reachability (written by Settings) ---\n")
+            for key in (HOSTNAME_KEY, IP_KEY):
+                if key in pending:
+                    new_lines.append(f"{key}={format_assignment_value(pending[key])}\n")
+        if TLS_DOMAIN_KEY in pending:
+            if not any("# --- Certificates" in ln for ln in new_lines):
+                if new_lines and new_lines[-1].strip():
+                    new_lines.append("\n")
+                new_lines.append("# --- Certificates (written by Settings) ---\n")
+            new_lines.append(
+                f"{TLS_DOMAIN_KEY}={format_assignment_value(pending[TLS_DOMAIN_KEY])}\n"
+            )
     return "".join(new_lines)
 
 

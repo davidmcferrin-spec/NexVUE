@@ -80,6 +80,74 @@ class TestTheaterContracts(unittest.TestCase):
             self.assertNotIn('id="theater"', html, name)
 
 
+class TestToolbarClusters(unittest.TestCase):
+    def test_player_clusters_and_orient_popover(self) -> None:
+        html = PLAYER.read_text(encoding="utf-8")
+        self.assertIn('class="bar controls"', html)
+        for cluster in (
+            'class="bar-cluster watch"',
+            'class="bar-cluster listen"',
+            'class="bar-cluster overlays"',
+            'id="orient-wrap"',
+            'class="bar-cluster window"',
+        ):
+            self.assertIn(cluster, html, cluster)
+        self.assertIn('id="orient"', html)
+        self.assertIn('id="orient-pop"', html)
+        self.assertIn('id="orient-reset"', html)
+        self.assertIn("setOrientOpen", html)
+        self.assertIn("paintOrientBtn", html)
+        for keep in ('id="mirror"', 'id="flip"', 'id="rot-cw"', 'id="rot-ccw"'):
+            self.assertIn(keep, html, keep)
+        self.assertIn('aria-label="Fill window"', html)
+        self.assertIn('aria-label="Fullscreen"', html)
+        self.assertIn('aria-label="Picture-in-Picture"', html)
+        self.assertNotIn(">▢ Fill window<", html)
+        self.assertNotIn(">⛶ Fullscreen<", html)
+
+    def test_multiview_clusters_without_orient(self) -> None:
+        html = MULTI.read_text(encoding="utf-8")
+        self.assertIn('class="bar controls"', html)
+        self.assertIn('class="bar-cluster layout"', html)
+        self.assertIn('class="bar-cluster watch"', html)
+        self.assertIn('class="bar-cluster overlays"', html)
+        self.assertIn('class="bar-cluster listen"', html)
+        self.assertIn('class="bar-cluster window"', html)
+        self.assertNotIn('id="orient"', html)
+        self.assertNotIn('id="orient-pop"', html)
+        self.assertNotIn('id="mirror"', html)
+        self.assertIn('aria-label="Fill window"', html)
+        self.assertIn('aria-label="Fullscreen"', html)
+        self.assertNotIn(">▢ Fill window<", html)
+        self.assertNotIn(">⛶ Fullscreen<", html)
+
+
+class TestStatsDrawerInFlow(unittest.TestCase):
+    """Session metrics must stay in document flow — not position:fixed.
+
+    iOS Chrome/Safari pin fixed bottom:0 to the layout viewport, so the
+    bar detaches above the visible window when the toolbar is showing.
+    """
+
+    def test_player_drawer_is_in_flow(self) -> None:
+        html = PLAYER.read_text(encoding="utf-8")
+        self.assertIn("viewport-fit=cover", html)
+        self.assertIn("100dvh", html)
+        self.assertIn("safe-area-inset-bottom", html)
+        self.assertIn("flex-shrink: 0", html)
+        self.assertNotIn("position: fixed; left: 0; right: 0; bottom: 0", html)
+        self.assertNotIn("padding-bottom: 56px", html)
+        self.assertIn('id="stats-drawer"', html)
+
+    def test_multiview_drawer_is_in_flow(self) -> None:
+        html = MULTI.read_text(encoding="utf-8")
+        self.assertIn("viewport-fit=cover", html)
+        self.assertIn("100dvh", html)
+        self.assertIn("safe-area-inset-bottom", html)
+        self.assertNotIn("position: fixed; left: 0; right: 0; bottom: 0", html)
+        self.assertIn('id="stats-drawer"', html)
+
+
 @unittest.skipUnless(NODE and UI.is_file(), "node CLI missing")
 class TestTheaterJs(unittest.TestCase):
     def test_pref_and_class_and_pip_guards(self) -> None:
