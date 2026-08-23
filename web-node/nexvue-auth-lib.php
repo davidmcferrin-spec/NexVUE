@@ -29,7 +29,7 @@ const NEXVUE_AUTH_RESET_TTL_S = 3600;
 const NEXVUE_AUTH_MAX_CHANNELS = 8; // ch0..ch7 (+ lo)
 /** Keep expired share rows this long after expires_at, then hard-delete. */
 const NEXVUE_AUTH_SHARE_PURGE_GRACE_S = 604800; // 7 days
-const NEXVUE_AUTH_SCHEMA_VERSION = 4;
+const NEXVUE_AUTH_SCHEMA_VERSION = 5;
 /** Cloudflare Realtime TURN credential TTL (max 48h; 24h leaves refresh room). */
 const NEXVUE_TURN_TTL_S = 86400;
 /** Remint cached ICE servers when fewer than this many seconds remain. */
@@ -229,6 +229,10 @@ SQL);
     if ($ver < 4) {
         auth_turn_ensure_table();
         $ver = 4;
+    }
+    if ($ver < 5) {
+        auth_sfu_ensure_table();
+        $ver = 5;
     }
     $db->exec('PRAGMA user_version = ' . (string)NEXVUE_AUTH_SCHEMA_VERSION);
     $done = true;
@@ -589,6 +593,16 @@ function auth_mint_publish_jwt(): string {
         'mediamtx_permissions' => [
             ['action' => 'publish', 'path' => ''],
             ['action' => 'api'],
+        ],
+    ], NEXVUE_AUTH_PUBLISH_TTL_S);
+}
+
+/** Long-lived local RTSP read for nexvue-sfu-publish.py (never sent to browsers). */
+function auth_mint_sfu_read_jwt(): string {
+    return auth_jwt_encode([
+        'sub' => 'nexvue-sfu-publish',
+        'mediamtx_permissions' => [
+            ['action' => 'read', 'path' => ''],
         ],
     ], NEXVUE_AUTH_PUBLISH_TTL_S);
 }
@@ -2316,4 +2330,433 @@ function auth_turn_ice_servers_for_viewer(): array {
     } catch (Throwable $e) {
         return ['enabled' => true, 'ice_servers' => [], 'expires_at' => ''];
     }
+}
+
+// ---------------------------------------------------------------------------
+// Cloudflare Stream SFU (Settings → Cloudflare Stream). Hybrid = local
+// MediaMTX for logged-in station users; share + portal viewers WHEP from
+// Stream so the encode NIC is not multiplied. Publish URLs never leave
+// the auth dir (nexvue-sfu-publish.py reads sfu-publish.json).
+// ---------------------------------------------------------------------------
+
+const NEXVUE_SFU_MODES = ['off', 'hybrid', 'sfu'];
+const NEXVUE_SFU_CF_API = 'https://api.cloudflare.com/client/v4/accounts/%s/stream/live_inputs';
+
+function auth_sfu_ensure_table(): void {
+    $db = auth_db();
+    $db->exec(<<<'SQL'
+CREATE TABLE IF NOT EXISTS sfu_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  mode TEXT NOT NULL DEFAULT 'off',
+  account_id TEXT NOT NULL DEFAULT '',
+  api_token TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sfu_inputs (
+  path TEXT PRIMARY KEY,
+  uid TEXT NOT NULL DEFAULT '',
+  publish_url TEXT NOT NULL DEFAULT '',
+  play_url TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
+SQL);
+}
+
+/** @return array{id:int,mode:string,account_id:string,api_token:string,updated_at:string} */
+function auth_sfu_row(): array {
+    auth_sfu_ensure_table();
+    $db = auth_db();
+    $row = $db->querySingle('SELECT * FROM sfu_config WHERE id = 1', true);
+    if (!is_array($row) || $row === []) {
+        $now = auth_now_iso();
+        $ins = $db->prepare(
+            "INSERT INTO sfu_config (id, mode, account_id, api_token, updated_at) VALUES (1, 'off', '', '', :u)"
+        );
+        $ins->bindValue(':u', $now, SQLITE3_TEXT);
+        $ins->execute();
+        return [
+            'id' => 1,
+            'mode' => 'off',
+            'account_id' => '',
+            'api_token' => '',
+            'updated_at' => $now,
+        ];
+    }
+    $mode = (string)($row['mode'] ?? 'off');
+    if (!in_array($mode, NEXVUE_SFU_MODES, true)) {
+        $row['mode'] = 'off';
+    }
+    return $row;
+}
+
+function auth_sfu_mode(): string {
+    $mode = (string)(auth_sfu_row()['mode'] ?? 'off');
+    return in_array($mode, NEXVUE_SFU_MODES, true) ? $mode : 'off';
+}
+
+/** @return list<string> */
+function auth_sfu_all_paths(): array {
+    $out = [];
+    for ($i = 0; $i < NEXVUE_AUTH_MAX_CHANNELS; $i++) {
+        $out[] = 'ch' . $i;
+        $out[] = 'ch' . $i . 'lo';
+    }
+    return $out;
+}
+
+function auth_sfu_public(?array $row = null): array {
+    $row = $row ?? auth_sfu_row();
+    $token = (string)($row['api_token'] ?? '');
+    $hint = '';
+    if ($token !== '') {
+        $hint = strlen($token) <= 4 ? '••••' : ('…' . substr($token, -4));
+    }
+    $db = auth_db();
+    $n = (int)$db->querySingle("SELECT COUNT(*) FROM sfu_inputs WHERE play_url != ''");
+    return [
+        'mode' => auth_sfu_mode(),
+        'account_id' => (string)($row['account_id'] ?? ''),
+        'has_token' => $token !== '',
+        'token_hint' => $hint,
+        'input_count' => $n,
+    ];
+}
+
+function auth_sfu_sanitize_mode(string $raw): string {
+    $v = strtolower(trim($raw));
+    if ($v === '') {
+        return 'off';
+    }
+    if (!in_array($v, NEXVUE_SFU_MODES, true)) {
+        throw new InvalidArgumentException('Mode must be off, hybrid, or sfu');
+    }
+    return $v;
+}
+
+function auth_sfu_sanitize_account_id(string $raw): string {
+    $v = strtolower(trim($raw));
+    if ($v === '') {
+        return '';
+    }
+    if (!preg_match('/^[a-f0-9]{32}$/', $v)) {
+        throw new InvalidArgumentException('Enter the 32-character Cloudflare account ID');
+    }
+    return $v;
+}
+
+function auth_sfu_publish_file_path(): string {
+    $o = getenv('NEXVUE_SFU_PUBLISH_FILE');
+    if (is_string($o) && $o !== '') {
+        return $o;
+    }
+    return auth_dir() . '/sfu-publish.json';
+}
+
+/**
+ * @return array<string,array{uid:string,publish_url:string,play_url:string}>
+ */
+function auth_sfu_inputs(): array {
+    auth_sfu_ensure_table();
+    $db = auth_db();
+    $r = $db->query('SELECT path, uid, publish_url, play_url FROM sfu_inputs ORDER BY path');
+    $out = [];
+    if ($r) {
+        while ($row = $r->fetchArray(SQLITE3_ASSOC)) {
+            $p = (string)($row['path'] ?? '');
+            if ($p === '') {
+                continue;
+            }
+            $out[$p] = [
+                'uid' => (string)($row['uid'] ?? ''),
+                'publish_url' => (string)($row['publish_url'] ?? ''),
+                'play_url' => (string)($row['play_url'] ?? ''),
+            ];
+        }
+    }
+    return $out;
+}
+
+function auth_sfu_play_url(string $path): string {
+    $path = strtolower(trim($path));
+    $inputs = auth_sfu_inputs();
+    return (string)($inputs[$path]['play_url'] ?? '');
+}
+
+/** @return array<string,string> path => play URL (no publish secrets) */
+function auth_sfu_play_map(): array {
+    $out = [];
+    foreach (auth_sfu_inputs() as $path => $row) {
+        if ($row['play_url'] !== '') {
+            $out[$path] = $row['play_url'];
+        }
+    }
+    return $out;
+}
+
+/** @return array{mode:string,play:array<string,string>|object} */
+function auth_sfu_heartbeat_payload(): array {
+    $play = auth_sfu_play_map();
+    return [
+        'mode' => auth_sfu_mode(),
+        // Empty PHP array encodes as [] — portal expects a JSON object.
+        'play' => $play === [] ? new stdClass() : $play,
+    ];
+}
+
+function auth_sfu_use_for_session(?array $me, string $path): bool {
+    $mode = auth_sfu_mode();
+    if ($mode === 'off') {
+        return false;
+    }
+    if (auth_sfu_play_url($path) === '') {
+        return false;
+    }
+    if ($mode === 'sfu') {
+        return true;
+    }
+    return ($me['auth'] ?? '') === 'share';
+}
+
+function auth_sfu_write_publish_file(): void {
+    $row = auth_sfu_row();
+    $paths = [];
+    foreach (auth_sfu_inputs() as $path => $inp) {
+        if ($inp['publish_url'] === '') {
+            continue;
+        }
+        $paths[$path] = [
+            'publish_url' => $inp['publish_url'],
+            'rtsp_url' => 'rtsp://127.0.0.1:8554/' . $path,
+        ];
+    }
+    $jwt = '';
+    if ($paths !== [] && (string)$row['mode'] !== 'off') {
+        try {
+            auth_ensure_keys();
+            $jwt = auth_mint_sfu_read_jwt();
+        } catch (Throwable $e) {
+            $jwt = '';
+        }
+    }
+    $payload = [
+        'mode' => (string)$row['mode'],
+        'updated_at' => auth_now_iso(),
+        'rtsp_jwt' => $jwt,
+        'paths' => $paths,
+    ];
+    $json = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+    if (!is_string($json)) {
+        return;
+    }
+    $path = auth_sfu_publish_file_path();
+    $dir = dirname($path);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0750, true);
+    }
+    $tmp = $path . '.tmp.' . getmypid();
+    file_put_contents($tmp, $json . "\n");
+    @chmod($tmp, 0640);
+    @rename($tmp, $path);
+}
+
+/**
+ * @return array{status:int,body:string}
+ */
+function auth_sfu_http(string $method, string $url, string $token, ?array $jsonBody = null, ?string $rawBody = null, string $contentType = 'application/json'): array {
+    $stub = getenv('NEXVUE_SFU_HTTP_STUB');
+    if (is_string($stub) && $stub !== '' && is_file($stub)) {
+        $statusRaw = getenv('NEXVUE_SFU_HTTP_STATUS');
+        $status = is_string($statusRaw) && ctype_digit($statusRaw) ? (int)$statusRaw : 200;
+        return ['status' => $status, 'body' => (string)file_get_contents($stub)];
+    }
+    if (getenv('NEXVUE_SFU_HTTP_FAIL') === '1') {
+        return ['status' => 0, 'body' => ''];
+    }
+    $scheme = parse_url($url, PHP_URL_SCHEME);
+    if (!in_array($scheme, ['https', 'http'], true)) {
+        return ['status' => 0, 'body' => ''];
+    }
+    $headers = '';
+    if ($token !== '') {
+        $headers .= 'Authorization: Bearer ' . $token . "\r\n";
+    }
+    $content = '';
+    if ($rawBody !== null) {
+        $headers .= 'Content-Type: ' . $contentType . "\r\n";
+        $content = $rawBody;
+    } elseif ($jsonBody !== null) {
+        $enc = json_encode($jsonBody, JSON_UNESCAPED_SLASHES);
+        if ($enc === false) {
+            return ['status' => 0, 'body' => ''];
+        }
+        $headers .= "Content-Type: application/json\r\n";
+        $content = $enc;
+    }
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => strtoupper($method),
+            'header' => $headers,
+            'content' => $content,
+            'timeout' => 12,
+            'ignore_errors' => true,
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+        ],
+    ]);
+    $out = @file_get_contents($url, false, $ctx);
+    $status = 0;
+    if (isset($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
+        $status = (int)$m[1];
+    }
+    return ['status' => $status, 'body' => is_string($out) ? $out : ''];
+}
+
+function auth_sfu_cf_error(array $r, string $fallback): string {
+    $j = json_decode($r['body'], true);
+    if (is_array($j) && isset($j['errors'][0]['message']) && is_string($j['errors'][0]['message'])) {
+        return 'Cloudflare Stream: ' . $j['errors'][0]['message'];
+    }
+    if ($r['status'] === 0) {
+        return 'Could not reach Cloudflare Stream (check outbound HTTPS)';
+    }
+    if ($r['status'] === 401 || $r['status'] === 403) {
+        return 'Cloudflare Stream rejected the account ID or API token';
+    }
+    return $fallback . ($r['status'] > 0 ? ' (HTTP ' . $r['status'] . ')' : '');
+}
+
+/** @return array{uid:string,publish_url:string,play_url:string} */
+function auth_sfu_parse_live_input(string $json): array {
+    $data = json_decode($json, true);
+    if (!is_array($data)) {
+        throw new RuntimeException('Cloudflare Stream returned invalid JSON');
+    }
+    $result = $data['result'] ?? $data;
+    if (!is_array($result)) {
+        throw new RuntimeException('Cloudflare Stream returned no live input');
+    }
+    $uid = (string)($result['uid'] ?? '');
+    $pub = (string)(($result['webRTC']['url'] ?? '') ?: '');
+    $play = (string)(($result['webRTCPlayback']['url'] ?? '') ?: '');
+    if ($uid === '' || $pub === '' || $play === '') {
+        throw new RuntimeException('Cloudflare Stream live input missing WebRTC URLs');
+    }
+    return ['uid' => $uid, 'publish_url' => $pub, 'play_url' => $play];
+}
+
+function auth_sfu_upsert_input(string $path, array $inp): void {
+    $now = auth_now_iso();
+    $db = auth_db();
+    $st = $db->prepare(
+        'INSERT INTO sfu_inputs (path, uid, publish_url, play_url, updated_at) '
+        . 'VALUES (:p, :u, :pub, :play, :t) '
+        . 'ON CONFLICT(path) DO UPDATE SET uid=:u, publish_url=:pub, play_url=:play, updated_at=:t'
+    );
+    $st->bindValue(':p', $path, SQLITE3_TEXT);
+    $st->bindValue(':u', $inp['uid'], SQLITE3_TEXT);
+    $st->bindValue(':pub', $inp['publish_url'], SQLITE3_TEXT);
+    $st->bindValue(':play', $inp['play_url'], SQLITE3_TEXT);
+    $st->bindValue(':t', $now, SQLITE3_TEXT);
+    $st->execute();
+}
+
+function auth_sfu_provision(string $accountId, string $token): int {
+    $base = sprintf(NEXVUE_SFU_CF_API, rawurlencode($accountId));
+    $existing = auth_sfu_inputs();
+    $count = 0;
+    foreach (auth_sfu_all_paths() as $path) {
+        $uid = (string)($existing[$path]['uid'] ?? '');
+        if ($uid !== '') {
+            $r = auth_sfu_http('GET', $base . '/' . rawurlencode($uid), $token);
+            if ($r['status'] >= 200 && $r['status'] < 300) {
+                try {
+                    auth_sfu_upsert_input($path, auth_sfu_parse_live_input($r['body']));
+                    $count++;
+                    continue;
+                } catch (Throwable $e) {
+                    // Fall through to create.
+                }
+            }
+        }
+        $r = auth_sfu_http('POST', $base, $token, [
+            'meta' => ['name' => 'nexvue-' . $path],
+            'recording' => ['mode' => 'off'],
+        ]);
+        if ($r['status'] < 200 || $r['status'] >= 300) {
+            throw new RuntimeException(auth_sfu_cf_error($r, 'Could not create live input for ' . $path));
+        }
+        auth_sfu_upsert_input($path, auth_sfu_parse_live_input($r['body']));
+        $count++;
+    }
+    return $count;
+}
+
+function auth_sfu_test(?string $accountId = null, ?string $token = null): void {
+    $row = auth_sfu_row();
+    $acc = ($accountId !== null && trim($accountId) !== '')
+        ? auth_sfu_sanitize_account_id($accountId)
+        : (string)$row['account_id'];
+    $tok = ($token !== null && trim($token) !== '')
+        ? auth_turn_sanitize_token($token)
+        : (string)$row['api_token'];
+    if ($acc === '' || $tok === '') {
+        throw new InvalidArgumentException('Enter a Cloudflare account ID and API token');
+    }
+    $url = sprintf(NEXVUE_SFU_CF_API, rawurlencode($acc));
+    $r = auth_sfu_http('GET', $url, $tok);
+    if ($r['status'] < 200 || $r['status'] >= 300) {
+        throw new RuntimeException(auth_sfu_cf_error($r, 'Cloudflare Stream test failed'));
+    }
+    $j = json_decode($r['body'], true);
+    if (is_array($j) && array_key_exists('success', $j) && $j['success'] === false) {
+        throw new RuntimeException(auth_sfu_cf_error($r, 'Cloudflare Stream test failed'));
+    }
+}
+
+/**
+ * @param array{mode?:mixed,account_id?:mixed,api_token?:mixed} $in
+ * @return array{mode:string,account_id:string,has_token:bool,token_hint:string,input_count:int}
+ */
+function auth_sfu_put(array $in): array {
+    $row = auth_sfu_row();
+    $mode = auth_sfu_sanitize_mode((string)($in['mode'] ?? $row['mode']));
+    $accountId = auth_sfu_sanitize_account_id((string)($in['account_id'] ?? $row['account_id']));
+    $incoming = array_key_exists('api_token', $in) ? auth_turn_sanitize_token((string)$in['api_token']) : '';
+    $token = $incoming !== '' ? $incoming : (string)$row['api_token'];
+    if ($mode !== 'off' && ($accountId === '' || $token === '')) {
+        throw new InvalidArgumentException('Save a Cloudflare account ID and API token before enabling Stream');
+    }
+    if ($mode !== 'off') {
+        auth_sfu_provision($accountId, $token);
+    }
+    $now = auth_now_iso();
+    $db = auth_db();
+    $st = $db->prepare(
+        'UPDATE sfu_config SET mode=:m, account_id=:a, api_token=:t, updated_at=:u WHERE id=1'
+    );
+    $st->bindValue(':m', $mode, SQLITE3_TEXT);
+    $st->bindValue(':a', $accountId, SQLITE3_TEXT);
+    $st->bindValue(':t', $token, SQLITE3_TEXT);
+    $st->bindValue(':u', $now, SQLITE3_TEXT);
+    $st->execute();
+    auth_sfu_write_publish_file();
+    return auth_sfu_public();
+}
+
+function auth_sfu_whep_exchange(string $playUrl, string $sdp): string {
+    $sdp = trim($sdp);
+    if ($sdp === '' || !str_starts_with($sdp, 'v=0')) {
+        throw new InvalidArgumentException('invalid SDP offer');
+    }
+    $scheme = parse_url($playUrl, PHP_URL_SCHEME);
+    if (!in_array($scheme, ['https', 'http'], true)) {
+        throw new RuntimeException('Stream playback URL is not configured');
+    }
+    $r = auth_sfu_http('POST', $playUrl, '', null, $sdp, 'application/sdp');
+    if ($r['status'] < 200 || $r['status'] >= 300 || trim($r['body']) === '') {
+        throw new RuntimeException(auth_sfu_cf_error($r, 'Stream WHEP failed'));
+    }
+    return $r['body'];
 }

@@ -3,7 +3,8 @@
  * nexvue-auth.php — JSON API for NexVUE local auth + share links.
  *
  * Public: login, logout, me, forgot, reset, share_redeem
- * Authed: whep_jwt (JWT + optional Cloudflare ice_servers), change_password
+ * Authed: whep_jwt (JWT + optional Cloudflare ice_servers / Stream egress),
+ *   sfu_whep (same-origin Stream WHEP proxy), change_password
  * Admin: users_*, user_reset_link, users_export/import, shares_export/import
  * Admin + sharer: shares_list, share_create, share_revoke, share_delete,
  *   share_email (sharer: own only). Admin: share_update (name/channels/expiry;
@@ -261,13 +262,45 @@ try {
         auth_ensure_keys();
         $jwt = auth_mint_viewer_jwt($sub, [$base]);
         $turn = auth_turn_ice_servers_for_viewer();
+        $egress = auth_sfu_use_for_session($me, $path) ? 'sfu' : 'local';
         auth_api_ok([
             'jwt' => $jwt,
             'expires_in' => NEXVUE_AUTH_JWT_TTL_S,
             'path' => $path,
             'ice_servers' => $turn['ice_servers'],
             'turn' => $turn['enabled'] && $turn['ice_servers'] !== [],
+            'egress' => $egress,
         ]);
+    }
+
+    if ($action === 'sfu_whep') {
+        auth_require_any();
+        $path = strtolower(trim((string)($body['path'] ?? '')));
+        if (!preg_match('/^ch[0-7](lo)?$/', $path)) {
+            auth_api_fail(400, 'invalid path');
+        }
+        $allowed = auth_allowed_channels_for_session();
+        if ($allowed === null || !in_array($path, $allowed, true)) {
+            auth_api_fail(403, 'channel not allowed');
+        }
+        $me = auth_me_payload();
+        if (!auth_sfu_use_for_session($me, $path)) {
+            auth_api_fail(400, 'Stream egress is not used for this session');
+        }
+        $play = auth_sfu_play_url($path);
+        if ($play === '') {
+            auth_api_fail(409, 'Stream live input is not ready for this channel');
+        }
+        $sdp = (string)($body['sdp'] ?? '');
+        auth_session_release();
+        try {
+            $answer = auth_sfu_whep_exchange($play, $sdp);
+        } catch (InvalidArgumentException $e) {
+            auth_api_fail(400, $e->getMessage());
+        } catch (RuntimeException $e) {
+            auth_api_fail(502, $e->getMessage());
+        }
+        auth_api_ok(['sdp' => $answer, 'path' => $path]);
     }
 
     if ($action === 'users_list') {

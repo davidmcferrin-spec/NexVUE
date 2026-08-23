@@ -65,7 +65,8 @@ seeds missing `/etc/nexvue/channels/N.env` for each `MAX_CHANNELS` slot,
 creates self-signed TLS under `/etc/nexvue/tls/` when absent (Apache HTTPS +
 MediaMTX WHEP/API share the same PEMs), installs pinned `lego` for Settings →
 Certificates (TLS-ALPN-01 on `:443`), and `enable --now`s `mediamtx`,
-`nexvue-status`, `nexvue-metrics`, `nexvue-decklink-configure`, and
+`nexvue-status`, `nexvue-metrics`, `nexvue-sfu-publish` (idle until
+Settings → Cloudflare Stream is on), `nexvue-decklink-configure`, and
 `nexvue-encode@0..(MAX_CHANNELS-1)` (default 8 → `@0`–`@7`; Duo: set
 `MAX_CHANNELS=4` in `nexvue.env`). Empty SDI ports auto-park and auto-unpark
 when lock returns. When
@@ -162,7 +163,7 @@ sudo nano /etc/nexvue/channels/0.env
 #    the unit sources it through a shell)   # set DEVICE_NUMBER=0, CHANNEL_PATH=ch0
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now mediamtx nexvue-status nexvue-metrics
+sudo systemctl enable --now mediamtx nexvue-status nexvue-metrics nexvue-sfu-publish
 # Quad 2 default (MAX_CHANNELS=8): enable all slots; empty ports auto-park.
 for n in $(seq 0 7); do sudo systemctl enable --now nexvue-encode@$n; done
 # Duo 2: only @0..3 (and set MAX_CHANNELS=4 / MAX_DEVICES=4 in nexvue.env).
@@ -327,7 +328,14 @@ black. Viewers on networks that block **8189** entirely (UDP and TCP) can
 use Settings → **Cloudflare TURN** (admin): the browser allocates a
 Cloudflare relay and MediaMTX sends media out to it. That does not replace
 the 8889/8189 forwards or Public reachability; ICE still prefers a direct
-8189 path when it works.
+8189 path when it works. TURN is a connectivity relay — it does **not**
+reduce this box's NIC (each viewer is still one copy leaving the station).
+To offload fan-out, use Settings → **Cloudflare Stream** (admin): the
+station WHIPs each live path once; **Hybrid** keeps logged-in Player /
+Multiview on local MediaMTX and sends share links plus portal `/watch` to
+Stream; **All viewers** sends everyone to Stream. Kick/Metrics only see
+local MediaMTX sessions. Stream may reject 8-channel positioned Opus —
+confirm audio on a bench before treating it as production.
 
 ### Viewer ports (LAN or DMZ)
 
@@ -429,7 +437,11 @@ Then from a LAN machine:
   blocks Save; operators do not see this panel); **Cloudflare TURN** (admin-only, same)
   gate — enable/disable, TURN key ID, API token, Test; stored in `auth.db`,
   never a `.env`; Player / Multiview / portal watch get short-lived
-  `ice_servers` on the next session; no MediaMTX restart); **Certificates** (Let's Encrypt
+  `ice_servers` on the next session; no MediaMTX restart); **Cloudflare Stream**
+  (admin-only, same gate — Off / Hybrid / All viewers, account ID, API token,
+  Test; stored in `auth.db`; `nexvue-sfu-publish` WHIPs local RTSP to Stream;
+  share/portal WHEP is same-origin proxied so play URLs never reach the
+  browser); **Certificates** (Let's Encrypt
   via pinned `lego` TLS-ALPN-01 on `:443`, or upload a PEM pair — both write
   `/etc/nexvue/tls/{fullchain,privkey}.pem` and reload Apache + MediaMTX;
   Issue uses Public hostname, no separate DNS field; the panel is
@@ -1415,7 +1427,7 @@ and implemented — see the decisions list above the collapsed spec.
 | 1 (this) | Single edge, LAN WHEP, no auth. Prove stability + latency. |
 | 1.5 | **Rolled back** (slate/selector). Split-pipeline encode (`nexvue-encode.py`) is the production healer. See "Phase 1.5 supervisor" below. |
 | 2 | **Edge local auth landed** (bcrypt users + roles, share links, MediaMTX JWT/JWKS, sync-shaped export/import). Central PHP portal (catalog + fleet sync client) still future; Entra OIDC remains Phase 3. |
-| 3 | DMZ exposure: TLS on 443, Settings → Certificates (admin) issues Let's Encrypt via lego TLS-ALPN-01 or uploads PEMs, Settings → Public reachability (admin) sets `webrtcAdditionalHosts` to the public FQDN and/or NAT IP, single UDP 8189 rule + ICE-TCP fallback; Settings → Cloudflare TURN (admin, optional) mints client ICE servers from `auth.db` for viewers who cannot reach 8189; MediaMTX API + status daemon already loopback-bound (`nexvue-mediamtx-api.php` / `nexvue-status.php`). Remaining: Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
+| 3 | DMZ exposure: TLS on 443, Settings → Certificates (admin) issues Let's Encrypt via lego TLS-ALPN-01 or uploads PEMs, Settings → Public reachability (admin) sets `webrtcAdditionalHosts` to the public FQDN and/or NAT IP, single UDP 8189 rule + ICE-TCP fallback; Settings → Cloudflare TURN (admin, optional) mints client ICE servers from `auth.db` for viewers who cannot reach 8189; Settings → Cloudflare Stream (admin, optional hybrid/sfu) WHIPs each path once so share/portal (or all) viewers WHEP from Stream instead of multiplying the encode NIC; MediaMTX API + status daemon already loopback-bound (`nexvue-mediamtx-api.php` / `nexvue-status.php`). Remaining: Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
 | 4 | **First slice landed.** Cloud portal (`web-portal/`, `sudo ./setup.sh --portal` on a separate box) — multi-tenant catalog + identity front door. Portal becomes the viewer-JWT issuer for an adopted station via a merged JWKS on the edge (`nexvue-jwks.php`), so MediaMTX config never changes and a portal outage never breaks local login/share links/publish. Enrollment + heartbeat are edge-initiated outbound only. See CLAUDE.md's Phase 4 entry for the full design. Remaining: fleet health dashboards, cross-site Multiview, Entra ID OIDC. |
 
 ## Cloud portal (Phase 4)
@@ -1436,7 +1448,10 @@ adoption. Portal viewers browse `/catalog` and watch via `/watch`, which
 connects **directly** to the edge's own WHEP endpoint with a portal-minted,
 90-second-TTL JWT — video never transits the portal. When the edge has
 Cloudflare TURN on, the heartbeat caches `ice_servers` on the portal so
-`/watch` can use the same relay without a portal-to-edge call.
+`/watch` can use the same relay without a portal-to-edge call. When Stream
+is Hybrid or All viewers, the heartbeat also caches play URLs (never
+publish URLs); `/watch` POSTs the SDP through the portal (`sfu_whep`) so
+the browser never sees the Stream capability URL.
 
 The repo is split accordingly: `web-node/` is the edge's own web UI (moved
 from repo root, deployed layout on the box unchanged), `web-portal/` is the

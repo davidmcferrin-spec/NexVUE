@@ -125,10 +125,11 @@
   }
   .network-grid label { color: var(--muted); font-size: 12px; }
   .network-grid input { width: 100%; }
-  #network-msg, #turn-msg { color: var(--dim); font-size: 12px; }
-  #network-msg.err, #turn-msg.err { color: var(--bad); }
+  #network-msg, #turn-msg, #sfu-msg { color: var(--dim); font-size: 12px; }
+  #network-msg.err, #turn-msg.err, #sfu-msg.err { color: var(--bad); }
   #network-msg.warn { color: var(--warn); }
-  #network-msg.ok, #turn-msg.ok { color: var(--ok); }
+  #network-msg.ok, #turn-msg.ok, #sfu-msg.ok { color: var(--ok); }
+  .network-grid select { width: 100%; }
   #network-test-out {
     color: var(--muted); font-size: 12px; margin: 8px 0 0; max-width: 56em;
     line-height: 1.45; white-space: pre-wrap;
@@ -508,6 +509,41 @@
     <button type="button" class="primary" id="turn-save">Save</button>
     <button type="button" id="turn-test">Test</button>
     <span id="turn-msg" aria-live="polite"></span>
+  </div>
+</div>
+
+<div class="panel" id="sfu-panel" hidden>
+  <h2>Cloudflare Stream</h2>
+  <p class="network-help">
+    Offload viewer fan-out so this box's 1&nbsp;Gb NIC is not multiplied.
+    The station WHIPs each live path <strong>once</strong> to Cloudflare Stream;
+    those viewers WHEP from Stream. <strong>Hybrid</strong> keeps logged-in
+    Player / Multiview on local MediaMTX (LAN latency, Kick/Metrics still
+    work). Share links and the portal use Stream. <strong>All viewers</strong>
+    sends everyone to Stream. TURN (above) is a connectivity relay and does
+    not replace this. Stored in the auth database — never a <code>.env</code>.
+  </p>
+  <div class="network-grid">
+    <label for="sfu-mode" tabindex="0"
+      data-tip="Off = today's MediaMTX-only path. Hybrid = station logins stay local; share links and portal watch use Stream. All viewers = everyone uses Stream (lowest NIC use, extra internet RTT, Kick/Metrics will not see those sessions).">Egress</label>
+    <select id="sfu-mode" aria-describedby="sfu-msg">
+      <option value="off">Off — this station only</option>
+      <option value="hybrid">Hybrid — shares + portal on Stream</option>
+      <option value="sfu">All viewers on Stream</option>
+    </select>
+    <label for="sfu-account" tabindex="0"
+      data-tip="32-character hex Cloudflare account ID (dashboard URL or right sidebar). Required to create Stream live inputs.">Account ID</label>
+    <input type="text" id="sfu-account" autocomplete="off" spellcheck="false"
+      placeholder="0123456789abcdef0123456789abcdef" aria-describedby="sfu-msg">
+    <label for="sfu-token" tabindex="0"
+      data-tip="API token with Stream:Edit (create live inputs). Leave blank to keep the saved token. Never written to nexvue.env.">API token</label>
+    <input type="password" id="sfu-token" autocomplete="new-password" spellcheck="false"
+      placeholder="paste token — leave blank to keep saved" aria-describedby="sfu-msg">
+  </div>
+  <div class="bar">
+    <button type="button" class="primary" id="sfu-save">Save</button>
+    <button type="button" id="sfu-test">Test</button>
+    <span id="sfu-msg" aria-live="polite"></span>
   </div>
 </div>
 
@@ -2125,6 +2161,88 @@
       }
     });
     loadTurn();
+  }
+
+  // ---- Cloudflare Stream (admin-only, same gate as TURN) ----------------------
+
+  const sfuPanel = document.getElementById("sfu-panel");
+  const sfuMode = document.getElementById("sfu-mode");
+  const sfuAccount = document.getElementById("sfu-account");
+  const sfuToken = document.getElementById("sfu-token");
+  const sfuSave = document.getElementById("sfu-save");
+  const sfuTest = document.getElementById("sfu-test");
+  const sfuMsg = document.getElementById("sfu-msg");
+
+  function setSfuMsg(text, cls) {
+    sfuMsg.textContent = text || "";
+    sfuMsg.className = cls || "";
+  }
+
+  function applySfuForm(data) {
+    sfuMode.value = data.mode || "off";
+    sfuAccount.value = data.account_id || "";
+    sfuToken.value = "";
+    sfuToken.placeholder = data.has_token
+      ? ("saved" + (data.token_hint ? " (" + data.token_hint + ")" : "") + " — leave blank to keep")
+      : "paste token — leave blank to keep saved";
+  }
+
+  function sfuModeLabel(mode) {
+    if (mode === "hybrid") return "hybrid (shares + portal on Stream)";
+    if (mode === "sfu") return "all viewers on Stream";
+    return "off";
+  }
+
+  async function loadSfu() {
+    try {
+      const data = await api("sfu_get", {});
+      applySfuForm(data);
+      if (data.mode && data.mode !== "off") {
+        setSfuMsg("Live inputs: " + (data.input_count || 0) + " · " + sfuModeLabel(data.mode), "ok");
+      }
+    } catch (err) {
+      setSfuMsg(err.message, "err");
+    }
+  }
+
+  if (isAdmin && sfuPanel) {
+    sfuPanel.hidden = false;
+    wireFieldTip(document.querySelector('label[for="sfu-mode"]'));
+    wireFieldTip(document.querySelector('label[for="sfu-account"]'));
+    wireFieldTip(document.querySelector('label[for="sfu-token"]'));
+    sfuSave.addEventListener("click", async () => {
+      setSfuMsg("Saving…");
+      sfuSave.disabled = true;
+      try {
+        const data = await api("sfu_put", {
+          mode: sfuMode.value,
+          account_id: sfuAccount.value.trim(),
+          api_token: sfuToken.value.trim(),
+        });
+        applySfuForm(data);
+        setSfuMsg("Saved — " + sfuModeLabel(data.mode) + " · " + (data.input_count || 0) + " live inputs", "ok");
+      } catch (err) {
+        setSfuMsg(err.message, "err");
+      } finally {
+        sfuSave.disabled = false;
+      }
+    });
+    sfuTest.addEventListener("click", async () => {
+      setSfuMsg("Testing Cloudflare Stream…");
+      sfuTest.disabled = true;
+      try {
+        await api("sfu_test", {
+          account_id: sfuAccount.value.trim(),
+          api_token: sfuToken.value.trim(),
+        });
+        setSfuMsg("Cloudflare Stream accepted the account", "ok");
+      } catch (err) {
+        setSfuMsg(err.message, "err");
+      } finally {
+        sfuTest.disabled = false;
+      }
+    });
+    loadSfu();
   }
 
   // ---- Certificates (admin-only, same gate as Public reachability) ------------

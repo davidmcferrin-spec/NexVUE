@@ -30,7 +30,7 @@ declare(strict_types=1);
 
 const NEXVUE_PORTAL_ROLES = ['org_admin', 'org_operator', 'org_viewer'];
 const NEXVUE_PORTAL_VIEWER_JWT_TTL_S = 90;
-const NEXVUE_PORTAL_SCHEMA_VERSION = 2;
+const NEXVUE_PORTAL_SCHEMA_VERSION = 3;
 const NEXVUE_PORTAL_MAX_CHANNEL_ID = 7;
 /** Enrollment tokens are single-use and short-lived — an admin generates
  *  one right before pasting it into the edge's Settings → Adopt form. */
@@ -211,6 +211,22 @@ SQL);
             $db->exec('ALTER TABLE stations ADD COLUMN ice_servers_expires_at TEXT');
         }
         $ver = 2;
+    }
+    if ($ver < 3) {
+        $cols = [];
+        $info = $db->query('PRAGMA table_info(stations)');
+        if ($info) {
+            while ($c = $info->fetchArray(SQLITE3_ASSOC)) {
+                $cols[(string)$c['name']] = true;
+            }
+        }
+        if (!isset($cols['sfu_mode'])) {
+            $db->exec("ALTER TABLE stations ADD COLUMN sfu_mode TEXT NOT NULL DEFAULT 'off'");
+        }
+        if (!isset($cols['sfu_play_json'])) {
+            $db->exec('ALTER TABLE stations ADD COLUMN sfu_play_json TEXT');
+        }
+        $ver = 3;
     }
     $db->exec('PRAGMA user_version = ' . (string)NEXVUE_PORTAL_SCHEMA_VERSION);
     $done = true;
@@ -686,6 +702,137 @@ function portal_station_ice_servers_for_viewer(?array $station): array {
     }
     $decoded = json_decode($raw, true);
     return is_array($decoded) ? $decoded : [];
+}
+
+/** @return array<string,string> */
+function portal_sfu_sanitize_play_map(mixed $raw): array {
+    if (!is_array($raw)) {
+        return [];
+    }
+    $out = [];
+    foreach ($raw as $path => $url) {
+        $p = strtolower(trim((string)$path));
+        if (!preg_match('/^ch([0-9]|1[0-5])(lo)?$/', $p)) {
+            continue;
+        }
+        $u = trim((string)$url);
+        $scheme = parse_url($u, PHP_URL_SCHEME);
+        if (!in_array($scheme, ['https', 'http'], true)) {
+            continue;
+        }
+        $out[$p] = $u;
+    }
+    return $out;
+}
+
+function portal_sfu_sanitize_mode(string $raw): string {
+    $v = strtolower(trim($raw));
+    return in_array($v, ['off', 'hybrid', 'sfu'], true) ? $v : 'off';
+}
+
+/**
+ * Cache Stream play URLs pushed by the edge heartbeat (never publish URLs).
+ *
+ * @param array<string,mixed> $play
+ */
+function portal_station_sfu_store(string $id, string $mode, array $play): void {
+    $now = portal_now_iso();
+    $mode = portal_sfu_sanitize_mode($mode);
+    $map = portal_sfu_sanitize_play_map($play);
+    $json = null;
+    if ($map !== []) {
+        $encoded = json_encode($map, JSON_UNESCAPED_SLASHES);
+        if (is_string($encoded)) {
+            $json = $encoded;
+        }
+    }
+    $db = portal_db();
+    $st = $db->prepare(
+        'UPDATE stations SET sfu_mode=:m, sfu_play_json=:j, updated_at=:u WHERE id=:id'
+    );
+    $st->bindValue(':m', $mode, SQLITE3_TEXT);
+    $st->bindValue(':j', $json, $json === null ? SQLITE3_NULL : SQLITE3_TEXT);
+    $st->bindValue(':u', $now, SQLITE3_TEXT);
+    $st->bindValue(':id', $id, SQLITE3_TEXT);
+    $st->execute();
+}
+
+function portal_station_sfu_play_url(?array $station, string $path): string {
+    if ($station === null) {
+        return '';
+    }
+    $mode = portal_sfu_sanitize_mode((string)($station['sfu_mode'] ?? 'off'));
+    if ($mode === 'off') {
+        return '';
+    }
+    $raw = (string)($station['sfu_play_json'] ?? '');
+    if ($raw === '') {
+        return '';
+    }
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) {
+        return '';
+    }
+    $path = strtolower(trim($path));
+    return (string)($decoded[$path] ?? '');
+}
+
+/**
+ * @return array{status:int,body:string}
+ */
+function portal_sfu_http(string $method, string $url, ?string $rawBody = null, string $contentType = 'application/sdp'): array {
+    $stub = getenv('NEXVUE_PORTAL_SFU_HTTP_STUB');
+    if (is_string($stub) && $stub !== '' && is_file($stub)) {
+        $statusRaw = getenv('NEXVUE_PORTAL_SFU_HTTP_STATUS');
+        $status = is_string($statusRaw) && ctype_digit($statusRaw) ? (int)$statusRaw : 200;
+        return ['status' => $status, 'body' => (string)file_get_contents($stub)];
+    }
+    if (getenv('NEXVUE_PORTAL_SFU_HTTP_FAIL') === '1') {
+        return ['status' => 0, 'body' => ''];
+    }
+    $scheme = parse_url($url, PHP_URL_SCHEME);
+    if (!in_array($scheme, ['https', 'http'], true)) {
+        return ['status' => 0, 'body' => ''];
+    }
+    $headers = 'Content-Type: ' . $contentType . "\r\n";
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => strtoupper($method),
+            'header' => $headers,
+            'content' => $rawBody ?? '',
+            'timeout' => 12,
+            'ignore_errors' => true,
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+        ],
+    ]);
+    $out = @file_get_contents($url, false, $ctx);
+    $status = 0;
+    if (isset($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
+        $status = (int)$m[1];
+    }
+    return ['status' => $status, 'body' => is_string($out) ? $out : ''];
+}
+
+function portal_sfu_whep_exchange(string $playUrl, string $sdp): string {
+    $sdp = trim($sdp);
+    if ($sdp === '' || !str_starts_with($sdp, 'v=0')) {
+        throw new InvalidArgumentException('invalid SDP offer');
+    }
+    $scheme = parse_url($playUrl, PHP_URL_SCHEME);
+    if (!in_array($scheme, ['https', 'http'], true)) {
+        throw new RuntimeException('Stream playback URL is not configured');
+    }
+    $r = portal_sfu_http('POST', $playUrl, $sdp, 'application/sdp');
+    if ($r['status'] < 200 || $r['status'] >= 300 || trim($r['body']) === '') {
+        if ($r['status'] === 0) {
+            throw new RuntimeException('Could not reach Cloudflare Stream');
+        }
+        throw new RuntimeException('Stream WHEP failed (HTTP ' . $r['status'] . ')');
+    }
+    return $r['body'];
 }
 
 /**

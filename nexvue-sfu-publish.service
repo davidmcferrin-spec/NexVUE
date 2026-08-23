@@ -1,0 +1,35 @@
+# /etc/systemd/system/nexvue-sfu-publish.service
+#
+# NexVUE Cloudflare Stream WHIP publisher — one copy of each live path to
+# Stream so hybrid/sfu viewers do not multiply this box's NIC. Idle when
+# Settings → Cloudflare Stream is Off (reads sfu-publish.json every 10s).
+#
+# Runs as www-data: the publish file lives in the auth dir and is written
+# by Settings (PHP). Pulls loopback MediaMTX RTSP; no DeckLink, no sudo.
+
+[Unit]
+Description=NexVUE Cloudflare Stream WHIP publisher (idle when Stream is off)
+After=network-online.target mediamtx.service
+Wants=mediamtx.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=www-data
+Group=www-data
+Environment=HOME=/tmp
+Environment=XDG_CACHE_HOME=/tmp/.cache
+Environment=GST_REGISTRY=/tmp/.gstreamer-registry.bin
+ExecStart=/usr/bin/python3 /usr/local/bin/nexvue-sfu-publish.py
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/etc/nexvue
+ReadWritePaths=/var/lib/nexvue/auth
+
+[Install]
+WantedBy=multi-user.target

@@ -104,7 +104,7 @@ class TestNexVueTurn(unittest.TestCase):
         self.auth_dir.mkdir(parents=True, exist_ok=True)
         self.db = Path(self._td.name) / "auth.db"
         self.env = Path(self._td.name) / "nexvue.env"
-        self.env.write_text("# test — TURN must not write here\n", encoding="utf-8")
+        self.env.write_text("# test — secrets must not land here\n", encoding="utf-8")
         self.stub = Path(self._td.name) / "cf.json"
         self.stub.write_text(json.dumps(CF_LIST), encoding="utf-8")
 
@@ -183,7 +183,7 @@ echo json_encode(['pub' => $pub, 'stored' => $row['api_token'], 'keys' => array_
         self.assertEqual(data["pub"]["key_id"], "turnkey12-aaaa-bbbb-cccc-dddddddddddd")
         self.assertTrue(data["pub"]["has_token"])
         self.assertTrue(data["pub"]["token_hint"].endswith("e-ok") or "e-ok" in data["pub"]["token_hint"])
-        self.assertNotIn("api_token", data["pub"]["keys"])
+        self.assertNotIn("api_token", data["keys"])
         self.assertEqual(data["stored"], "cf-token-secret-value-ok")
         env_text = self.env.read_text(encoding="utf-8")
         self.assertNotIn("TURN", env_text)

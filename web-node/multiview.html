@@ -950,7 +950,6 @@
     };
 
     try {
-      const url = NexVueAuth.whepUrl(path, sess.jwt);
       const offer = await pc.createOffer();
       // Chrome won't advertise multiopus; MediaMTX rejects >2ch Opus without it.
       const prepared = await NexVueVu.prepareWhepOffer(offer);
@@ -958,30 +957,25 @@
       await NexVueAuth.waitIceGathering(pc, iceServers.length ? 12000 : 2000);
       if (pane.pc !== pc) return;  // superseded
 
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/sdp" },
-        body: pc.localDescription.sdp
-      });
-      const body = await res.text();
-      if (!res.ok) {
+      const exchanged = await NexVueAuth.whepExchange(sess, path, pc.localDescription.sdp);
+      if (exchanged.status < 200 || exchanged.status >= 300) {
         let detail = "";
         try {
-          const j = JSON.parse(body);
+          const j = JSON.parse(exchanged.sdp);
           if (j && j.error) detail = j.error;
         } catch (e) {
-          detail = (body || "").slice(0, 160);
+          detail = (exchanged.sdp || "").slice(0, 160);
         }
         throw new Error(
-          `WHEP ${res.status}` +
+          `WHEP ${exchanged.status}` +
           (detail ? ` — ${detail}` : "") +
           (!prepared.multiopus
             ? " (this browser may not support multichannel Opus; use Chrome/Edge)"
             : "")
         );
       }
-      pane.sessionId = parseWhepSessionId(res);
-      await pc.setRemoteDescription({ type: "answer", sdp: body });
+      pane.sessionId = exchanged.res ? parseWhepSessionId(exchanged.res) : null;
+      await pc.setRemoteDescription({ type: "answer", sdp: exchanged.sdp });
     } catch (err) {
       const raw = err && err.message ? err.message : String(err);
       const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");

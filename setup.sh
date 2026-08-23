@@ -490,6 +490,7 @@ REQUIRED_FILES=(
   decklink-configure.cpp
   nexvue-status-server.py nexvue-status.service
   nexvue-metrics-server.py nexvue-metrics.service
+  nexvue-sfu-publish.py nexvue-sfu-publish.service
   web-node/nexvue-metrics.php web-node/nexvue-status.php web-node/nexvue-mediamtx-api.php
   web-node/nexvue-captions.php web-node/nexvue-captions.js
   web-node/nexvue-qr.js web-node/nexvue-ui.js web-node/nexvue-vu.js
@@ -553,8 +554,9 @@ apt-get install -y -qq \
   apache2 libapache2-mod-php php-cli php-sqlite3 \
   openssh-server ufw \
   python3-gi python3-gst-1.0 gir1.2-glib-2.0 gir1.2-gstreamer-1.0 \
-  gir1.2-gst-plugins-base-1.0
-ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for nexvue-encode.py — never pip; Apache + php-cli/sqlite3 for login/auth + metrics.php)"
+  gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
+  gstreamer1.0-nice
+ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for nexvue-encode.py + Stream WHIP — never pip; Apache + php-cli/sqlite3 for login/auth + metrics.php)"
 
 # PHP under Apache (login / ops / metrics). Idempotent: enable whatever
 # versioned mod_php apt just installed, then reload if Apache is running.
@@ -725,6 +727,7 @@ install -m 755 "${REPO_DIR}/nexvue-encode-auto-park.sh" /usr/local/bin/nexvue-en
 install -m 755 "${REPO_DIR}/nexvue-supervisor.py" /usr/local/bin/nexvue-supervisor.py
 install -m 755 "${REPO_DIR}/nexvue-status-server.py" /usr/local/bin/nexvue-status-server.py
 install -m 755 "${REPO_DIR}/nexvue-metrics-server.py" /usr/local/bin/nexvue-metrics-server.py
+install -m 755 "${REPO_DIR}/nexvue-sfu-publish.py" /usr/local/bin/nexvue-sfu-publish.py
 install -m 755 "${REPO_DIR}/nexvue-captions-decode.py" /usr/local/bin/nexvue-captions-decode.py
 install -m 755 "${REPO_DIR}/nexvue-captions-probe.sh" /usr/local/bin/nexvue-captions-probe.sh
 install -m 755 "${REPO_DIR}/nexvue-phase1-closeout.sh" /usr/local/bin/nexvue-phase1-closeout.sh
@@ -795,6 +798,7 @@ install -m 644 "${REPO_DIR}/mediamtx.service" \
                "${REPO_DIR}/nexvue-decklink-configure.service" \
                "${REPO_DIR}/nexvue-status.service" \
                "${REPO_DIR}/nexvue-metrics.service" \
+               "${REPO_DIR}/nexvue-sfu-publish.service" \
                "${REPO_DIR}/nexvue-portal-heartbeat.service" \
                "${REPO_DIR}/nexvue-portal-heartbeat.timer" \
                "${REPO_DIR}/nexvue-tls-issue.service" \
@@ -837,7 +841,7 @@ if [ -x /usr/local/bin/decklink-configure ]; then
     || warn "nexvue-decklink-configure start failed (card absent / SDK helper missing?)"
 fi
 
-for u in mediamtx nexvue-status nexvue-metrics; do
+for u in mediamtx nexvue-status nexvue-metrics nexvue-sfu-publish; do
   if systemctl enable --now "$u" >/dev/null 2>&1; then
     ok "enabled --now ${u}"
   else
@@ -1432,7 +1436,7 @@ fi
 
 # GStreamer elements (encode path + Phase 1.5 slate supervisor)
 for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc \
-          rtspclientsink ccextractor ccconverter \
+          rtspclientsink ccextractor ccconverter webrtcbin \
           input-selector videotestsrc audiotestsrc textoverlay valve identity; do
   if gst-inspect-1.0 "$el" >/dev/null 2>&1; then
     ok "gstreamer element: $el"
@@ -1441,6 +1445,7 @@ for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc \
       decklinkvideosrc) warn "missing $el — install Blackmagic Desktop Video (deb) and reboot" ;;
       vah264enc)        warn "missing $el — VA driver issue (see vainfo above); x264enc fallback works for 1-2 channels only" ;;
       rtspclientsink)   warn "missing $el — install gstreamer1.0-rtsp (setup apt step); encode publish will fail" ;;
+      webrtcbin)        warn "missing $el — install gstreamer1.0-plugins-bad + gstreamer1.0-nice; Stream WHIP publisher will idle" ;;
       ccextractor|ccconverter) warn "missing $el — caption side channel needs gstreamer1.0-plugins-bad" ;;
       input-selector|videotestsrc|audiotestsrc|textoverlay|valve|identity)
         warn "missing $el — Phase 1.5 supervisor needs gstreamer1.0-plugins-base / good" ;;
@@ -1458,6 +1463,9 @@ done
 [ -x /usr/local/bin/nexvue-encode.py ] \
   && ok "nexvue-encode.py present (persistent publish + disposable capture)" \
   || warn "nexvue-encode.py missing — nexvue-encode@N will not start"
+[ -x /usr/local/bin/nexvue-sfu-publish.py ] \
+  && ok "nexvue-sfu-publish.py present (Cloudflare Stream WHIP)" \
+  || warn "nexvue-sfu-publish.py missing — Stream hybrid/sfu egress will not publish"
 [ -x /usr/local/bin/nexvue-encode-auto-park.sh ] \
   && ok "nexvue-encode-auto-park.sh present" \
   || warn "nexvue-encode-auto-park.sh missing — empty-port auto-park disabled"
@@ -1469,7 +1477,7 @@ done
 # MediaMTX + units
 [ -x /usr/local/bin/mediamtx ] && ok "mediamtx binary present" || warn "mediamtx binary missing"
 for u in mediamtx.service nexvue-encode@.service nexvue-decklink-configure.service \
-         nexvue-status.service nexvue-metrics.service \
+         nexvue-status.service nexvue-metrics.service nexvue-sfu-publish.service \
          nexvue-encode-auto-unpark.service nexvue-encode-auto-unpark.timer; do
   [ -f "/etc/systemd/system/$u" ] && ok "unit installed: $u" || warn "unit missing: $u"
 done
@@ -1735,6 +1743,7 @@ Next steps:
      MAX_CHANNELS slot). Duo 2: set MAX_DEVICES=4 and MAX_CHANNELS=4 in
      /etc/nexvue/nexvue.env, then re-run setup.sh (disables encode@4..7).
   4. Services are enabled by setup: mediamtx, nexvue-status, nexvue-metrics,
+     nexvue-sfu-publish (idle until Settings → Cloudflare Stream is on),
      nexvue-decklink-configure, and nexvue-encode@0..(MAX_CHANNELS-1).
      Empty SDI ports auto-park; auto-unpark starts them when SDI locks.
   5. TLS: /etc/nexvue/tls/{fullchain,privkey}.pem (self-signed if setup created

@@ -282,6 +282,25 @@
     return whepBase() + "/" + path + "/whep?jwt=" + encodeURIComponent(jwt);
   }
 
+  function whepExchange(sess, path, sdp) {
+    if (sess && sess.egress === "sfu") {
+      return api("sfu_whep", { path: path, sdp: sdp }).then(function (data) {
+        return { status: 200, sdp: data.sdp || "", sessionId: null, via: "sfu" };
+      });
+    }
+    var url = whepUrl(path, sess && sess.jwt);
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/sdp" },
+      credentials: "omit",
+      body: sdp,
+    }).then(function (res) {
+      return res.text().then(function (body) {
+        return { status: res.status, sdp: body, res: res, via: "local" };
+      });
+    });
+  }
+
   function whepFetchHint(errMsg) {
     if (!/Failed to fetch|NetworkError|Load failed/i.test(String(errMsg || ""))) {
       return "";
@@ -329,6 +348,7 @@
     waitIceGathering: waitIceGathering,
     whepBase: whepBase,
     whepUrl: whepUrl,
+    whepExchange: whepExchange,
     whepFetchHint: whepFetchHint,
     channelAllowed: channelAllowed,
     canShare: canShare,

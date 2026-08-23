@@ -46,10 +46,16 @@ class TestPortalApiHappyPath(unittest.TestCase):
         self.db = Path(self._td.name) / "portal.db"
         self.port = _free_port()
 
+        self.sfu_stub = Path(self._td.name) / "sfu-whep.sdp"
+        self.sfu_stub.write_text(
+            "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n",
+            encoding="utf-8",
+        )
         env = os.environ.copy()
         env["NEXVUE_PORTAL_HTTP"] = "1"
         env["NEXVUE_PORTAL_DB"] = str(self.db)
         env["NEXVUE_PORTAL_DIR"] = str(self.portal_dir)
+        env["NEXVUE_PORTAL_SFU_HTTP_STUB"] = str(self.sfu_stub)
         self.proc = subprocess.Popen(
             [PHP, "-d", "display_errors=0", "-S", f"127.0.0.1:{self.port}", str(API_PHP)],
             cwd=str(API_PHP.parent),
@@ -173,6 +179,7 @@ class TestPortalApiHappyPath(unittest.TestCase):
         self.assertTrue(jwt_resp["jwt"])
         self.assertEqual(jwt_resp["whep_url"], "https://edge-alpha.example.com:8889/ch0/whep")
         self.assertEqual(jwt_resp.get("ice_servers"), [])
+        self.assertEqual(jwt_resp.get("egress"), "local")
 
         status, hb_ice = self._request(
             "POST",
@@ -200,6 +207,42 @@ class TestPortalApiHappyPath(unittest.TestCase):
         )
         self.assertEqual(status, 200, jwt_turn)
         self.assertEqual(jwt_turn["ice_servers"][0]["username"], "portal-test")
+
+        status, hb_sfu = self._request(
+            "POST",
+            "station_heartbeat",
+            {
+                "edge_version": "2.5.0",
+                "channels": [
+                    {"channel_base": "ch0", "alias": "Program", "lo_enabled": True},
+                    {"channel_base": "ch1", "alias": "Preview", "lo_enabled": False},
+                ],
+                "sfu": {
+                    "mode": "hybrid",
+                    "play": {"ch0": "https://customer.example.com/uid/webRTC/play"},
+                },
+            },
+            bearer=station_key,
+        )
+        self.assertEqual(status, 200, hb_sfu)
+        status, jwt_sfu = self._request(
+            "POST", "viewer_jwt", {"station_id": station_id, "channel_base": "ch0"}
+        )
+        self.assertEqual(status, 200, jwt_sfu)
+        self.assertEqual(jwt_sfu.get("egress"), "sfu")
+        self.assertEqual(jwt_sfu["whep_url"], "https://edge-alpha.example.com:8889/ch0/whep")
+        self.assertNotIn("customer.example.com", json.dumps(jwt_sfu))
+        status, sfu_ans = self._request(
+            "POST",
+            "sfu_whep",
+            {
+                "station_id": station_id,
+                "channel_base": "ch0",
+                "sdp": "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n",
+            },
+        )
+        self.assertEqual(status, 200, sfu_ans)
+        self.assertTrue(str(sfu_ans.get("sdp") or "").startswith("v=0"))
 
         # 7. Admin creates an org_viewer with NO catalog grant yet.
         status, viewer = self._request(

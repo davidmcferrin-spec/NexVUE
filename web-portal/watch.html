@@ -114,17 +114,28 @@
       const prepared = await NexVuePortalWhep.prepareWhepOffer(offer);
       await pc.setLocalDescription({ type: "offer", sdp: prepared.sdp });
       await NexVuePortalWhep.waitIceGathering(pc, iceServers.length ? 12000 : 2000);
-      const url = jwtResp.whep_url + "?jwt=" + encodeURIComponent(jwtResp.jwt);
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/sdp" },
-        body: pc.localDescription.sdp,
-      });
-      const body = await res.text();
-      if (!res.ok) {
-        throw new Error("WHEP endpoint returned " + res.status);
+      let answerSdp;
+      if (jwtResp.egress === "sfu") {
+        const exchanged = await NexVuePortal.api("sfu_whep", {
+          station_id: stationId,
+          channel_base: channel,
+          sdp: pc.localDescription.sdp,
+        });
+        answerSdp = exchanged.sdp || "";
+      } else {
+        const url = jwtResp.whep_url + "?jwt=" + encodeURIComponent(jwtResp.jwt);
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/sdp" },
+          body: pc.localDescription.sdp,
+        });
+        const body = await res.text();
+        if (!res.ok) {
+          throw new Error("WHEP endpoint returned " + res.status);
+        }
+        answerSdp = body;
       }
-      await pc.setRemoteDescription({ type: "answer", sdp: body });
+      await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
     } catch (err) {
       setState("error: " + (err.message || err), "bad");
     }

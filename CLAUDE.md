@@ -200,7 +200,13 @@ this box can't get additional ports opened.
   (`webrtcAdditionalHosts`) are set from Settings → Public reachability
   (admin). Optional Settings → Cloudflare TURN (admin) stores the TURN key
   in `auth.db` and mints client `ice_servers` on `whep_jwt` / portal
-  heartbeat — no MediaMTX restart, never a `.env`. Remaining: Entra OIDC, CORS, portal relays. (TLS landed early —
+  heartbeat — no MediaMTX restart, never a `.env`. Optional Settings →
+  Cloudflare Stream (admin) stores `sfu_config` / `sfu_inputs` in `auth.db`
+  (`off` / `hybrid` / `sfu`): `nexvue-sfu-publish` WHIPs each local RTSP
+  path once; hybrid keeps logged-in station users on MediaMTX and sends
+  share + portal viewers to Stream; `sfu` sends everyone. Same-origin
+  `sfu_whep` (edge) / portal `sfu_whep` hide Stream play URLs. TURN is
+  connectivity; Stream is fan-out. Remaining: Entra OIDC, CORS, portal relays. (TLS landed early —
   see README TLS section.)
 - **Phase 4: fleet / cloud portal — first slice landed.** Repo split:
   `web-node/` holds everything from Phases 1-3 (moved as a group, same
@@ -229,7 +235,8 @@ this box can't get additional ports opened.
   no root needed) are both **edge-initiated outbound only**; no
   portal-to-edge inbound call exists anywhere. Heartbeat pushes station
   status + channel catalog + optional Cloudflare `ice_servers` (when TURN
-  is on), portal echoes back its current JWKS each time
+  is on) + Stream `sfu.mode` / play URLs (never publish URLs), portal echoes
+  back its current JWKS each time
   (key rotation propagates for free, no separate endpoint). Login page
   shows a non-blocking "sign in via portal" nudge when adopted+reachable
   (`portal_status`, public action) — local sign-in and `/s/<token>` share
@@ -237,7 +244,8 @@ this box can't get additional ports opened.
   Portal UI: `/login`, `/catalog` (role-filtered stream list), `/watch`
   (single-stream WHEP viewer — includes the multiopus SDP-munge fix
   extracted into `nexvue-portal-whep.js` since every edge publishes 8ch
-  positioned Opus; full VU/CC/stats deferred), `/stations` + `/users`
+  positioned Opus; uses Stream via portal `sfu_whep` when the station is
+  hybrid/sfu; full VU/CC/stats deferred), `/stations` + `/users`
   (`org_admin`: enrollment-token issuance, portal user + catalog ACL
   management).
   Explicit non-goals for this slice: fleet health dashboards, cross-site
@@ -347,7 +355,7 @@ this box can't get additional ports opened.
   logged-in Player prompts Select a channel; Multiview shares ≤4 channels, auto-tune
   panes; Fill window + Fullscreen near-frameless; Player PiP; admin edit name/channels/expiry; delete
   after revoke/expiry; purge 7d post-expiry). Roles: admin
-  (Users+Services+Settings including Public reachability + Certificates + Cloudflare TURN + Metrics+all shares), operator (Settings+Metrics; no Public reachability, Certificates, or Cloudflare TURN),
+  (Users+Services+Settings including Public reachability + Certificates + Cloudflare TURN + Cloudflare Stream + Metrics+all shares), operator (Settings+Metrics; no Public reachability, Certificates, Cloudflare TURN, or Cloudflare Stream),
   sharer / UI **Viewer+Share** (watch + own share links via Player/Multiview
   Share), viewer (watch). Per-user channel ACL on Users (`users.channels`;
   null = all). MediaMTX JWT via local JWKS; encoders use `NEXVUE_PUBLISH_JWT`.
@@ -402,6 +410,14 @@ this box can't get additional ports opened.
   adopted stations push a cached blob on the outbound heartbeat so portal
   `/watch` can use the same relay. Toggle applies on the next play; no
   MediaMTX restart. Does not replace Public hostname or 8189 forwards.
+  Settings **Cloudflare Stream** (admin only — hidden from operators) writes
+  `sfu_config` in `auth.db` (mode off/hybrid/sfu, account ID, API token).
+  Save provisions Stream live inputs and writes
+  `/var/lib/nexvue/auth/sfu-publish.json` for `nexvue-sfu-publish`
+  (www-data, idle when off). Hybrid: station logins stay on local WHEP;
+  share links and portal `/watch` use Stream. All viewers: everyone uses
+  Stream. Kick/Metrics only see MediaMTX sessions. Play URLs never go to
+  the browser. Confirm 8ch Opus on a bench before production.
   Settings **Certificates** (admin only — hidden from operators) uses
   `nexvue-ops-tls.sh` + pinned `lego` TLS-ALPN-01 on `:443` (Apache stopped
   only for that window) or a validated PEM upload onto `/etc/nexvue/tls/`.

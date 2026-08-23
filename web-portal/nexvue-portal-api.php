@@ -3,7 +3,7 @@
  * nexvue-portal-api.php — JSON API for the NexVUE cloud portal (Phase 4).
  *
  * Public: login, logout, me
- * Authed (any portal role): change_password, catalog_list, viewer_jwt
+ * Authed (any portal role): change_password, catalog_list, viewer_jwt, sfu_whep
  * org_admin: users_list, user_create, user_update, stations_list,
  *   enroll_token_create, enroll_token_revoke, catalog_acl_put
  * Edge-initiated, no browser session:
@@ -76,7 +76,7 @@ if ($action === '') {
 }
 
 try {
-    if (!in_array($action, ['enroll_exchange', 'station_heartbeat'], true)) {
+    if (!in_array($action, ['enroll_exchange'], true)) {
         portal_migrate();
     }
 } catch (Throwable $e) {
@@ -154,6 +154,11 @@ try {
             $iceExp = (string)($body['ice_servers_expires_at'] ?? '');
             portal_station_ice_servers_store($station['id'], $iceList, $iceExp);
         }
+        if (array_key_exists('sfu', $body)) {
+            $sfu = is_array($body['sfu']) ? $body['sfu'] : [];
+            $play = is_array($sfu['play'] ?? null) ? $sfu['play'] : [];
+            portal_station_sfu_store($station['id'], (string)($sfu['mode'] ?? 'off'), $play);
+        }
         $keys = portal_ensure_keys();
         portal_api_ok(['portal_jwks' => $keys['jwks']]);
     }
@@ -198,13 +203,44 @@ try {
         $jwt = portal_mint_viewer_jwt($sub, $channelBase);
         $whepUrl = rtrim((string)$station['edge_base_url'], '/') . ':' . (int)$station['edge_whep_port']
             . '/' . $channelBase . '/whep';
+        $play = portal_station_sfu_play_url($station, $channelBase);
         portal_api_ok([
             'jwt' => $jwt,
             'expires_in' => NEXVUE_PORTAL_VIEWER_JWT_TTL_S,
             'whep_url' => $whepUrl,
             'path' => $channelBase,
             'ice_servers' => portal_station_ice_servers_for_viewer($station),
+            'egress' => $play !== '' ? 'sfu' : 'local',
         ]);
+    }
+
+    if ($action === 'sfu_whep') {
+        $user = portal_require_any();
+        $stationId = (string)($body['station_id'] ?? '');
+        $channelBase = strtolower(trim((string)($body['channel_base'] ?? '')));
+        if ($stationId === '' || !preg_match('/^ch[0-7]$/', $channelBase)) {
+            portal_api_fail(400, 'station_id and channel_base (ch0-ch7) required');
+        }
+        $station = portal_station_find_by_id($stationId);
+        if ($station === null || $station['org_id'] !== $user['org_id'] || $station['status'] !== 'active') {
+            portal_api_fail(404, 'station not found');
+        }
+        if (!portal_user_allows_channel($user, $stationId, $channelBase)) {
+            portal_api_fail(403, 'channel not allowed');
+        }
+        $play = portal_station_sfu_play_url($station, $channelBase);
+        if ($play === '') {
+            portal_api_fail(409, 'Stream live input is not ready for this channel');
+        }
+        $sdp = (string)($body['sdp'] ?? '');
+        try {
+            $answer = portal_sfu_whep_exchange($play, $sdp);
+        } catch (InvalidArgumentException $e) {
+            portal_api_fail(400, $e->getMessage());
+        } catch (RuntimeException $e) {
+            portal_api_fail(502, $e->getMessage());
+        }
+        portal_api_ok(['sdp' => $answer, 'path' => $channelBase]);
     }
 
     // ---- org_admin only ---------------------------------------------------

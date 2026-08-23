@@ -17,6 +17,7 @@
  *   | update_status | update_repo | network_get | network_put | network_test
  *   | tls_status | tls_issue | tls_upload
  *   | turn_get | turn_put | turn_test
+ *   | sfu_get | sfu_put | sfu_test
  *
  * support_bundle returns application/zip (not JSON): builds a redacted
  * journals+config+state zip via nexvue-ops-support-bundle.sh for the
@@ -37,6 +38,11 @@
  * (never nexvue.env). Admin-only, same gate as Public reachability. Turn on
  * mints short-lived iceServers for Player / Multiview via whep_jwt; MediaMTX
  * is not restarted.
+ *
+ * sfu_get / sfu_put / sfu_test persist Cloudflare Stream (WHIP/WHEP) in
+ * auth.db. Admin-only. Mode off | hybrid (share + portal only) | sfu (all
+ * viewers). Hybrid keeps LAN Player on local MediaMTX so control rooms stay
+ * on-box; off-site shares do not multiply the 1 Gb NIC. TURN is unchanged.
  *
  * update_status / update_repo call nexvue-ops-update.sh (git fetch + hard-reset
  * to origin/NEXVUE_UPDATE_BRANCH + setup.sh). Admin-only — same gate as
@@ -1134,6 +1140,7 @@ function ops_require_auth(string $action): void {
         'network_get', 'network_put', 'network_test',
         'tls_status', 'tls_issue', 'tls_upload',
         'turn_get', 'turn_put', 'turn_test',
+        'sfu_get', 'sfu_put', 'sfu_test',
     ];
     try {
         if ($hot) {
@@ -2152,6 +2159,47 @@ if ($action === 'turn_test') {
         'ice_server_count' => count($minted['ice_servers']),
         'expires_at' => $minted['expires_at'],
     ]);
+    exit;
+}
+
+// ---- sfu_get / sfu_put / sfu_test (admin-only Cloudflare Stream hybrid) -------
+
+if ($action === 'sfu_get') {
+    echo json_encode(array_merge(['ok' => true], auth_sfu_public()));
+    exit;
+}
+
+if ($action === 'sfu_put') {
+    try {
+        $pub = auth_sfu_put([
+            'mode' => (string)($body['mode'] ?? 'off'),
+            'account_id' => (string)($body['account_id'] ?? ''),
+            'api_token' => (string)($body['api_token'] ?? ''),
+        ]);
+    } catch (InvalidArgumentException $e) {
+        fail(400, $e->getMessage());
+    } catch (RuntimeException $e) {
+        fail(400, $e->getMessage());
+    } catch (Throwable $e) {
+        fail(500, 'failed to save Cloudflare Stream settings');
+    }
+    echo json_encode(array_merge(['ok' => true], $pub));
+    exit;
+}
+
+if ($action === 'sfu_test') {
+    $accountId = trim((string)($body['account_id'] ?? ''));
+    $token = trim((string)($body['api_token'] ?? ''));
+    try {
+        auth_sfu_test($accountId !== '' ? $accountId : null, $token !== '' ? $token : null);
+    } catch (InvalidArgumentException $e) {
+        fail(400, $e->getMessage());
+    } catch (RuntimeException $e) {
+        fail(400, $e->getMessage());
+    } catch (Throwable $e) {
+        fail(500, 'Cloudflare Stream test failed');
+    }
+    echo json_encode(['ok' => true]);
     exit;
 }
 

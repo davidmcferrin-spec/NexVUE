@@ -117,6 +117,7 @@ function main(): int {
         'channels' => heartbeat_collect_channels(),
         'ice_servers' => [],
         'ice_servers_expires_at' => '',
+        'sfu' => ['mode' => 'off', 'play' => []],
     ];
     try {
         $turn = auth_turn_ice_servers_for_viewer();
@@ -124,6 +125,11 @@ function main(): int {
         $payload['ice_servers_expires_at'] = $turn['expires_at'];
     } catch (Throwable $e) {
         // TURN mint is best-effort — catalog sync must still run.
+    }
+    try {
+        $payload['sfu'] = auth_sfu_heartbeat_payload();
+    } catch (Throwable $e) {
+        // Stream catalog is best-effort — catalog sync must still run.
     }
     $r = auth_portal_http_post(
         $env['url'] . '/api/portal?action=station_heartbeat',
