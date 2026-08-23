@@ -20,11 +20,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PARK_SH = ROOT / "nexvue-encode-auto-park.sh"
-BASH = shutil.which("bash") or (
-    str(Path(r"C:\Program Files\Git\bin\bash.exe"))
-    if Path(r"C:\Program Files\Git\bin\bash.exe").is_file()
-    else None
+_GIT_BASH = Path(r"C:\Program Files\Git\bin\bash.exe")
+# Prefer Git Bash on Windows — WSL bash (often first on PATH) does not see
+# the same /c/... mount and cannot exec the repo script.
+BASH = (
+    str(_GIT_BASH)
+    if _GIT_BASH.is_file()
+    else shutil.which("bash")
 )
+
+
+def bash_path(p: Path) -> str:
+    """Git Bash on Windows cannot exec a raw `C:\\...` path."""
+    s = str(p.resolve())
+    if len(s) >= 2 and s[1] == ":":
+        return "/" + s[0].lower() + s[2:].replace("\\", "/")
+    return s
 
 
 @unittest.skipUnless(BASH and PARK_SH.is_file(), "bash or auto-park script missing")
@@ -34,6 +45,20 @@ class TestEncodeAutoPark(unittest.TestCase):
         self.state = Path(self.tmp.name)
         self.state_dir = self.state / "state"
         self.state_dir.mkdir()
+        self.durable_dir = self.state / "durable"
+        self.durable_dir.mkdir()
+        self.channels_dir = self.state / "channels"
+        self.channels_dir.mkdir()
+        (self.channels_dir / "4.env").write_text(
+            "DEVICE_NUMBER=4\nINPUT_TYPE=decklink\n", encoding="utf-8"
+        )
+        self.station_env = self.state / "nexvue.env"
+        self.station_env.write_text(
+            "MAX_CHANNELS=5\nAUTO_UNPARK=true\nAUTO_UNPARK_LOCK_POLLS=2\n",
+            encoding="utf-8",
+        )
+        self.unit_state = self.state / "units"
+        self.unit_state.mkdir()
         self.bin = self.state / "bin"
         self.bin.mkdir()
         self.systemctl_log = self.state / "systemctl.log"
@@ -59,11 +84,25 @@ class TestEncodeAutoPark(unittest.TestCase):
         path.write_text(
             "#!/usr/bin/env bash\n"
             'echo "$@" >> "$SYSTEMCTL_LOG"\n'
+            'unit="${!#}"\n'
+            'ch="${unit##*@}"\n'
+            'case "$1" in\n'
+            "  is-active)\n"
+            '    if [ -f "$UNIT_STATE_DIR/${ch}.active" ]; then cat "$UNIT_STATE_DIR/${ch}.active"; else echo inactive; fi\n'
+            "    exit 0 ;;\n"
+            "  is-enabled)\n"
+            '    if [ -f "$UNIT_STATE_DIR/${ch}.enabled" ]; then cat "$UNIT_STATE_DIR/${ch}.enabled"; else echo disabled; fi\n'
+            "    exit 0 ;;\n"
+            "esac\n"
             "exit 0\n",
             encoding="utf-8",
             newline="\n",
         )
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+    def _set_unit(self, ch: str, *, active: str = "inactive", enabled: str = "disabled") -> None:
+        (self.unit_state / f"{ch}.active").write_text(active + "\n", encoding="utf-8")
+        (self.unit_state / f"{ch}.enabled").write_text(enabled + "\n", encoding="utf-8")
 
     def _write_status_stub(self) -> None:
         path = self.bin / "decklink-status"
@@ -90,6 +129,10 @@ class TestEncodeAutoPark(unittest.TestCase):
         env = os.environ.copy()
         env["PATH"] = f"{self.bin}{os.pathsep}{env.get('PATH', '')}"
         env["AUTO_PARK_STATE_DIR"] = str(self.state_dir)
+        env["AUTO_PARK_DURABLE_DIR"] = str(self.durable_dir)
+        env["NEXVUE_STATION_ENV"] = str(self.station_env)
+        env["NEXVUE_CHANNELS_DIR"] = str(self.channels_dir)
+        env["UNIT_STATE_DIR"] = str(self.unit_state)
         env["DECKLINK_STATUS_BIN"] = str(self.bin / "decklink-status")
         env["STATUS_JSON_FILE"] = str(self.state / "status.json")
         env["SYSTEMCTL_LOG"] = str(self.systemctl_log)
@@ -99,7 +142,7 @@ class TestEncodeAutoPark(unittest.TestCase):
 
     def _run(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [BASH, str(PARK_SH), *args],
+            [BASH, bash_path(PARK_SH), *args],
             capture_output=True,
             text=True,
             env=env or self._env(),
@@ -153,6 +196,8 @@ class TestEncodeAutoPark(unittest.TestCase):
         self.assertIn("reset-failed nexvue-encode@4", log)
         self.assertFalse((self.state_dir / "4.request").exists())
         self.assertFalse((self.state_dir / "4.count").exists())
+        self.assertTrue((self.durable_dir / "4.auto-parked").is_file())
+        self.assertTrue((self.state_dir / "4.auto-parked").is_file())
 
     def test_stoppost_noop_without_request(self) -> None:
         r = self._run("stoppost", "4")
@@ -162,6 +207,84 @@ class TestEncodeAutoPark(unittest.TestCase):
     def test_rejects_bad_channel(self) -> None:
         r = self._run("check", "9", "4")
         self.assertEqual(r.returncode, 2)
+
+    def test_unpark_disabled_after_unlock_then_lock(self) -> None:
+        self._set_unit("4", active="inactive", enabled="disabled")
+        self._set_locked(False)
+        r1 = self._run("unpark-scan")
+        self.assertEqual(r1.returncode, 0, r1.stderr + r1.stdout)
+        self.assertEqual((self.state_dir / "4.last").read_text(encoding="utf-8").strip(), "unlocked")
+        self.assertNotIn("enable --now", self.systemctl_log.read_text(encoding="utf-8"))
+        self.assertNotIn("start nexvue-encode@", self.systemctl_log.read_text(encoding="utf-8"))
+
+        self._set_locked(True)
+        r2 = self._run("unpark-scan")
+        self.assertEqual(r2.returncode, 0, r2.stderr + r2.stdout)
+        self.assertEqual((self.state_dir / "4.lockstreak").read_text(encoding="utf-8").strip(), "1")
+        self.assertNotIn("enable --now", self.systemctl_log.read_text(encoding="utf-8"))
+
+        r3 = self._run("unpark-scan")
+        self.assertEqual(r3.returncode, 0, r3.stderr + r3.stdout)
+        log = self.systemctl_log.read_text(encoding="utf-8")
+        self.assertIn("enable --now nexvue-encode@4", log)
+
+    def test_unpark_leaves_manual_disable_on_locked_feed(self) -> None:
+        self._set_unit("4", active="inactive", enabled="disabled")
+        self._set_locked(True)
+        r = self._run("unpark-scan")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertEqual((self.state_dir / "4.last").read_text(encoding="utf-8").strip(), "locked")
+        self.assertNotIn("enable --now", self.systemctl_log.read_text(encoding="utf-8"))
+        r2 = self._run("unpark-scan")
+        self.assertEqual(r2.returncode, 0, r2.stderr + r2.stdout)
+        self.assertNotIn("enable --now", self.systemctl_log.read_text(encoding="utf-8"))
+        self.assertNotIn("start nexvue-encode@", self.systemctl_log.read_text(encoding="utf-8"))
+
+    def test_unpark_auto_parked_marker_starts_without_prior_unlock(self) -> None:
+        self._set_unit("4", active="inactive", enabled="disabled")
+        (self.durable_dir / "4.auto-parked").write_text("auto-parked\n", encoding="utf-8")
+        self._set_locked(True)
+        self._run("unpark-scan")
+        self._run("unpark-scan")
+        log = self.systemctl_log.read_text(encoding="utf-8")
+        self.assertIn("enable --now nexvue-encode@4", log)
+        self.assertFalse((self.durable_dir / "4.auto-parked").exists())
+
+    def test_unpark_stopped_enabled_uses_start(self) -> None:
+        self._set_unit("4", active="inactive", enabled="enabled")
+        self._set_locked(False)
+        self._run("unpark-scan")
+        self._set_locked(True)
+        self._run("unpark-scan")
+        self._run("unpark-scan")
+        log = self.systemctl_log.read_text(encoding="utf-8")
+        self.assertIn("start nexvue-encode@4", log)
+        self.assertNotIn("enable --now", log)
+
+    def test_unpark_off_is_noop(self) -> None:
+        self.station_env.write_text("MAX_CHANNELS=5\nAUTO_UNPARK=false\n", encoding="utf-8")
+        self._set_unit("4", active="inactive", enabled="disabled")
+        self._set_locked(False)
+        self._run("unpark-scan")
+        self._set_locked(True)
+        self._run("unpark-scan")
+        self._run("unpark-scan")
+        log = self.systemctl_log.read_text(encoding="utf-8")
+        self.assertNotIn("enable --now", log)
+        self.assertNotIn("start nexvue-encode@", log)
+
+    def test_unpark_skips_srt(self) -> None:
+        (self.channels_dir / "4.env").write_text(
+            "DEVICE_NUMBER=4\nINPUT_TYPE=srt\n", encoding="utf-8"
+        )
+        self._set_unit("4", active="inactive", enabled="disabled")
+        self._set_locked(False)
+        self._run("unpark-scan")
+        self._set_locked(True)
+        self._run("unpark-scan")
+        self._run("unpark-scan")
+        log = self.systemctl_log.read_text(encoding="utf-8")
+        self.assertNotIn("nexvue-encode@4", log)
 
 
 if __name__ == "__main__":

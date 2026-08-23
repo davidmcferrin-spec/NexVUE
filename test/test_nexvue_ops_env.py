@@ -266,6 +266,7 @@ class TestApplyPatch(unittest.TestCase):
         self.assertEqual(php_keys, set(mod.EDITABLE_KEYS))
         self.assertIn("DEINT_METHOD", php_keys)
         self.assertIn("AUTO_PARK_UNLOCK_CYCLES", php_keys)
+        self.assertIn("AUTO_UNPARK", php_keys)
 
 
 if __name__ == "__main__":

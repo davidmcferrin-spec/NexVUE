@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theater-page>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -170,6 +170,41 @@
   .videowrap:fullscreen { display: flex; align-items: center; justify-content: center; background: #000; }
   .videowrap:-webkit-full-screen { display: flex; align-items: center; justify-content: center; background: #000; }
   .videowrap:fullscreen video, .videowrap:-webkit-full-screen video { max-height: none; border: none; }
+
+  /* Fill-window (theater): hide chrome and let the frame occupy the tab.
+     Not OS fullscreen — address bar / OS taskbar stay. Preference is
+     localStorage.nexvue-theater, applied before paint via data-theater-page. */
+  html.theater, html.theater body {
+    width: 100%; height: 100%;
+    background: #000;
+  }
+  html.theater body {
+    margin: 0; padding: 0;
+    overflow: hidden;
+  }
+  html.theater .topnav,
+  html.theater .bar,
+  html.theater .stats-drawer:not(.open) { display: none; }
+  html.theater .frame {
+    width: 100%; height: 100%; max-width: none; margin: 0;
+  }
+  html.theater .stage {
+    flex: 1; min-height: 0; width: 100%; height: 100%;
+    justify-content: center; align-items: center;
+  }
+  html.theater .videowrap {
+    width: 100%; height: 100%; max-height: none; aspect-ratio: auto;
+  }
+  html.theater .videowrap video { border: none; border-radius: 0; max-height: none; }
+  .theater-exit {
+    display: none; position: fixed; top: 12px; right: 12px; z-index: 70;
+    background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 6px 10px; font: inherit; font-size: 12px;
+    cursor: pointer; opacity: .35;
+  }
+  html.theater .theater-exit { display: block; }
+  html.theater .theater-exit:hover,
+  html.theater .theater-exit:focus-visible { opacity: 1; border-color: var(--acc); color: var(--acc); }
   .stats-drawer {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
     background: var(--panel); border-top: 1px solid var(--edge);
@@ -260,13 +295,17 @@
   <button id="rot-cw" class="tgl" title="Rotate view 90° clockwise (portrait / tilted sources)">90° ⟳</button>
   <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
   <button id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
+  <button id="safe" class="tgl" title="Title / action safe + center target (this browser only)">Safe</button>
+  <button id="scope" class="tgl" title="Waveform + vectorscope (decoded video, this browser only)">Scope</button>
   <button id="mute" class="tgl" title="Mute (this browser only)">Mute</button>
   <span class="vol-wrap" title="Volume (this browser only — Web Audio)">
     <span class="qlabel">vol</span>
     <input type="range" id="volume" min="0" max="100" step="1" value="20" aria-label="Volume">
     <span id="vol-pct">100%</span>
   </span>
+  <button id="theater" class="tgl" title="Fill the browser window (hides chrome; not OS fullscreen)" aria-pressed="false">▢ Fill window</button>
   <button id="fs" class="tgl" title="Fullscreen (keeps mirror/flip/rotate)">⛶ Fullscreen</button>
+  <button id="pip" class="tgl" title="Picture-in-Picture — float this stream over other windows (audio stays in this tab)" aria-pressed="false" hidden>⧉ PiP</button>
 </div>
 
 <div class="stage">
@@ -282,6 +321,8 @@
   </div>
 </div>
 </div>
+
+<button type="button" id="theater-exit" class="theater-exit" title="Exit fill window (Esc)">✕ Exit fill</button>
 
 <div id="stats-drawer" class="stats-drawer">
   <button type="button" id="stats-toggle" aria-expanded="false" aria-controls="stats">
@@ -322,6 +363,8 @@
 <script src="/assets/nexvue-qr.js"></script>
 <script src="/assets/nexvue-captions.js"></script>
 <script src="/assets/nexvue-vu.js"></script>
+<script src="/assets/nexvue-safe.js"></script>
+<script src="/assets/nexvue-scopes.js"></script>
 <script src="/assets/nexvue-auth-gate.js"></script>
 <script src="/assets/nexvue-share-ui.js"></script>
 <script>
@@ -407,6 +450,21 @@
   paintMuteBtn();
   paintVolume();
 
+  const safeBtn = $("safe");
+  const scopeBtn = $("scope");
+  const safe = window.NexVueSafe
+    ? NexVueSafe.attach({ container: videoWrap, video })
+    : null;
+  const scopes = window.NexVueScopes
+    ? NexVueScopes.attach({ container: videoWrap, video })
+    : null;
+  let safeOn = window.NexVueSafe ? NexVueSafe.getOnPref() : false;
+  let scopeOn = window.NexVueScopes ? NexVueScopes.getOnPref() : false;
+  safeBtn.classList.toggle("active", safeOn);
+  scopeBtn.classList.toggle("active", scopeOn);
+  if (safe) safe.setVisible(safeOn);
+  if (scopes) scopes.setVisible(scopeOn);
+
   // Auto-switch policy constants (mirror these in the Phase 2 portal player)
   const DOWN_LOSS = 0.03, DOWN_AFTER_S = 3;
   const UP_LOSS = 0.005, UP_AFTER_S = 20;
@@ -443,6 +501,8 @@
   let reconnectAttempt = 0;
   const RECONNECT_MS = 5000;           // steady retry while healing (wall monitors)
   let preferFullscreen = false;        // re-enter FS after heal if user had it on
+  let preferPip = false;               // re-enter PiP after heal if user had it on
+  let pipLeavingForTeardown = false;   // closeSession clears srcObject and exits PiP
   let wakeLock = null;
 
   async function acquireWakeLock() {
@@ -564,12 +624,23 @@
     } catch (e) { /* unsupported */ }
   }
 
+  function restorePipIfNeeded() {
+    const pipUI = window.NexVueUI || window.NexVUEUI;
+    if (!preferPip || !pipUI || !pipUI.pipSupported || !pipUI.pipSupported()) return;
+    if (!video.srcObject) return;
+    if (pipUI.isPipActive(video)) return;
+    pipUI.requestPip(video).then(() => {
+      if (typeof paintPipBtn === "function") paintPipBtn();
+    });
+  }
+
   function closeSession() {
     if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
     if (apiTimer) { clearInterval(apiTimer); apiTimer = null; }
     // Do not clear reconnectTimer here — catch/heal paths schedule after close.
     // openSession / teardown clear it when starting a new attempt or stopping.
     if (pc) { pc.close(); pc = null; }
+    pipLeavingForTeardown = !!(document.pictureInPictureElement === video);
     video.srcObject = null;
     if (vu) {
       vu.setListen(false, { persist: false });
@@ -635,6 +706,7 @@
         reconnectAttempt = 0;
         acquireWakeLock();
         restoreFullscreenIfNeeded();
+        restorePipIfNeeded();
       } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         setState(pc.connectionState, "bad");
         // Only auto-recover from an UNEXPECTED drop — not a user-initiated
@@ -995,6 +1067,20 @@
     if (vu) vu.setVisible(vuOn);
   });
 
+  safeBtn.addEventListener("click", () => {
+    safeOn = !safeOn;
+    if (window.NexVueSafe) NexVueSafe.setOnPref(safeOn);
+    safeBtn.classList.toggle("active", safeOn);
+    if (safe) safe.setVisible(safeOn);
+  });
+
+  scopeBtn.addEventListener("click", () => {
+    scopeOn = !scopeOn;
+    if (window.NexVueScopes) NexVueScopes.setOnPref(scopeOn);
+    scopeBtn.classList.toggle("active", scopeOn);
+    if (scopes) scopes.setVisible(scopeOn);
+  });
+
   muteBtn.addEventListener("click", () => {
     if (!vu) return;
     vu.setListen(!vu.isListening());
@@ -1019,6 +1105,15 @@
     new ResizeObserver(() => applyTransform()).observe(wrap);
   }
   video.addEventListener("loadedmetadata", applyTransform);
+  window.addEventListener("nexvue-theater-changed", applyTransform);
+  if (wrap) {
+    wrap.addEventListener("dblclick", (ev) => {
+      if (ev.target && ev.target.closest && ev.target.closest("button, input, select, a")) return;
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      if (fsEl) return;
+      if (UI && UI.toggleTheater) UI.toggleTheater();
+    });
+  }
   $("fs").addEventListener("click", () => {
     const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
     if (fsEl) {
@@ -1036,6 +1131,45 @@
       preferFullscreen = (fsEl === wrap);
       applyTransform();
     });
+  }
+
+  // Picture-in-Picture — Player only. Native PiP is the <video> pixels
+  // (no CC/VU overlay). Audio stays on this tab via Web Audio.
+  const pipBtn = $("pip");
+  function paintPipBtn() {
+    if (!pipBtn) return;
+    if (!UI || !UI.pipSupported || !UI.pipSupported()) {
+      pipBtn.hidden = true;
+      return;
+    }
+    pipBtn.hidden = false;
+    const on = UI.isPipActive(video);
+    pipBtn.classList.toggle("active", on);
+    pipBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+  if (pipBtn) {
+    pipBtn.addEventListener("click", () => {
+      if (!UI || !UI.togglePip) return;
+      UI.togglePip(video).then((on) => {
+        preferPip = !!on;
+        paintPipBtn();
+      });
+    });
+    video.addEventListener("enterpictureinpicture", () => {
+      preferPip = true;
+      paintPipBtn();
+    });
+    video.addEventListener("leavepictureinpicture", () => {
+      if (pipLeavingForTeardown) {
+        pipLeavingForTeardown = false;
+        paintPipBtn();
+        return;
+      }
+      preferPip = false;
+      paintPipBtn();
+    });
+    video.addEventListener("playing", restorePipIfNeeded);
+    paintPipBtn();
   }
 
   // ---- Channel buttons ------------------------------------------------------------------

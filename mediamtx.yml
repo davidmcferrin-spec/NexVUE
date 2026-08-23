@@ -60,9 +60,10 @@ webrtcIPsFromInterfaces: yes
 # Signaling (TCP: WHEP POST, API, status) succeeds regardless — it's ONLY the
 # UDP media (port 8189) that silently fails, producing "connects but no video"
 # exactly like TCP-only checks (curl, browser hitting :8889/:9997/:9998) would
-# never reveal. Use the real hostname (works with a real TLS cert too, unlike
-# a bare IP) rather than the public IP where possible.
-webrtcAdditionalHosts: [nexvue-dc.area51consulting.com]
+# never reveal. Set hostname and/or public IP from Settings → Public
+# reachability (admin). Blank = LAN-only (interface IPs).
+# webrtcICEHostNAT1To1IPs is a deprecated alias of this key — do not set both.
+webrtcAdditionalHosts: []
 
 # --- Authentication -----------------------------------------------------------
 # Local JWT auth (edge issues viewer JWTs; long-lived publish JWT in

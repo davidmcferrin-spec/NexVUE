@@ -3,8 +3,8 @@
  * nexvue-ops.php — JSON API for NexVUE Services + Channels ops UI.
  *
  * Phase 2 local auth: session cookie required. Roles:
- *   admin — Services + Settings + kick + branding + support/update
- *   operator — Settings + kick + branding
+ *   admin — Services + Settings + kick + branding + support/update + public reachability + certificates
+ *   operator — Settings + kick + branding + certificate status (not public hostname/IP, not issue/upload)
  *   any auth (user or share) — aliases, kick_check (Player/Multiview)
  *
  * Privileged work goes through allowlisted sudo wrappers only
@@ -14,15 +14,21 @@
  *   services | journal | journal_clear | audio_probe | channels_list | channel_get | channel_put
  *   | channels_bulk | restart | restart_encoders | set_enabled | set_running | aliases
  *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete | support_bundle
- *   | update_status | update_repo
+ *   | update_status | update_repo | network_get | network_put
+ *   | tls_status | tls_issue | tls_upload
  *
  * support_bundle returns application/zip (not JSON): builds a redacted
  * journals+config+state zip via nexvue-ops-support-bundle.sh for the
  * requested hours window (1|6|12|24|48|72).
  *
+ * tls_status / tls_issue / tls_upload call nexvue-ops-tls.sh. Issue uses lego
+ * TLS-ALPN-01 on :443 (Apache stops for the challenge; WHEP :8889 stays up).
+ * Port 80 is never used. Upload installs PEMs to /etc/nexvue/tls and reloads
+ * apache2 + mediamtx. Issue/upload are admin-only; operators may read status.
+ *
  * update_status / update_repo call nexvue-ops-update.sh (git fetch + hard-reset
- * to origin/NEXVUE_UPDATE_BRANCH + setup.sh). LAN-trust — anyone with Services
- * can redeploy the box.
+ * to origin/NEXVUE_UPDATE_BRANCH + setup.sh). Admin-only — same gate as
+ * Services (operators cannot poll status or apply).
  *
  * journal_clear records a per-unit watermark via nexvue-ops-journal.sh clear
  * so the Services journal view hides prior lines for that unit only (systemd
@@ -61,6 +67,8 @@ const KICK_REGISTRY_TTL_S = 600;
 const KICK_REASON_MAX_LEN = 200;
 /** Station branding logo — raw bytes + JSON metadata under /var/lib/nexvue/branding. */
 const LOGO_MAX_BYTES = 1048576;
+/** PEM upload cap (cert or key) — leaf+chain is typically a few KB. */
+const TLS_PEM_MAX_BYTES = 131072;
 const LOGO_ALLOWED_MIMES = [
     'image/png' => true,
     'image/jpeg' => true,
@@ -76,6 +84,7 @@ const EDITABLE_KEYS = [
     'LO_TARGET_USAGE', 'LO_QUEUE_BUFFERS', 'LO_GOP_FRAMES',
     'SIGNAL_LOSS_DEBOUNCE_S', 'SIGNAL_ACQUIRE_DEBOUNCE_S', 'DECKLINK_RETRY_S',
     'AUTO_PARK_UNLOCK_CYCLES',
+    'AUTO_UNPARK',
 ];
 
 function fail(int $status, string $message): never {
@@ -508,6 +517,117 @@ function logo_delete(): void {
     }
 }
 
+function network_mediamtx_yml_path(): string {
+    $o = getenv('NEXVUE_MEDIAMTX_YML');
+    if (is_string($o) && $o !== '') {
+        return $o;
+    }
+    return '/etc/nexvue/mediamtx.yml';
+}
+
+function network_sanitize_hostname(string $raw): string {
+    $v = strtolower(trim($raw));
+    if ($v === '') {
+        return '';
+    }
+    if (str_contains($v, '://') || str_contains($v, '/') || str_contains($v, ':')) {
+        throw new InvalidArgumentException('Enter a hostname like nexvue.example.com');
+    }
+    if (filter_var($v, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+        throw new InvalidArgumentException('Put IP addresses in Public IP, not hostname');
+    }
+    if (strlen($v) > 253 || !preg_match('/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/', $v)) {
+        throw new InvalidArgumentException('Enter a hostname like nexvue.example.com');
+    }
+    return $v;
+}
+
+function network_sanitize_ip(string $raw): string {
+    $v = trim($raw);
+    if ($v === '') {
+        return '';
+    }
+    if (filter_var($v, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
+        throw new InvalidArgumentException('Enter an IPv4 address like 203.0.113.40');
+    }
+    $parts = explode('.', $v);
+    $a = (int)$parts[0];
+    $b = (int)($parts[1] ?? 0);
+    if ($v === '0.0.0.0' || $v === '255.255.255.255') {
+        throw new InvalidArgumentException('Enter a reachable IPv4 address');
+    }
+    if ($a === 127) {
+        throw new InvalidArgumentException('Loopback addresses cannot be used as a public IP');
+    }
+    if ($a === 169 && $b === 254) {
+        throw new InvalidArgumentException('Link-local addresses cannot be used as a public IP');
+    }
+    if ($a >= 224) {
+        throw new InvalidArgumentException('Multicast addresses cannot be used as a public IP');
+    }
+    return $v;
+}
+
+/**
+ * First hostname + first IPv4 from webrtcAdditionalHosts (flow or block list).
+ *
+ * @return array{hostname: string, ip: string}
+ */
+function network_parse_additional_hosts(string $yml): array {
+    $out = ['hostname' => '', 'ip' => ''];
+    $tokens = [];
+    if (preg_match('/^webrtcAdditionalHosts:\s*\[(.*?)\]\s*$/m', $yml, $m)) {
+        $parts = preg_split('/\s*,\s*|\s+/', trim($m[1])) ?: [];
+        foreach ($parts as $part) {
+            $tok = trim(trim((string)$part), "\"'");
+            if ($tok !== '') {
+                $tokens[] = $tok;
+            }
+        }
+    } elseif (preg_match('/^webrtcAdditionalHosts:\s*\n((?:[ \t]+-[ \t]*.+\n?)*)/m', $yml, $m)) {
+        if (preg_match_all('/^[ \t]+-[ \t]*(.+)$/m', $m[1], $mm)) {
+            foreach ($mm[1] as $part) {
+                $tok = trim(trim((string)$part), "\"'");
+                if ($tok !== '') {
+                    $tokens[] = $tok;
+                }
+            }
+        }
+    }
+    foreach ($tokens as $tok) {
+        if (filter_var($tok, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+            if ($out['ip'] === '') {
+                $out['ip'] = $tok;
+            }
+        } elseif ($out['hostname'] === '') {
+            $out['hostname'] = strtolower($tok);
+        }
+    }
+    return $out;
+}
+
+/**
+ * Station public hostname / IP. Prefers nexvue.env; if both keys are empty,
+ * falls back to MediaMTX webrtcAdditionalHosts so an existing hand-edit shows.
+ *
+ * @return array{hostname: string, ip: string}
+ */
+function network_read_settings(): array {
+    $hostname = auth_read_env_key('NEXVUE_PUBLIC_HOSTNAME');
+    $ip = auth_read_env_key('NEXVUE_PUBLIC_IP');
+    if ($hostname !== '' || $ip !== '') {
+        return ['hostname' => $hostname, 'ip' => $ip];
+    }
+    $path = network_mediamtx_yml_path();
+    if (is_readable($path)) {
+        $raw = @file_get_contents($path);
+        if (is_string($raw) && $raw !== '') {
+            return network_parse_additional_hosts($raw);
+        }
+    }
+    return ['hostname' => '', 'ip' => ''];
+}
+
 /**
  * Parse AUDIO_EMBEDS (comma list of 1–8). Blank / all → [1..8].
  *
@@ -706,6 +826,8 @@ function ops_require_auth(string $action): void {
     $adminOnly = [
         'services', 'journal', 'journal_clear', 'set_enabled', 'set_running',
         'support_bundle', 'update_status', 'update_repo',
+        'network_get', 'network_put',
+        'tls_issue', 'tls_upload',
     ];
     try {
         if ($hot) {
@@ -1525,6 +1647,140 @@ if ($action === 'logo_delete') {
         fail(500, $e->getMessage());
     }
     echo json_encode(['ok' => true, 'exists' => false]);
+    exit;
+}
+
+// ---- network_get / network_put (admin-only public hostname / NAT IP) ----------
+
+if ($action === 'network_get') {
+    $cur = network_read_settings();
+    echo json_encode(['ok' => true, 'hostname' => $cur['hostname'], 'ip' => $cur['ip']]);
+    exit;
+}
+
+if ($action === 'network_put') {
+    try {
+        $hostname = network_sanitize_hostname((string)($body['hostname'] ?? ''));
+        $ip = network_sanitize_ip((string)($body['ip'] ?? ''));
+    } catch (InvalidArgumentException $e) {
+        fail(400, $e->getMessage());
+    }
+    $helper = '/usr/local/bin/nexvue-ops-network-write.sh';
+    if (!is_file($helper)) {
+        fail(500, 'network helper not installed — re-run sudo ./setup.sh');
+    }
+    $payload = json_encode(['hostname' => $hostname, 'ip' => $ip], JSON_UNESCAPED_SLASHES);
+    if (!is_string($payload)) {
+        fail(500, 'failed to encode network settings');
+    }
+    $wr = sudo_run([$helper], $payload);
+    if ($wr['code'] !== 0) {
+        $err = trim($wr['stderr']);
+        $decoded = json_decode($err, true);
+        if (is_array($decoded) && isset($decoded['error']) && is_string($decoded['error'])) {
+            $err = $decoded['error'];
+        }
+        if ($err === '') {
+            $err = 'failed to save public reachability';
+        }
+        $status = (str_contains($err, 'Enter ') || str_contains($err, 'Put IP')) ? 400 : 500;
+        fail($status, $err);
+    }
+    $restarted = false;
+    $rr = sudo_run(['/usr/local/bin/nexvue-ops-restart.sh', 'mediamtx']);
+    if ($rr['code'] === 0) {
+        $restarted = true;
+    }
+    echo json_encode([
+        'ok' => true,
+        'hostname' => $hostname,
+        'ip' => $ip,
+        'restarted' => $restarted,
+    ]);
+    exit;
+}
+
+// ---- tls_status / tls_issue / tls_upload (Certificates) -----------------------
+
+function tls_helper_or_fail(): string {
+    $helper = '/usr/local/bin/nexvue-ops-tls.sh';
+    if (!is_file($helper)) {
+        fail(500, 'TLS helper not installed — re-run sudo ./setup.sh');
+    }
+    return $helper;
+}
+
+function tls_decode_helper(array $r, string $fallback): array {
+    $decoded = json_decode((string)$r['stdout'], true);
+    if (is_array($decoded)) {
+        return $decoded;
+    }
+    $err = trim((string)$r['stderr']);
+    $errJson = json_decode($err, true);
+    if (is_array($errJson) && isset($errJson['error']) && is_string($errJson['error'])) {
+        return $errJson;
+    }
+    return ['ok' => false, 'error' => $err !== '' ? $err : $fallback];
+}
+
+if ($action === 'tls_status') {
+    $r = sudo_run([tls_helper_or_fail(), 'status']);
+    $decoded = tls_decode_helper($r, 'failed to read certificate status');
+    if ($r['code'] !== 0 || empty($decoded['ok'])) {
+        fail(500, (string)($decoded['error'] ?? 'failed to read certificate status'));
+    }
+    echo json_encode($decoded);
+    exit;
+}
+
+if ($action === 'tls_issue') {
+    $accept = $body['accept_tos'] ?? false;
+    if ($accept !== true) {
+        fail(400, "Agree to the Let's Encrypt Subscriber Agreement to issue");
+    }
+    $payload = json_encode([
+        'email' => (string)($body['email'] ?? ''),
+        'domain' => (string)($body['domain'] ?? ''),
+        'accept_tos' => true,
+    ], JSON_UNESCAPED_SLASHES);
+    if (!is_string($payload)) {
+        fail(500, 'failed to encode certificate request');
+    }
+    $r = sudo_run([tls_helper_or_fail(), 'issue'], $payload);
+    $decoded = tls_decode_helper($r, 'certificate request failed');
+    if ($r['code'] !== 0 || empty($decoded['ok'])) {
+        $err = (string)($decoded['error'] ?? 'certificate request failed');
+        $status = (str_contains($err, 'already running')) ? 409 : 400;
+        if (str_contains($err, 'not installed') || str_contains($err, 'could not start')) {
+            $status = 500;
+        }
+        fail($status, $err);
+    }
+    echo json_encode($decoded);
+    exit;
+}
+
+if ($action === 'tls_upload') {
+    $cert = $body['cert'] ?? '';
+    $key = $body['key'] ?? '';
+    if (!is_string($cert) || !is_string($key)) {
+        fail(400, 'cert and key must be PEM or base64 strings');
+    }
+    if (strlen($cert) > TLS_PEM_MAX_BYTES * 2 || strlen($key) > TLS_PEM_MAX_BYTES * 2) {
+        fail(400, 'certificate or key exceeds 128 KB');
+    }
+    $payload = json_encode(['cert' => $cert, 'key' => $key, 'source' => 'upload'], JSON_UNESCAPED_SLASHES);
+    if (!is_string($payload)) {
+        fail(500, 'failed to encode certificate upload');
+    }
+    $r = sudo_run([tls_helper_or_fail(), 'upload'], $payload);
+    $decoded = tls_decode_helper($r, 'certificate upload failed');
+    if ($r['code'] !== 0 || empty($decoded['ok'])) {
+        $err = (string)($decoded['error'] ?? 'certificate upload failed');
+        $status = (str_contains($err, 'already running')) ? 409 : 400;
+        fail($status, $err);
+    }
+    echo json_encode($decoded);
     exit;
 }
 

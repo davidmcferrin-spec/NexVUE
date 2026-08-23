@@ -1,0 +1,17 @@
+# /etc/systemd/system/nexvue-encode-auto-unpark.service
+#
+# Oneshot scan: if a DeckLink slot was parked (or stopped) while unlocked
+# and the input is now locked, start nexvue-encode@N. Invoked by
+# nexvue-encode-auto-unpark.timer. Root is required for systemctl enable/start.
+# No-ops when AUTO_UNPARK=false or AUTO_UNPARK_LOCK_POLLS=0.
+
+[Unit]
+Description=NexVUE auto-unpark encoders when SDI locks
+After=nexvue-status.service
+Wants=nexvue-status.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nexvue-encode-auto-park.sh unpark-scan
+# Station knobs (AUTO_UNPARK, MAX_CHANNELS) are read from the file by the
+# script — systemd EnvironmentFile= does not strip # comments.

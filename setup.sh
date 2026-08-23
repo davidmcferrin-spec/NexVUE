@@ -143,6 +143,53 @@ EOF
   chmod 640 "${key}"
 }
 
+# Pinned go-acme/lego for Settings → Certificates (TLS-ALPN-01 on :443).
+# Checksums from https://github.com/go-acme/lego/releases/tag/v5.3.1
+LEGO_VERSION=5.3.1
+LEGO_AMD64_SHA256=b3c71b122ee1947eacfe0b809b955647f6377239fe4bfc49f73b1a091ae1252a
+LEGO_ARM64_SHA256=58db563a2b97c2259516fa9910b4a9e1634a0737723d0381a65af1bf93a4b433
+
+ensure_lego() {
+  local ver="${LEGO_VERSION}" dest=/usr/local/bin/lego arch sha asset url tmp
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64; sha="${LEGO_AMD64_SHA256}" ;;
+    aarch64|arm64) arch=arm64; sha="${LEGO_ARM64_SHA256}" ;;
+    *)
+      warn "lego: unsupported arch $(uname -m) — Settings Issue needs linux amd64/arm64"
+      return 0
+      ;;
+  esac
+  if [ -x "${dest}" ] && "${dest}" --version 2>/dev/null | grep -q "${ver}"; then
+    ok "lego ${ver} present"
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl missing — cannot download lego ${ver}"
+    return 0
+  fi
+  asset="lego_v${ver}_linux_${arch}.tar.gz"
+  url="https://github.com/go-acme/lego/releases/download/v${ver}/${asset}"
+  tmp="$(mktemp -d)"
+  if ! curl -fsSL -o "${tmp}/${asset}" "${url}"; then
+    rm -rf "${tmp}"
+    warn "could not download lego ${ver} — Settings → Certificates Issue will fail until setup is retried"
+    return 0
+  fi
+  if ! echo "${sha}  ${asset}" | (cd "${tmp}" && sha256sum -c - >/dev/null); then
+    rm -rf "${tmp}"
+    warn "lego ${ver} checksum mismatch — not installed"
+    return 0
+  fi
+  if ! tar -xzf "${tmp}/${asset}" -C "${tmp}" lego; then
+    rm -rf "${tmp}"
+    warn "lego ${ver} tarball extract failed"
+    return 0
+  fi
+  install -m 0755 "${tmp}/lego" "${dest}"
+  rm -rf "${tmp}"
+  ok "installed lego ${ver} → ${dest}"
+}
+
 # Ubuntu's unit is ssh.service; sshd.service is an alias on some images.
 ensure_sshd() {
   if systemctl enable --now ssh >/dev/null 2>&1 \
@@ -438,13 +485,16 @@ REQUIRED_FILES=(
   mediamtx.yml mediamtx.service
   nexvue-encode.sh nexvue-encode.py nexvue-supervisor.py nexvue-encode@.service
   nexvue-encode-auto-park.sh
+  nexvue-encode-auto-unpark.service nexvue-encode-auto-unpark.timer
   nexvue-decklink-configure.service
   decklink-configure.cpp
   nexvue-status-server.py nexvue-status.service
   nexvue-metrics-server.py nexvue-metrics.service
   web-node/nexvue-metrics.php web-node/nexvue-status.php web-node/nexvue-mediamtx-api.php
   web-node/nexvue-captions.php web-node/nexvue-captions.js
-  web-node/nexvue-qr.js web-node/nexvue-ui.js web-node/nexvue-vu.js web-node/nexvue-logo.php web-node/chart.umd.min.js
+  web-node/nexvue-qr.js web-node/nexvue-ui.js web-node/nexvue-vu.js
+  web-node/nexvue-safe.js web-node/nexvue-scopes.js
+  web-node/nexvue-logo.php web-node/chart.umd.min.js
   web-node/metrics.html web-node/index.html web-node/multiview.html
   web-node/nexvue-ops.php web-node/services.html web-node/channels.html
   web-node/nexvue-auth-lib.php web-node/nexvue-auth.php web-node/nexvue-jwks.php nexvue-auth-bootstrap.php
@@ -452,6 +502,7 @@ REQUIRED_FILES=(
   web-node/nexvue-web-router.php nexvue-web-apache.conf nexvue-ssl-apache.conf
   web-node/public/index.php
   nexvue-mediamtx-jwt-patch.py nexvue-mediamtx-tls-patch.py
+  nexvue-mediamtx-ice-patch.py nexvue-ops-network-write.sh nexvue-ops-network-write.py
   nexvue-apache-http-on.py
   nexvue-jwks-loopback.conf
   web-node/login.html web-node/forgot.html web-node/reset.html web-node/users.html
@@ -471,6 +522,8 @@ REQUIRED_FILES=(
   nexvue-example.env
   nexvue-portal-heartbeat.php nexvue-portal-heartbeat.service nexvue-portal-heartbeat.timer
   nexvue-ops-portal-write.sh nexvue-ops-portal-write.py
+  nexvue-tls.py nexvue-ops-tls.sh nexvue-tls-deploy.sh
+  nexvue-tls-issue.service nexvue-tls-renew.service nexvue-tls-renew.timer
 )
 if ! $CHECK_ONLY; then
   for f in "${REQUIRED_FILES[@]}"; do
@@ -654,6 +707,9 @@ fi
 
 # TLS for Apache HTTPS + MediaMTX WHEP/API — before any enable --now of mediamtx.
 ensure_nexvue_tls
+ensure_lego
+install -d -m 755 /var/lib/nexvue/lego
+install -d -m 755 /var/lib/nexvue/tls
 if [ -f /etc/nexvue/mediamtx.yml ]; then
   _mtx_tls="$(python3 "${REPO_DIR}/nexvue-mediamtx-tls-patch.py" /etc/nexvue/mediamtx.yml)"
   if [ "${_mtx_tls}" = "patched" ]; then
@@ -687,6 +743,12 @@ install -m 755 "${REPO_DIR}/nexvue-support-bundle.py" /usr/local/bin/nexvue-supp
 install -m 755 "${REPO_DIR}/nexvue-ops-update.sh" /usr/local/bin/nexvue-ops-update.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-portal-write.py" /usr/local/bin/nexvue-ops-portal-write.py
 install -m 755 "${REPO_DIR}/nexvue-ops-portal-write.sh" /usr/local/bin/nexvue-ops-portal-write.sh
+install -m 755 "${REPO_DIR}/nexvue-ops-network-write.py" /usr/local/bin/nexvue-ops-network-write.py
+install -m 755 "${REPO_DIR}/nexvue-ops-network-write.sh" /usr/local/bin/nexvue-ops-network-write.sh
+install -m 755 "${REPO_DIR}/nexvue-mediamtx-ice-patch.py" /usr/local/bin/nexvue-mediamtx-ice-patch.py
+install -m 755 "${REPO_DIR}/nexvue-tls.py" /usr/local/bin/nexvue-tls.py
+install -m 755 "${REPO_DIR}/nexvue-ops-tls.sh" /usr/local/bin/nexvue-ops-tls.sh
+install -m 755 "${REPO_DIR}/nexvue-tls-deploy.sh" /usr/local/bin/nexvue-tls-deploy.sh
 install -m 755 "${REPO_DIR}/nexvue-portal-heartbeat.php" /usr/local/bin/nexvue-portal-heartbeat.php
 # Support-bundle zip staging (www-data must read finished zips).
 install -d -m 750 -o root -g www-data /var/lib/nexvue/support 2>/dev/null \
@@ -734,7 +796,12 @@ install -m 644 "${REPO_DIR}/mediamtx.service" \
                "${REPO_DIR}/nexvue-status.service" \
                "${REPO_DIR}/nexvue-metrics.service" \
                "${REPO_DIR}/nexvue-portal-heartbeat.service" \
-               "${REPO_DIR}/nexvue-portal-heartbeat.timer" /etc/systemd/system/
+               "${REPO_DIR}/nexvue-portal-heartbeat.timer" \
+               "${REPO_DIR}/nexvue-tls-issue.service" \
+               "${REPO_DIR}/nexvue-tls-renew.service" \
+               "${REPO_DIR}/nexvue-tls-renew.timer" \
+               "${REPO_DIR}/nexvue-encode-auto-unpark.service" \
+               "${REPO_DIR}/nexvue-encode-auto-unpark.timer" /etc/systemd/system/
 systemctl daemon-reload
 ok "scripts + units installed, systemd reloaded"
 
@@ -784,6 +851,21 @@ if systemctl enable --now nexvue-portal-heartbeat.timer >/dev/null 2>&1; then
   ok "enabled --now nexvue-portal-heartbeat.timer (no-op until station is adopted)"
 else
   warn "could not enable --now nexvue-portal-heartbeat.timer"
+fi
+
+# Let's Encrypt renew check — no-ops until Settings has issued a Lego cert.
+if systemctl enable --now nexvue-tls-renew.timer >/dev/null 2>&1; then
+  ok "enabled --now nexvue-tls-renew.timer (no-op until a Let's Encrypt cert is due)"
+else
+  warn "could not enable --now nexvue-tls-renew.timer"
+fi
+
+# Auto-unpark parked/stopped DeckLink slots when SDI lock returns.
+install -d -m 755 /var/lib/nexvue/auto-park
+if systemctl enable --now nexvue-encode-auto-unpark.timer >/dev/null 2>&1; then
+  ok "enabled --now nexvue-encode-auto-unpark.timer (SDI lock starts parked encode@N)"
+else
+  warn "could not enable --now nexvue-encode-auto-unpark.timer"
 fi
 
 enc_ok=0
@@ -942,6 +1024,8 @@ if [ -d "${WEBROOT}" ] || mkdir -p "${WEBROOT}" 2>/dev/null; then
                  "${REPO_DIR}/web-node/nexvue-qr.js" \
                  "${REPO_DIR}/web-node/nexvue-ui.js" \
                  "${REPO_DIR}/web-node/nexvue-vu.js" \
+                 "${REPO_DIR}/web-node/nexvue-safe.js" \
+                 "${REPO_DIR}/web-node/nexvue-scopes.js" \
                  "${REPO_DIR}/web-node/nexvue-auth-gate.js" \
                  "${REPO_DIR}/web-node/nexvue-share-ui.js" \
                  "${REPO_DIR}/web-node/chart.umd.min.js" \
@@ -963,6 +1047,7 @@ if [ -d "${WEBROOT}" ] || mkdir -p "${WEBROOT}" 2>/dev/null; then
   for legacy in index.html multiview.html metrics.html services.html channels.html \
       login.html forgot.html reset.html users.html \
       nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js \
+      nexvue-safe.js nexvue-scopes.js \
       nexvue-auth-gate.js nexvue-share-ui.js chart.umd.min.js; do
     rm -f "${WEBROOT}/${legacy}"
   done
@@ -1227,6 +1312,7 @@ else
 fi
 
 install -m 644 "${REPO_DIR}/nexvue-mediamtx-jwt-patch.py" /usr/local/share/nexvue/nexvue-mediamtx-jwt-patch.py
+install -m 644 "${REPO_DIR}/nexvue-mediamtx-ice-patch.py" /usr/local/share/nexvue/nexvue-mediamtx-ice-patch.py
 install -m 644 "${REPO_DIR}/nexvue-apache-http-on.py" /usr/local/share/nexvue/nexvue-apache-http-on.py
 install -m 644 "${REPO_DIR}/nexvue-jwks-loopback.conf" /usr/local/share/nexvue/nexvue-jwks-loopback.conf
 
@@ -1383,7 +1469,8 @@ done
 # MediaMTX + units
 [ -x /usr/local/bin/mediamtx ] && ok "mediamtx binary present" || warn "mediamtx binary missing"
 for u in mediamtx.service nexvue-encode@.service nexvue-decklink-configure.service \
-         nexvue-status.service nexvue-metrics.service; do
+         nexvue-status.service nexvue-metrics.service \
+         nexvue-encode-auto-unpark.service nexvue-encode-auto-unpark.timer; do
   [ -f "/etc/systemd/system/$u" ] && ok "unit installed: $u" || warn "unit missing: $u"
 done
 
@@ -1514,6 +1601,16 @@ if [ -f /etc/nexvue/tls/fullchain.pem ] && [ -f /etc/nexvue/tls/privkey.pem ]; t
 else
   warn "TLS certs missing under /etc/nexvue/tls — re-run sudo ./setup.sh (creates self-signed if absent)"
 fi
+if [ -x /usr/local/bin/lego ]; then
+  ok "lego: $(/usr/local/bin/lego --version 2>/dev/null | head -n 1)"
+else
+  warn "lego missing — Settings → Certificates Issue needs sudo ./setup.sh"
+fi
+if systemctl is-enabled nexvue-tls-renew.timer >/dev/null 2>&1; then
+  ok "nexvue-tls-renew.timer enabled"
+else
+  warn "nexvue-tls-renew.timer not enabled — re-run sudo ./setup.sh"
+fi
 if [ -f /etc/nexvue/mediamtx.yml ] && grep -qE '^\s*webrtcServerCert:\s*/etc/nexvue/tls/fullchain\.pem\b' /etc/nexvue/mediamtx.yml \
     && grep -qE '^\s*webrtcServerKey:\s*/etc/nexvue/tls/privkey\.pem\b' /etc/nexvue/mediamtx.yml; then
   ok "mediamtx.yml WHEP TLS → /etc/nexvue/tls"
@@ -1548,7 +1645,9 @@ for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
          nexvue-support-bundle.py nexvue-ops-update.sh \
          nexvue-ops-env-update.py nexvue-phase1-closeout.sh \
          nexvue-phase1-deploy-verify.sh nexvue-encode-storm-diagnose.sh \
-         nexvue-encode-auto-park.sh; do
+         nexvue-encode-auto-park.sh nexvue-ops-network-write.sh \
+         nexvue-ops-network-write.py nexvue-mediamtx-ice-patch.py \
+         nexvue-tls.py nexvue-ops-tls.sh nexvue-tls-deploy.sh; do
   [ -x "/usr/local/bin/$w" ] || [ -f "/usr/local/bin/$w" ] \
     && ok "ops helper: $w" || warn "ops helper missing: /usr/local/bin/$w"
 done
@@ -1573,6 +1672,16 @@ if [ -f /etc/sudoers.d/nexvue-ops ]; then
     ok "sudoers allows nexvue-ops-update.sh"
   else
     warn "sudoers missing nexvue-ops-update.sh — Services Update will fail until sudoers is refreshed from repo"
+  fi
+  if grep -q 'nexvue-ops-network-write\.sh' /etc/sudoers.d/nexvue-ops; then
+    ok "sudoers allows nexvue-ops-network-write.sh"
+  else
+    warn "sudoers missing nexvue-ops-network-write.sh — Settings Public reachability will fail until sudoers is refreshed from repo"
+  fi
+  if grep -q 'nexvue-ops-tls\.sh' /etc/sudoers.d/nexvue-ops; then
+    ok "sudoers allows nexvue-ops-tls.sh"
+  else
+    warn "sudoers missing nexvue-ops-tls.sh — Settings Certificates will fail until sudoers is refreshed from repo"
   fi
 else
   warn "sudoers drop-in missing — Services/Settings need /etc/sudoers.d/nexvue-ops"
@@ -1627,12 +1736,12 @@ Next steps:
      /etc/nexvue/nexvue.env, then re-run setup.sh (disables encode@4..7).
   4. Services are enabled by setup: mediamtx, nexvue-status, nexvue-metrics,
      nexvue-decklink-configure, and nexvue-encode@0..(MAX_CHANNELS-1).
-     Empty SDI ports auto-park; re-enable from Services when patched.
+     Empty SDI ports auto-park; auto-unpark starts them when SDI locks.
   5. TLS: /etc/nexvue/tls/{fullchain,privkey}.pem (self-signed if setup created
-     them). Replace with a real cert when ready; Apache + MediaMTX already
+     them). Settings → Certificates (admin) issues Let's Encrypt via lego
+     TLS-ALPN-01 on :443, or uploads a PEM pair. Apache + MediaMTX already
      point there. Trust click-through once on https://<edge>:8889/ if self-signed.
-     UI is HTTPS-only (Apache :80 / ufw 80 closed). Use https://<edge-ip>/login
-     — plain http:// will not connect.
+     UI is HTTPS-only. Use https://<edge-ip>/login — plain http:// will not connect.
   6. Firewall: setup allows OpenSSH + 443/8889/8189 and enables ufw (HTTP :80
      is not allowed). Re-apply with sudo ./setup.sh --firewall if needed.
   7. Remove any Apache Basic Auth / .htaccess AuthType — app login replaces it.

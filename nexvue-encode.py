@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Optional
@@ -150,6 +151,67 @@ def make_silence_s16_ns(channels: int, rate: int, duration_ns: int) -> bytes:
     """
     samples = round(rate * duration_ns / 1_000_000_000)
     return bytes(samples * channels * 2)
+
+
+AUDIO_PCM_CHANNELS = 8
+AUDIO_PCM_RATE = 48000
+AUDIO_PCM_WIDTH = 2
+AUDIO_Q_MAX = 8
+AUDIO_STALE_S = 0.25
+AUDIO_LIVE_WAIT_S = 0.003
+AUDIO_UNDERRUN_SLACK_S = 0.010
+
+
+def pcm_duration_ns(
+    nbytes: int,
+    *,
+    channels: int = AUDIO_PCM_CHANNELS,
+    rate: int = AUDIO_PCM_RATE,
+    width: int = AUDIO_PCM_WIDTH,
+) -> int:
+    """Declared duration for a raw S16LE buffer from its sample count.
+
+    The publish audio relay stamps PTS/duration from this so 1601/1602-sample
+    DeckLink frames (48 kHz vs 29.97) stay honest. A fixed frame-period stamp
+    against a differently-sized payload is the drift that sounded like
+    stutter even after AUDIO_FRAME_MS was decoupled from the pump timer.
+    """
+    frame = channels * width
+    if nbytes <= 0 or frame <= 0 or rate <= 0:
+        return 0
+    return round((nbytes // frame) * 1_000_000_000 / rate)
+
+
+def audio_enqueue(queue: deque, chunk: bytes, *, max_len: int = AUDIO_Q_MAX) -> int:
+    """Append one unique PCM chunk. Drop oldest on overflow. Returns dropped."""
+    if not chunk:
+        return 0
+    queue.append(chunk)
+    dropped = 0
+    while len(queue) > max_len:
+        queue.popleft()
+        dropped += 1
+    return dropped
+
+
+def audio_relay_decision(
+    *,
+    queue_len: int,
+    last_audio_mono: float,
+    now: float,
+    waiting_since: float,
+    have_capture: bool = True,
+    stale_s: float = AUDIO_STALE_S,
+    slack_s: float = AUDIO_UNDERRUN_SLACK_S,
+) -> str:
+    """drain | silence | wait — what the publish audio relay should do."""
+    if queue_len > 0:
+        return "drain"
+    if (not have_capture) or last_audio_mono <= 0.0 or (now - last_audio_mono) > stale_s:
+        return "silence"
+    if waiting_since > 0.0 and (now - waiting_since) >= slack_s:
+        return "silence"
+    return "wait"
 
 
 def capture_retry_backoff_s(failures: int, base_s: float, cap_s: float) -> float:
@@ -751,30 +813,26 @@ class EncodeRuntime:
         self._pub_rebuild_id = 0
         self._lock = threading.Lock()
         self._last_video: Optional[bytes] = None
-        self._last_audio: Optional[bytes] = None
         self._last_video_mono = 0.0
         self._last_audio_mono = 0.0
+        self._audio_q: deque = deque()
+        self._a_pts = 0
+        self._a_waiting_since = 0.0
+        self._audio_overflow_logged = False
         self._black = make_black_nv12(cfg.output_width, cfg.output_height)
         self._v_n = 0
-        self._a_n = 0
         self._v_dur = fps_duration_ns(cfg.output_fps)
-        # AUDIO_FRAME_MS only sizes opusenc's own internal encode frame
-        # (its `frame-size` property, set in publish_pipeline_desc) — it
-        # has nothing to do with how big the raw-PCM buffers arriving from
-        # capture actually are. decklinkaudiosrc delivers embedded audio
-        # per video-frame callback, not in AUDIO_FRAME_MS-sized chunks (no
-        # element in the capture audio chain re-buffers to a fixed
-        # duration; audiorate only corrects sample *rate*, not buffer
-        # size). The relay pump must push/timestamp at the cadence audio
-        # actually arrives — self._v_dur — not AUDIO_FRAME_MS: pacing this
-        # against the wrong period previously mislabeled every pushed
-        # buffer's PTS/duration relative to its real sample count, which
-        # opusenc/the audio clock reads as a steady drift — heard as
-        # stuttering/warped audio even though nothing ever errors, since
-        # GStreamer downstream is free to re-chunk arbitrary buffer sizes
-        # into its own frame-size regardless of how the appsrc pushed them.
+        # Silence chunk for dead capture only. Live audio is unique-chunk
+        # drain: each captured PCM buffer is pushed once with duration
+        # from its sample count (pcm_duration_ns), PTS as a running sum.
+        # AUDIO_FRAME_MS still only sizes opusenc's `frame-size` — it
+        # does not pace this relay (that mismatch was the 2.4.0–2.5.3
+        # stutter). Repeating `_last_audio` at a fixed cadence was the
+        # remaining 2.5.4 gap vs the pre-split gst-launch path.
         self._a_dur = self._v_dur
-        self._silence = make_silence_s16_ns(8, 48000, self._a_dur)
+        self._silence = make_silence_s16_ns(
+            AUDIO_PCM_CHANNELS, AUDIO_PCM_RATE, self._a_dur
+        )
         self._v_start = 0.0
         self._a_start = 0.0
         self._captions_proc: Optional[subprocess.Popen] = None
@@ -882,7 +940,8 @@ class EncodeRuntime:
         if old is not None:
             self._null_pipeline_blocking(old, "publish")
         self._v_n = 0
-        self._a_n = 0
+        self._a_pts = 0
+        self._a_waiting_since = 0.0
         self._v_start = time.monotonic()
         self._a_start = self._v_start
         return self._start_publish()
@@ -920,19 +979,66 @@ class EncodeRuntime:
         GLib.timeout_add(delay_ms, self._video_tick)
         return False
 
-    def _audio_tick(self) -> bool:
-        if self._stopping or self._asrc is None:
-            return False
-        now = time.monotonic()
+    def _enqueue_audio(self, data: bytes, now: Optional[float] = None) -> int:
+        if not data:
+            return 0
+        if now is None:
+            now = time.monotonic()
         with self._lock:
-            age = now - self._last_audio_mono
-            if self._last_audio is not None and age <= 0.25:
-                payload = self._last_audio
-            else:
+            dropped = audio_enqueue(self._audio_q, data, max_len=AUDIO_Q_MAX)
+            self._last_audio_mono = now
+            if dropped and not self._audio_overflow_logged:
+                log.warning("audio relay queue overflow - dropping oldest (%s)", dropped)
+                self._audio_overflow_logged = True
+        return dropped
+
+    def _clear_audio_relay(self) -> None:
+        with self._lock:
+            self._audio_q.clear()
+            self._last_audio_mono = 0.0
+            self._a_waiting_since = 0.0
+            self._audio_overflow_logged = False
+
+    def _audio_relay_step(self, now: float) -> tuple[Optional[bytes], int]:
+        """One drain/silence/wait decision. GI-free for unit tests."""
+        with self._lock:
+            decision = audio_relay_decision(
+                queue_len=len(self._audio_q),
+                last_audio_mono=self._last_audio_mono,
+                now=now,
+                waiting_since=self._a_waiting_since,
+                have_capture=self._cap is not None,
+            )
+            if decision == "drain":
+                payload = self._audio_q.popleft()
+                self._a_waiting_since = 0.0
+            elif decision == "silence":
                 payload = self._silence
-        self._push_appsrc(self._asrc, payload, self._a_n * self._a_dur, self._a_dur)
-        self._a_n += 1
-        target = self._a_start + (self._a_n * self._a_dur / 1_000_000_000)
+                self._a_waiting_since = 0.0
+            else:
+                if self._a_waiting_since <= 0.0:
+                    self._a_waiting_since = now
+                return None, 0
+        return payload, pcm_duration_ns(len(payload))
+
+    def _commit_audio_push(self, duration_ns: int) -> int:
+        pts = self._a_pts
+        self._a_pts += duration_ns
+        return pts
+
+    def _audio_tick(self) -> bool:
+        if self._stopping:
+            return False
+        if self._asrc is None:
+            GLib.timeout_add(20, self._audio_tick)
+            return False
+        payload, dur = self._audio_relay_step(time.monotonic())
+        if payload is None or dur <= 0:
+            GLib.timeout_add(max(1, int(AUDIO_LIVE_WAIT_S * 1000)), self._audio_tick)
+            return False
+        pts = self._commit_audio_push(dur)
+        self._push_appsrc(self._asrc, payload, pts, dur)
+        target = self._a_start + (self._a_pts / 1_000_000_000)
         delay_ms = max(1, int((target - time.monotonic()) * 1000))
         GLib.timeout_add(delay_ms, self._audio_tick)
         return False
@@ -1052,9 +1158,7 @@ class EncodeRuntime:
             return Gst.FlowReturn.OK
         data = _buffer_bytes(sample.get_buffer())
         if data:
-            with self._lock:
-                self._last_audio = data
-                self._last_audio_mono = time.monotonic()
+            self._enqueue_audio(data)
         return Gst.FlowReturn.OK
 
     def _on_cap_bus(self, _bus, message) -> None:
@@ -1180,6 +1284,7 @@ class EncodeRuntime:
 
         Retry / auto-park runs from _on_capture_nulled after NULL, not here.
         """
+        self._clear_audio_relay()
         cap = self._cap
         self._cap = None
         if cap is None:

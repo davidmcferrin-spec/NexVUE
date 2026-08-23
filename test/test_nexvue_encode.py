@@ -279,36 +279,176 @@ class TestCapturePolicy(unittest.TestCase):
         )
 
 
-class TestAudioRelayCadence(unittest.TestCase):
-    """Regression coverage for a real quality bug: the publish appsrc relay
-    was pacing/timestamping audio pushes at AUDIO_FRAME_MS (an opusenc-only
-    setting — how big Opus's own encode frames are, nothing to do with how
-    capture delivers raw PCM) instead of the cadence audio actually arrives
-    at (per video-frame callback, no rechunking element exists in the
-    capture audio chain). That mismatch mislabeled every pushed buffer's
-    PTS/duration versus its real sample count — heard as steady
-    stuttering/warped audio with zero GStreamer errors logged, since
-    nothing crashes, the audio clock just drifts."""
+def _pcm(tag: int, samples: int = 1602) -> bytes:
+    """Distinct 8ch S16LE chunk (tag in the first byte)."""
+    buf = bytearray(samples * 8 * 2)
+    buf[0] = tag & 0xFF
+    return bytes(buf)
 
-    def test_audio_relay_duration_matches_video_frame_period_not_frame_ms(self) -> None:
+
+class TestPcmDuration(unittest.TestCase):
+    def test_empty_is_zero(self) -> None:
+        self.assertEqual(mod.pcm_duration_ns(0), 0)
+
+    def test_29_97_drop_frame_pair(self) -> None:
+        # 48 kHz / 29.97 is not an integer sample count — 1601 vs 1602.
+        self.assertEqual(mod.pcm_duration_ns(1602 * 8 * 2), 33_375_000)
+        self.assertEqual(mod.pcm_duration_ns(1601 * 8 * 2), 33_354_167)
+
+
+class TestAudioRelayDecision(unittest.TestCase):
+    def test_drain_wins_over_stale(self) -> None:
+        self.assertEqual(
+            mod.audio_relay_decision(
+                queue_len=1, last_audio_mono=0.0, now=10.0, waiting_since=0.0,
+                have_capture=False,
+            ),
+            "drain",
+        )
+
+    def test_silence_when_no_capture_or_never_live(self) -> None:
+        self.assertEqual(
+            mod.audio_relay_decision(
+                queue_len=0, last_audio_mono=9.9, now=10.0, waiting_since=0.0,
+                have_capture=False,
+            ),
+            "silence",
+        )
+        self.assertEqual(
+            mod.audio_relay_decision(
+                queue_len=0, last_audio_mono=0.0, now=10.0, waiting_since=0.0,
+                have_capture=True,
+            ),
+            "silence",
+        )
+
+    def test_silence_when_stale(self) -> None:
+        self.assertEqual(
+            mod.audio_relay_decision(
+                queue_len=0, last_audio_mono=10.0, now=10.26, waiting_since=0.0,
+                have_capture=True,
+            ),
+            "silence",
+        )
+
+    def test_wait_when_live_but_late(self) -> None:
+        self.assertEqual(
+            mod.audio_relay_decision(
+                queue_len=0, last_audio_mono=10.0, now=10.005, waiting_since=0.0,
+                have_capture=True,
+            ),
+            "wait",
+        )
+
+    def test_silence_after_underrun_slack(self) -> None:
+        self.assertEqual(
+            mod.audio_relay_decision(
+                queue_len=0, last_audio_mono=10.0, now=10.012,
+                waiting_since=10.0, have_capture=True,
+            ),
+            "silence",
+        )
+
+
+class TestAudioRelayCadence(unittest.TestCase):
+    """Unique-chunk drain: each captured PCM buffer is pushed once with
+    duration from its sample count. Repeating `_last_audio` at a fixed
+    cadence (and earlier, pacing that cadence at AUDIO_FRAME_MS) was the
+    post-split stutter vs gst-launch. AUDIO_FRAME_MS remains opusenc-only.
+    """
+
+    def test_silence_chunk_matches_video_period_not_frame_ms(self) -> None:
         cfg = mod.load_config(env(AUDIO_FRAME_MS="10"))
         rt = mod.EncodeRuntime(cfg)
         self.assertEqual(rt._a_dur, rt._v_dur)
         self.assertNotEqual(rt._a_dur, cfg.audio_frame_ms * 1_000_000)
+        expected_samples = round(48000 * rt._a_dur / 1_000_000_000)
+        self.assertEqual(len(rt._silence), expected_samples * 8 * 2)
 
-    def test_audio_relay_duration_tracks_output_fps_not_frame_ms_either_way(self) -> None:
-        # deint top halves the output rate — the relay cadence must follow
-        # that, regardless of what AUDIO_FRAME_MS (opusenc-only) is set to.
+    def test_silence_tracks_output_fps_not_frame_ms(self) -> None:
         cfg = mod.load_config(env(DEINT_FIELDS="top", AUDIO_FRAME_MS="60"))
         rt = mod.EncodeRuntime(cfg)
         self.assertEqual(rt._a_dur, mod.fps_duration_ns("30000/1001"))
         self.assertNotEqual(rt._a_dur, 60 * 1_000_000)
 
-    def test_silence_buffer_sized_for_actual_relay_duration(self) -> None:
-        cfg = mod.load_config(env())
-        rt = mod.EncodeRuntime(cfg)
-        expected_samples = round(48000 * rt._a_dur / 1_000_000_000)
-        self.assertEqual(len(rt._silence), expected_samples * 8 * 2)
+    def test_pts_is_running_sum_of_sample_durations(self) -> None:
+        rt = mod.EncodeRuntime(mod.load_config(env()))
+        a, b = _pcm(1, 1602), _pcm(2, 1601)
+        rt._enqueue_audio(a, now=1.0)
+        rt._enqueue_audio(b, now=1.01)
+        p1, d1 = rt._audio_relay_step(1.02)
+        pts1 = rt._commit_audio_push(d1)
+        p2, d2 = rt._audio_relay_step(1.03)
+        pts2 = rt._commit_audio_push(d2)
+        self.assertEqual(p1, a)
+        self.assertEqual(p2, b)
+        self.assertEqual(d1, mod.pcm_duration_ns(len(a)))
+        self.assertEqual(d2, mod.pcm_duration_ns(len(b)))
+        self.assertEqual(pts1, 0)
+        self.assertEqual(pts2, d1)
+        self.assertEqual(rt._a_pts, d1 + d2)
+        self.assertNotEqual(rt._a_pts, 2 * rt._v_dur)
+
+    def test_ingest_does_not_overwrite_prior_chunk(self) -> None:
+        rt = mod.EncodeRuntime(mod.load_config(env()))
+        rt._enqueue_audio(_pcm(1), now=1.0)
+        rt._enqueue_audio(_pcm(2), now=1.01)
+        self.assertEqual(len(rt._audio_q), 2)
+
+    def test_queue_cap_drops_oldest(self) -> None:
+        rt = mod.EncodeRuntime(mod.load_config(env()))
+        for i in range(mod.AUDIO_Q_MAX + 3):
+            rt._enqueue_audio(_pcm(i + 1), now=1.0 + i * 0.001)
+        self.assertEqual(len(rt._audio_q), mod.AUDIO_Q_MAX)
+        first, _dur = rt._audio_relay_step(2.0)
+        self.assertEqual(first[0], 4)  # tags 1..3 dropped
+
+    def test_empty_fresh_queue_does_not_replay(self) -> None:
+        rt = mod.EncodeRuntime(mod.load_config(env()))
+        rt._cap = object()  # capture up — late tick must wait, not replay
+        chunk = _pcm(9)
+        rt._enqueue_audio(chunk, now=1.0)
+        p1, _d1 = rt._audio_relay_step(1.0)
+        p2, d2 = rt._audio_relay_step(1.002)
+        self.assertEqual(p1, chunk)
+        self.assertIsNone(p2)
+        self.assertEqual(d2, 0)
+
+    def test_underrun_slack_inserts_silence_not_replay(self) -> None:
+        rt = mod.EncodeRuntime(mod.load_config(env()))
+        rt._cap = object()
+        chunk = _pcm(3)
+        rt._enqueue_audio(chunk, now=1.0)
+        p1, _d1 = rt._audio_relay_step(1.0)
+        p2, _d2 = rt._audio_relay_step(1.002)
+        p3, d3 = rt._audio_relay_step(1.012)
+        self.assertEqual(p1, chunk)
+        self.assertIsNone(p2)
+        self.assertEqual(p3, rt._silence)
+        self.assertEqual(d3, mod.pcm_duration_ns(len(rt._silence)))
+
+    def test_stale_or_no_capture_emits_silence_once_sized(self) -> None:
+        rt = mod.EncodeRuntime(mod.load_config(env()))
+        payload, dur = rt._audio_relay_step(now=10.0)
+        self.assertEqual(payload, rt._silence)
+        self.assertEqual(dur, mod.pcm_duration_ns(len(rt._silence)))
+        self.assertEqual(len(payload), len(rt._silence))
+
+    def test_teardown_clears_queue(self) -> None:
+        rt = mod.EncodeRuntime(mod.load_config(env()))
+        rt._enqueue_audio(_pcm(1), now=1.0)
+        rt._clear_audio_relay()
+        self.assertEqual(len(rt._audio_q), 0)
+        payload, _dur = rt._audio_relay_step(now=1.01)
+        self.assertEqual(payload, rt._silence)
+
+    def test_frame_ms_does_not_change_drain_math(self) -> None:
+        chunk = _pcm(5, 1602)
+        for frame_ms in ("10", "60"):
+            rt = mod.EncodeRuntime(mod.load_config(env(AUDIO_FRAME_MS=frame_ms)))
+            rt._enqueue_audio(chunk, now=1.0)
+            _payload, dur = rt._audio_relay_step(1.0)
+            self.assertEqual(dur, mod.pcm_duration_ns(len(chunk)))
 
 
 class TestSilenceNs(unittest.TestCase):

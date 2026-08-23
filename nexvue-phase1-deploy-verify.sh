@@ -166,6 +166,16 @@ if grep -q 'nexvue-encode-auto-park.sh' <<<"$stop_post"; then
 else
   warn "nexvue-encode@0 ExecStopPost missing auto-park — redeploy unit: sudo ./setup.sh && sudo systemctl daemon-reload"
 fi
+if [ -f /etc/systemd/system/nexvue-encode-auto-unpark.timer ]; then
+  ok "nexvue-encode-auto-unpark.timer unit installed"
+else
+  warn "nexvue-encode-auto-unpark.timer missing — sudo ./setup.sh to auto-start parked slots when SDI locks"
+fi
+if systemctl is-enabled --quiet nexvue-encode-auto-unpark.timer 2>/dev/null; then
+  ok "nexvue-encode-auto-unpark.timer is enabled"
+else
+  warn "nexvue-encode-auto-unpark.timer not enabled — sudo systemctl enable --now nexvue-encode-auto-unpark.timer"
+fi
 echo
 
 echo "=== summary: ${PASS} ok, ${WARN} warn, ${FAIL} fail ==="

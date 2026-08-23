@@ -1,0 +1,17 @@
+# /etc/systemd/system/nexvue-encode-auto-unpark.timer
+#
+# Periodic unpark scan (see nexvue-encode-auto-unpark.service). Cadence is
+# independent of AUTO_UNPARK_LOCK_POLLS (that is consecutive locked ticks).
+# setup.sh enables this on every station.
+
+[Unit]
+Description=NexVUE auto-unpark timer (SDI lock → start encode@N)
+
+[Timer]
+OnBootSec=20
+OnUnitActiveSec=10
+AccuracySec=2
+Persistent=false
+
+[Install]
+WantedBy=timers.target

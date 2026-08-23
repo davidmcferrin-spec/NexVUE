@@ -352,6 +352,7 @@ def collect_config(dest: Path, hours: int) -> list[str]:
         (Path("/etc/apache2/sites-available/nexvue.conf"), "apache-nexvue.conf"),
         (Path("/etc/apache2/sites-enabled/nexvue.conf"), "apache-nexvue-enabled.conf"),
         (Path("/etc/nexvue/tls/fullchain.pem"), "tls-fullchain.pem.exists.txt"),
+        (Path("/var/lib/nexvue/tls/source"), "tls-source.txt"),
     ):
         if src.is_file():
             if name.endswith(".exists.txt"):

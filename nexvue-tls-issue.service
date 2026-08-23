@@ -1,0 +1,18 @@
+# /etc/systemd/system/nexvue-tls-issue.service
+#
+# One-shot Let's Encrypt issue/renew (TLS-ALPN-01 on :443). Started by
+# Settings → Certificates or by nexvue-tls-renew.timer. Do not enable this
+# unit on boot — it stops Apache while lego binds 443.
+#
+# EXIT trap in nexvue-ops-tls.sh always starts apache2 again.
+
+[Unit]
+Description=NexVUE Let's Encrypt issue/renew (TLS-ALPN-01)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nexvue-ops-tls.sh run
+TimeoutStartSec=180
+Nice=5

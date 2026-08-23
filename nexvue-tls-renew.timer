@@ -1,0 +1,16 @@
+# /etc/systemd/system/nexvue-tls-renew.timer
+#
+# Checks twice a day. The service no-ops until a Lego cert is due, so it
+# is safe to enable on every station (including those still on self-signed).
+
+[Unit]
+Description=NexVUE Let's Encrypt renew timer
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=12h
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

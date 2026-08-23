@@ -63,10 +63,12 @@ at the cost of vertical detail.
 MediaMTX, systemd units, ops sudo wrappers + `/etc/sudoers.d/nexvue-ops`,
 seeds missing `/etc/nexvue/channels/N.env` for each `MAX_CHANNELS` slot,
 creates self-signed TLS under `/etc/nexvue/tls/` when absent (Apache HTTPS +
-MediaMTX WHEP/API share the same PEMs), and `enable --now`s `mediamtx`,
+MediaMTX WHEP/API share the same PEMs), installs pinned `lego` for Settings →
+Certificates (TLS-ALPN-01 on `:443`), and `enable --now`s `mediamtx`,
 `nexvue-status`, `nexvue-metrics`, `nexvue-decklink-configure`, and
 `nexvue-encode@0..(MAX_CHANNELS-1)` (default 8 → `@0`–`@7`; Duo: set
-`MAX_CHANNELS=4` in `nexvue.env`). Empty SDI ports auto-park. When
+`MAX_CHANNELS=4` in `nexvue.env`). Empty SDI ports auto-park and auto-unpark
+when lock returns. When
 `/var/www/html` exists, it also installs the Apache path UI (`/login`,
 `/player`, …). Use `sudo ./setup.sh --check` after a reboot.
 `setup.sh` also enables `apache2` + `ssh`, keeps Apache HTTP `:80` open as a
@@ -194,6 +196,7 @@ sudo cp index.html multiview.html metrics.html login.html users.html \
         nexvue-captions.php \
         nexvue-auth.php nexvue-auth-lib.php nexvue-jwks.php nexvue-auth-gate.js \
         nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js \
+        nexvue-safe.js nexvue-scopes.js \
         nexvue-logo.php chart.umd.min.js \
         services.html channels.html nexvue-ops.php /var/www/html/
 sudo systemctl restart apache2
@@ -252,7 +255,8 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   Email uses `share_email` / `mail()` when an MTA is available
   (`NEXVUE_MAIL_FROM`), else falls back to `mailto:`.
 - **Player audio defaults (first visit):** volume 20%, muted, VU meters off
-  (`nexvue-vu.js` localStorage). Existing prefs unchanged.
+  (`nexvue-vu.js` localStorage). Safe overlay and Scope are also off
+  (`nexvue-safe-on` / `nexvue-scopes-on`). Existing prefs unchanged.
 - **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`
   (existing station `.env` files unchanged until rewritten).
 - **MediaMTX:** `authMethod: jwt`, JWKS at
@@ -312,7 +316,10 @@ Two things people get wrong here: the WebRTC **media** port (8189) needs
 **both UDP and TCP** — UDP carries the media, TCP is the fallback for
 viewers on UDP-hostile networks — and it is a *different* port from the WHEP
 signaling port (8889). Opening only 8889 gets you a session that negotiates
-then plays nothing.
+then plays nothing. Off-LAN viewers also need Settings → **Public
+reachability** (admin) so MediaMTX advertises the public hostname and/or
+NAT IP in ICE candidates — without that, signaling succeeds and video stays
+black.
 
 ### Viewer ports (LAN or DMZ)
 
@@ -360,14 +367,23 @@ Then from a LAN machine:
   Click the **NexVUE** brand for a QR code of the page URL (phone scan).
   **CC** toggles a selectable closed-caption overlay (CEA-608/CC1 side
   channel — not burned into video; preference in `localStorage`).
+  **▢ Fill window** hides nav, control bars, and the collapsed metrics
+  drawer so the video occupies the browser window (not OS fullscreen;
+  `localStorage.nexvue-theater`, Esc or **✕ Exit fill** to leave;
+  double-click the video also toggles it). **⧉ PiP** floats the Player
+  `<video>` over other desktop windows (browser Picture-in-Picture; audio
+  stays in the tab via Web Audio; CC/VU overlays do not follow the PiP
+  window). Hidden when the browser has no PiP API.
 - **Multiviewer:** open `/multiview` (top nav → Multiview). Dual or quad
   layout with a channel dropdown per pane; defaults to LO with a global HI/LO
   toggle; click a pane for audio (one unmuted at a time) and to focus the
   **Session metrics** bottom drawer on that pane. Same NexVUE brand → QR
   share. Global **CC** toggle matches the player preference key.
-  **⛶ Fullscreen** hides nav, control bar, pane borders, and per-pane
-  channel selectors for a frameless wall; the session-metrics drawer stays
-  hidden unless it was already open (Esc / button to exit).
+  **▢ Fill window** is the same chrome-hide as fullscreen but stays inside
+  the tab (shared `nexvue-theater` pref with Player). **⛶ Fullscreen**
+  hides nav, control bar, pane borders, and per-pane channel selectors for
+  a frameless wall; the session-metrics drawer stays hidden unless it was
+  already open (Esc / button to exit).
 - **Usage metrics:** top nav → Metrics (`/metrics` + `/api/metrics`
   in Apache docroot — no separate port).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
@@ -378,18 +394,25 @@ Then from a LAN machine:
   zip of journals, `/etc/nexvue` channel/MediaMTX config, metrics samples, and
   small `/run/nexvue` state via `nexvue-ops.php?action=support_bundle` →
   `nexvue-ops-support-bundle.sh` → `nexvue-support-bundle.py` (zips land under
-  `/var/lib/nexvue/support`, pruned after 24h).   **Update from repo…** fetches
-  `origin/<branch>`, hard-resets the clone (`/etc/nexvue/repo.path`), and runs
-  `setup.sh` (`nexvue-ops-update.sh` + sudoers). Status shows
+  `/var/lib/nexvue/support`, pruned after 24h).   **Update from repo…** (admin
+  only) fetches `origin/<branch>`, hard-resets the clone (`/etc/nexvue/repo.path`),
+  and runs `setup.sh` (`nexvue-ops-update.sh` + sudoers). Status shows
   `vX.Y.Z · up to date` or `vX.Y.Z → vA.B.C · update available`; confirming an
   update lists the commit subjects between the running clone and origin.
   First enable requires one SSH `sudo ./setup.sh` from the clone so the helper
-  is installed; after that the UI can self-update. Does not restart encoders.
+  is installed; after that an admin can self-update. Does not restart encoders.
   Top-nav shows **vX.Y.Z** from the `VERSION` file (`nexvue-version.php`).
-  LAN-trust ops.
+  Services page and `update_status` / `update_repo` are admin-only.
 - **Settings:** top nav → Settings — optional station **logo** (Branding
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
-  shown in the top nav next to **NexVUE** when present) plus channel list
+  shown in the top nav next to **NexVUE** when present); admin-only **Public
+  reachability** (public DNS hostname + NAT/public IPv4 — writes
+  `NEXVUE_PUBLIC_HOSTNAME` / `NEXVUE_PUBLIC_IP` and MediaMTX
+  `webrtcAdditionalHosts`, then restarts `mediamtx` so off-LAN viewers get
+  media; operators do not see this panel); **Certificates** (Let's Encrypt
+  via pinned `lego` TLS-ALPN-01 on `:443`, or upload a PEM pair — both write
+  `/etc/nexvue/tls/{fullchain,privkey}.pem` and reload Apache + MediaMTX;
+  Issue/Upload are admin-only, operators can read expiry); plus channel list
   (LO column: yes/no; **Restart all encoders** for enabled slots);
   click a row (or use Bulk edit) to open a modal editor for
   `/etc/nexvue/channels/<N>.env`. Editor shows only live encode/player knobs
@@ -498,7 +521,7 @@ Approximate steady-state budget on LAN, 1080i59.94 source, tuned defaults:
 | Deinterlace + HW encode            | ~20-25 ms | `target-usage=7`, `b-frames=0` (set)   |
 | RTSP -> MediaMTX -> WHEP (LAN)     | <5 ms     | —                                      |
 | Browser jitter buffer              | ~10-30 ms | `playoutDelayHint`/`jitterBufferTarget` = 0 (set in player) — 50-100 ms if unset |
-| A/V sync wait (audio channels)     | 0-50 ms   | `ENABLE_AUDIO=false` removes entirely; `AUDIO_FRAME_MS=10` reduces |
+| A/V sync wait (audio channels)     | 0-50 ms   | `ENABLE_AUDIO=false` removes entirely; `AUDIO_FRAME_MS=10` reduces Opus packetization only (not the capture relay) |
 | Decode + render (60 Hz display)    | ~20-30 ms | —                                      |
 
 Practical floors: **~130-180 ms** for silent channels (prompter, multiview),
@@ -509,6 +532,8 @@ Rules of thumb per use case:
 - Prompter / multiview: `ENABLE_AUDIO=false`, `DEINT_FIELDS=top` is fine
   (29.97p adds one field-time but halves encode load).
 - Director / program return: `DEINT_FIELDS=all`, audio on, `AUDIO_FRAME_MS=10`.
+  Use `AUDIO_FRAME_MS=20` on WAN/lossy viewer paths (NY-style); 10 ms is
+  the LAN low-latency default and does not pace the encode relay.
 - `GOP_FRAMES` does NOT affect steady-state latency — only how long a new
   viewer waits for the first picture. Set 30 for snappier channel-switching
   if the slight bitrate efficiency cost is acceptable.
@@ -529,7 +554,12 @@ Enable/Disable or `systemctl disable --now`). Phase 1.5 slate was rolled
 back; an enabled encode on an unlocked port restart-loops briefly, then
 **auto-parks** after `AUTO_PARK_UNLOCK_CYCLES` consecutive unlocked starts
 (default **5** ≈ 25s with `RestartSec=5`; set `0` in `/etc/nexvue/nexvue.env`
-or the channel `.env` to disable). Re-enable from Services when patched.
+or the channel `.env` to disable). **Auto-unpark** (`nexvue-encode-auto-unpark.timer`,
+every 10s) starts a disabled or stopped DeckLink slot when the input goes
+unlocked → locked, or when an auto-parked marker is present and lock holds
+for `AUTO_UNPARK_LOCK_POLLS` (default 2). A Services Disable/Stop on a
+still-locked feed is left alone. `AUTO_UNPARK=false` (station or channel)
+or `AUTO_UNPARK_LOCK_POLLS=0` turns this off.
 To park immediately without waiting for the streak:
 
 ```bash
@@ -664,12 +694,23 @@ dots stay gray and **SDI input** shows `status unreachable`, check that
    content is never served over `:80`), enables `apache2` + `ssh`, then
    starts services.
    Existing PEM files are never overwritten — drop a real cert there before
-   or after setup.
-2. **Replace the self-signed pair when you have a real cert** (same paths;
-   keep `root:ssl-cert` + modes above), then:
-   ```bash
-   sudo systemctl restart mediamtx apache2
-   ```
+   or after setup, or use Settings → Certificates.
+2. **Replace the self-signed pair** from Settings → **Certificates**
+   (admin):
+   - **Issue / Renew** runs pinned `lego` (`v5.3.1`) with **TLS-ALPN-01 on
+     :443 only** (these stations cannot use port 80). Apache is stopped for
+     the challenge window and started again even if lego fails; WHEP on
+     `:8889` stays up. Requires a public DNS name pointing at the box, an
+     email, and accepting the Let's Encrypt subscriber agreement. Writes
+     `NEXVUE_TLS_EMAIL` / `NEXVUE_TLS_DOMAIN`. `nexvue-tls-renew.timer`
+     re-runs the same path when a Lego cert is within 30 days of expiry
+     (no-op for self-signed or uploaded certs).
+   - **Upload your own** accepts a PEM full chain + matching key, validates
+     the pair, atomically replaces `/etc/nexvue/tls/`, keeps one backup
+     under `/var/lib/nexvue/tls/backup/`, then reloads Apache and restarts
+     MediaMTX.
+   Manual copy still works (same paths; keep `root:ssl-cert` + modes
+   above), then `sudo systemctl restart mediamtx apache2`.
 3. **Status daemon TLS** is optional (PHP tries HTTP then HTTPS on loopback).
    To enable direct HTTPS on `:9998`, uncomment the two
    `Environment=NEXVUE_STATUS_TLS_*` lines in the live unit
@@ -1003,7 +1044,12 @@ expired; JWT auth is the lasting gate.
   (stereo / 5.1 / stereo+SAP / 5.1+SAP). Toolbar: **Main**/**SAP**,
   **St** (5.1→stereo fold) / **5.1** (discrete surround to the PC), plus
   engineering solo — all **this browser only** (`nexvue-vu.js` localStorage).
-  Transport is discrete Opus only (no Dolby).
+  Transport is discrete Opus only (no Dolby). **Safe** draws HD title/action
+  boxes (90% / 93%) plus an optional center target and 4:3 center-cut
+  (`nexvue-safe.js`). **Scope** is a player-local luma waveform (IRE) and
+  Rec.709 vectorscope with 75% bar boxes (`nexvue-scopes.js`) sampled from
+  the decoded video — confidence only, not an SDI rasterizer. Multiview
+  Safe is per-pane; Scope runs on the focused pane only.
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Player and Multiview show the alias when set;
   WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Settings page.
@@ -1029,7 +1075,10 @@ expired; JWT auth is the lasting gate.
   systemd-enabled `nexvue-encode@N` (parked/disabled slots stay parked) from
   Settings or Services. Logo actions (`logo_get` / `logo_put` / `logo_delete`) write
   `/var/lib/nexvue/branding/{logo.bin,logo.json}` as www-data (no sudo);
-  `nexvue-logo.php` streams the image for the nav. Phase 1 LAN-trust — do not
+  `nexvue-logo.php` streams the image for the nav.
+  Certificate actions (`tls_status` / `tls_issue` / `tls_upload`) go through
+  `nexvue-ops-tls.sh` (sudo); Apache is only stopped/started by that wrapper
+  (not via the general Services restart allowlist). Phase 1 LAN-trust — do not
   DMZ-expose without auth.
   The Services page also shows each unit's systemd enable state
   (`nexvue-ops-status.sh` prints `<is-active> <is-enabled>`) and offers two
@@ -1040,6 +1089,9 @@ expired; JWT auth is the lasting gate.
   untouched). Empty unlocked slots also **auto-park** via
   `nexvue-encode-auto-park.sh` after `AUTO_PARK_UNLOCK_CYCLES` consecutive
   unlocked starts (default 5; Settings → Advanced, or `/etc/nexvue/nexvue.env`).
+  When that input locks again, **auto-unpark** (`unpark-scan` on
+  `nexvue-encode-auto-unpark.timer`) `enable --now`s or `start`s the slot
+  (`AUTO_UNPARK`, default on).
   Core units (mediamtx, nexvue-status, nexvue-metrics) can be
   restarted but never disabled or stopped from the page. Disable and Stop
   both run `reset-failed` after acting, so a previously restart-looping
@@ -1056,7 +1108,12 @@ expired; JWT auth is the lasting gate.
   pane to select audio. Switching Dual↔Quad tears down hidden panes so unused
   sessions do not linger. Multiview share links (`?t=`) are limited to four
   channels and auto-tune panes on open; Fullscreen is near-frameless (chrome
-  + pane bars hidden).
+  + pane bars hidden). **▢ Fill window** (`html.theater`) is the same
+  frameless layout inside the browser window; preference is
+  `localStorage.nexvue-theater` (Player + Multiview). Player **⧉ PiP** uses
+  `HTMLVideoElement.requestPictureInPicture()` — one floating video, audio
+  remains on the tab, captions/VU stay on the page overlay (not in the PiP
+  window). Multiview has no PiP (browsers allow one PiP video at a time).
 - **Mirror/flip/rotate persist through fullscreen.** Applied as an inline
   `transform` on the video (not a CSS class), and the dedicated "⛶
   Fullscreen" button fullscreens the wrapper `<div>`, not the `<video>`
@@ -1066,7 +1123,9 @@ expired; JWT auth is the lasting gate.
   fullscreen. Player **⟲ 90° / 90° ⟳** rotate the view in 90° steps (CW from
   upright) for portrait sources or a tilted monitor
   (`localStorage.nexvue-video-rotate`). 90°/270° swap the video layout box
-  so the frame still fits. Multiview has no rotate controls.
+  so the frame still fits. Multiview has no rotate controls. Native PiP
+  typically shows the untransformed decode (CSS mirror/flip/rotate stay on
+  the in-tab video).
 - **Closed captions are a side channel**, not MediaMTX tracks. Encode writes
   `/run/nexvue/captions/<path>.json`; Apache serves SSE via
   `nexvue-captions.php`. HI/LO reconnect keeps the same channel subscription.
@@ -1100,8 +1159,10 @@ expired; JWT auth is the lasting gate.
   for a future redesign; do not enable it on live units today.
 - **Self-healing model:** `nexvue-encode.py` runs two GStreamer pipelines in
   one process. **Publish** (appsrc → HI/LO encode → `rtspclientsink`) stays
-  up and keeps pushing last-frame / black + silence so MediaMTX / WHEP
-  sessions survive SDI flaps. **Capture** (DeckLink → normalize → appsink)
+  up and keeps pushing last-frame / black so MediaMTX / WHEP sessions
+  survive SDI flaps. Audio is unique-chunk drain (each captured PCM buffer
+  once, duration from sample count) plus silence when capture is dead —
+  not a replay of the last waveform. **Capture** (DeckLink → normalize → appsink)
   is torn down and reopened on `not-negotiated`, exclusive-open races, or
   EOS — never via `input-selector` / slate (that stormed in Phase 1.5).
   Capture appsinks pull preroll (`new-preroll` + `async=false`) so a live
@@ -1114,7 +1175,9 @@ expired; JWT auth is the lasting gate.
   has been live, unlocks retry in-process and do not increment auto-park.
   Empty ports that never lock still cycle (`RestartSec=5`) for up to
   `AUTO_PARK_UNLOCK_CYCLES` (default 5), then `nexvue-encode-auto-park.sh`
-  disables that `encode@N` (exit 75 + `ExecStopPost`). `WATCHDOG_MS`
+  disables that `encode@N` (exit 75 + `ExecStopPost`) and writes a durable
+  auto-parked marker. `nexvue-encode-auto-unpark.timer` starts the slot again
+  when DeckLink reports lock. `WATCHDOG_MS`
   defaults to **0** (off) so a 3s SDI hitch is hold/black, not a unit bounce.
   `SIGNAL_LOSS_HOLD_S` (default 15) holds the last frame, then black.
 - **Signal-present / encoder-alive alarming** belongs in Phase 4 portal ops
@@ -1325,7 +1388,7 @@ and implemented — see the decisions list above the collapsed spec.
 | 1 (this) | Single edge, LAN WHEP, no auth. Prove stability + latency. |
 | 1.5 | **Rolled back** (slate/selector). Split-pipeline encode (`nexvue-encode.py`) is the production healer. See "Phase 1.5 supervisor" below. |
 | 2 | **Edge local auth landed** (bcrypt users + roles, share links, MediaMTX JWT/JWKS, sync-shaped export/import). Central PHP portal (catalog + fleet sync client) still future; Entra OIDC remains Phase 3. |
-| 3 | DMZ exposure: TLS on 443, `webrtcAdditionalHosts` = public FQDN, single UDP 8189 rule + ICE-TCP fallback; MediaMTX API + status daemon already loopback-bound (`nexvue-mediamtx-api.php` / `nexvue-status.php`). Remaining: Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
+| 3 | DMZ exposure: TLS on 443, Settings → Certificates (admin) issues Let's Encrypt via lego TLS-ALPN-01 or uploads PEMs, Settings → Public reachability (admin) sets `webrtcAdditionalHosts` to the public FQDN and/or NAT IP, single UDP 8189 rule + ICE-TCP fallback; MediaMTX API + status daemon already loopback-bound (`nexvue-mediamtx-api.php` / `nexvue-status.php`). Remaining: Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
 | 4 | **First slice landed.** Cloud portal (`web-portal/`, `sudo ./setup.sh --portal` on a separate box) — multi-tenant catalog + identity front door. Portal becomes the viewer-JWT issuer for an adopted station via a merged JWKS on the edge (`nexvue-jwks.php`), so MediaMTX config never changes and a portal outage never breaks local login/share links/publish. Enrollment + heartbeat are edge-initiated outbound only. See CLAUDE.md's Phase 4 entry for the full design. Remaining: fleet health dashboards, cross-site Multiview, Entra ID OIDC. |
 
 ## Cloud portal (Phase 4)

@@ -114,6 +114,46 @@
   #logo-meta, #logo-msg { color: var(--dim); font-size: 12px; }
   #logo-msg.err { color: var(--bad); }
   #logo-msg.ok { color: var(--ok); }
+  .network-help { color: var(--muted); font-size: 12px; margin: 0 0 12px; max-width: 56em; }
+  .network-grid {
+    display: grid;
+    grid-template-columns: minmax(10em, 14em) minmax(16em, 32em);
+    gap: 10px 16px;
+    align-items: center;
+    max-width: 48em;
+    margin-bottom: 12px;
+  }
+  .network-grid label { color: var(--muted); font-size: 12px; }
+  .network-grid input { width: 100%; }
+  #network-msg { color: var(--dim); font-size: 12px; }
+  #network-msg.err { color: var(--bad); }
+  #network-msg.ok { color: var(--ok); }
+  .tls-help { color: var(--muted); font-size: 12px; margin: 0 0 12px; max-width: 56em; }
+  .tls-status {
+    color: var(--text); font-size: 13px; margin: 0 0 14px; max-width: 56em;
+    line-height: 1.45;
+  }
+  .tls-status .dim { color: var(--dim); }
+  .tls-grid {
+    display: grid;
+    grid-template-columns: minmax(10em, 14em) minmax(16em, 32em);
+    gap: 10px 16px;
+    align-items: center;
+    max-width: 48em;
+    margin-bottom: 12px;
+  }
+  .tls-grid label { color: var(--muted); font-size: 12px; }
+  .tls-grid input[type="text"], .tls-grid input[type="email"] { width: 100%; }
+  .tls-tos { color: var(--muted); font-size: 12px; margin: 0 0 12px; max-width: 48em; }
+  .tls-tos input { margin-right: 8px; }
+  .tls-upload-row { margin: 8px 0; color: var(--muted); font-size: 12px; }
+  .tls-subhead {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted); margin: 18px 0 8px; font-weight: 600;
+  }
+  #tls-msg, #tls-upload-msg { color: var(--dim); font-size: 12px; }
+  #tls-msg.err, #tls-upload-msg.err { color: var(--bad); }
+  #tls-msg.ok, #tls-upload-msg.ok { color: var(--ok); }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--edge); }
   th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
@@ -398,6 +438,77 @@
   </div>
 </div>
 
+<div class="panel" id="network-panel" hidden>
+  <h2>Public reachability</h2>
+  <p class="network-help">
+    Tell off-site viewers how to reach this station. Leave both blank for LAN-only.
+    IT still needs to forward ports <strong>8889</strong> and <strong>8189</strong> to this box.
+    Saving reconnects viewers; live encodes keep running.
+  </p>
+  <div class="network-grid">
+    <label for="network-hostname" tabindex="0"
+      data-tip="DNS name viewers use for this station (for example nexvue.example.com). Optional. Leave blank if you only have a public IP. Do not include https:// or a path.">Public hostname</label>
+    <input type="text" id="network-hostname" autocomplete="off" spellcheck="false"
+      placeholder="nexvue.example.com" aria-describedby="network-msg">
+    <label for="network-ip" tabindex="0"
+      data-tip="Public IPv4 the firewall forwards to this box. Required for off-site viewers when they cannot use the hostname, or when this station sits behind 1:1 NAT. Leave blank for LAN-only.">Public IP</label>
+    <input type="text" id="network-ip" autocomplete="off" spellcheck="false"
+      placeholder="203.0.113.40" inputmode="decimal" aria-describedby="network-msg">
+  </div>
+  <div class="bar">
+    <button type="button" class="primary" id="network-save">Save</button>
+    <span id="network-msg" aria-live="polite"></span>
+  </div>
+</div>
+
+<div class="panel" id="tls-panel" hidden>
+  <h2>Certificates</h2>
+  <p class="tls-help">
+    Apache and MediaMTX share <code>/etc/nexvue/tls/{fullchain,privkey}.pem</code>.
+    Let's Encrypt uses <strong>TLS-ALPN-01 on port 443</strong> (this page will
+    disconnect for about a minute). Live video on <strong>:8889</strong> stays up.
+    Port 80 is not used. A public DNS name must already point at this box.
+  </p>
+  <div class="tls-status" id="tls-status">Loading certificate…</div>
+  <div id="tls-admin" hidden>
+    <div class="tls-grid">
+      <label for="tls-domain" tabindex="0"
+        data-tip="Public DNS name on the certificate (for example nexvue.example.com). Prefills from Public reachability. Let's Encrypt cannot issue for a raw IP.">DNS name</label>
+      <input type="text" id="tls-domain" autocomplete="off" spellcheck="false"
+        placeholder="nexvue.example.com" aria-describedby="tls-msg">
+      <label for="tls-email" tabindex="0"
+        data-tip="Let's Encrypt account email for expiry notices. Required to issue or renew.">Email</label>
+      <input type="email" id="tls-email" autocomplete="off" spellcheck="false"
+        placeholder="ops@example.com" aria-describedby="tls-msg">
+    </div>
+    <p class="tls-tos">
+      <label>
+        <input type="checkbox" id="tls-tos">
+        I agree to the
+        <a href="https://letsencrypt.org/repository/" target="_blank" rel="noopener noreferrer">Let's Encrypt Subscriber Agreement</a>
+      </label>
+    </p>
+    <div class="bar">
+      <button type="button" class="primary" id="tls-issue">Issue / Renew</button>
+      <span id="tls-msg" aria-live="polite"></span>
+    </div>
+    <h3 class="tls-subhead">Upload your own</h3>
+    <p class="tls-help">PEM full chain and matching private key. Replaces the live pair and reloads Apache + MediaMTX.</p>
+    <div class="tls-upload-row">
+      <label for="tls-cert-file">Certificate (full chain PEM)</label>
+      <input type="file" id="tls-cert-file" accept=".pem,.crt,.cer,application/x-pem-file,application/x-x509-ca-cert" aria-label="Choose certificate PEM">
+    </div>
+    <div class="tls-upload-row">
+      <label for="tls-key-file">Private key (PEM)</label>
+      <input type="file" id="tls-key-file" accept=".pem,.key,application/x-pem-file" aria-label="Choose private key PEM">
+    </div>
+    <div class="bar">
+      <button type="button" class="primary" id="tls-upload" disabled>Install uploaded cert</button>
+      <span id="tls-upload-msg" aria-live="polite"></span>
+    </div>
+  </div>
+</div>
+
 <dialog id="edit-dlg" class="modal-sheet" aria-labelledby="edit-heading">
   <div class="modal-header">
     <div class="titles">
@@ -582,6 +693,7 @@
     LO_HEIGHT: "auto",
     EXTRA_ENC_ARGS: "none",
     AUTO_PARK_UNLOCK_CYCLES: "5",
+    AUTO_UNPARK: "true",
   };
 
   const FIELD_META = {
@@ -672,7 +784,7 @@
       label: "Opus frame size (ms)",
       type: "select",
       options: ["2", "5", "10", "20", "40", "60"],
-      tip: "Opus packet duration. 10 ms is the low-latency default.",
+      tip: "Opus packet duration (encode only — does not pace capture). 10 ms is the low-latency default; 20 ms is more robust on WAN.",
       depends: { ENABLE_AUDIO: true },
     },
     AUDIO_BITRATE_BPS: {
@@ -737,7 +849,14 @@
     AUTO_PARK_UNLOCK_CYCLES: {
       label: "Auto-park after unlock starts",
       type: "text",
-      tip: "Consecutive encoder starts while this DeckLink input is unlocked before the slot disables itself (stops empty-port restart storms). Default 5 (~25s with RestartSec=5). 0 = never auto-park. Re-enable from Services when the BNC is patched. Station default can also live in /etc/nexvue/nexvue.env.",
+      tip: "Consecutive encoder starts while this DeckLink input is unlocked before the slot disables itself (stops empty-port restart storms). Default 5 (~25s with RestartSec=5). 0 = never auto-park. Auto-unpark starts the slot again when SDI locks. Station default can also live in /etc/nexvue/nexvue.env.",
+    },
+    AUTO_UNPARK: {
+      label: "Auto-unpark when SDI locks",
+      type: "select",
+      options: ["true", "false"],
+      optionLabels: { true: "On (start when lock returns)", false: "Off (manual Enable)" },
+      tip: "When this slot is disabled or stopped after an unlock (auto-park or empty BNC), start it again once DeckLink reports lock. A Services Disable/Stop on a still-locked feed is left alone. Blank inherits the station default (On). Station-wide AUTO_UNPARK=false or AUTO_UNPARK_LOCK_POLLS=0 in nexvue.env turns this off for every slot.",
     },
   };
 
@@ -777,7 +896,7 @@
       id: "advanced",
       title: "Advanced",
       blurb: "Use auto / none unless you need a custom LO raster or a specific encoder property.",
-      keys: ["LO_WIDTH", "LO_HEIGHT", "EXTRA_ENC_ARGS", "AUTO_PARK_UNLOCK_CYCLES"],
+      keys: ["LO_WIDTH", "LO_HEIGHT", "EXTRA_ENC_ARGS", "AUTO_PARK_UNLOCK_CYCLES", "AUTO_UNPARK"],
       advanced: true,
     },
   ];
@@ -1744,6 +1863,291 @@
   });
 
   refreshLogoStatus();
+
+  // ---- Public reachability (admin-only) ---------------------------------------
+
+  const networkPanel = document.getElementById("network-panel");
+  const networkHost = document.getElementById("network-hostname");
+  const networkIp = document.getElementById("network-ip");
+  const networkSave = document.getElementById("network-save");
+  const networkMsg = document.getElementById("network-msg");
+  const me = NexVueAuth.currentUser();
+  const isAdmin = !!(me && me.role === "admin");
+
+  function setNetworkMsg(text, cls) {
+    networkMsg.textContent = text || "";
+    networkMsg.className = cls || "";
+  }
+
+  function clientHostnameOk(raw) {
+    const v = String(raw || "").trim().toLowerCase();
+    if (v === "") return true;
+    if (v.includes("://") || v.includes("/") || v.includes(":")) return false;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(v)) return false;
+    return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/.test(v)
+      && v.length <= 253;
+  }
+
+  function clientIpOk(raw) {
+    const v = String(raw || "").trim();
+    if (v === "") return true;
+    const parts = v.split(".");
+    if (parts.length !== 4 || !parts.every((p) => /^\d+$/.test(p))) return false;
+    const n = parts.map((p) => parseInt(p, 10));
+    if (n.some((x) => x < 0 || x > 255)) return false;
+    if (v === "0.0.0.0" || v === "255.255.255.255") return false;
+    if (n[0] === 127 || (n[0] === 169 && n[1] === 254) || n[0] >= 224) return false;
+    return true;
+  }
+
+  async function loadNetwork() {
+    try {
+      const data = await api("network_get", {});
+      networkHost.value = data.hostname || "";
+      networkIp.value = data.ip || "";
+    } catch (err) {
+      setNetworkMsg(err.message, "err");
+    }
+  }
+
+  if (isAdmin) {
+    networkPanel.hidden = false;
+    wireFieldTip(document.querySelector('label[for="network-hostname"]'));
+    wireFieldTip(document.querySelector('label[for="network-ip"]'));
+    networkSave.addEventListener("click", async () => {
+      const hostname = networkHost.value.trim();
+      const ip = networkIp.value.trim();
+      if (!clientHostnameOk(hostname)) {
+        setNetworkMsg("Enter a hostname like nexvue.example.com", "err");
+        networkHost.focus();
+        return;
+      }
+      if (!clientIpOk(ip)) {
+        setNetworkMsg("Enter an IPv4 address like 203.0.113.40", "err");
+        networkIp.focus();
+        return;
+      }
+      const confirmMsg = (hostname || ip)
+        ? "Apply these addresses and reconnect viewers? Live encodes stay running."
+        : "Clear public addresses (LAN-only) and reconnect viewers? Live encodes stay running.";
+      if (!confirm(confirmMsg)) return;
+      networkSave.disabled = true;
+      setNetworkMsg("Saving…");
+      try {
+        const data = await api("network_put", { hostname, ip });
+        networkHost.value = data.hostname || "";
+        networkIp.value = data.ip || "";
+        if (data.restarted) {
+          setNetworkMsg(
+            (data.hostname || data.ip)
+              ? "Saved — viewers will reconnect."
+              : "Saved — LAN-only (viewers on this network only).",
+            "ok"
+          );
+        } else {
+          setNetworkMsg("Saved, but viewers may not reconnect until the media service restarts.", "err");
+        }
+      } catch (err) {
+        setNetworkMsg(err.message, "err");
+      } finally {
+        networkSave.disabled = false;
+      }
+    });
+    loadNetwork();
+  }
+
+  // ---- Certificates (status for admin+operator; issue/upload admin-only) ------
+
+  const tlsPanel = document.getElementById("tls-panel");
+  const tlsAdmin = document.getElementById("tls-admin");
+  const tlsStatus = document.getElementById("tls-status");
+  const tlsDomain = document.getElementById("tls-domain");
+  const tlsEmail = document.getElementById("tls-email");
+  const tlsTos = document.getElementById("tls-tos");
+  const tlsIssue = document.getElementById("tls-issue");
+  const tlsMsg = document.getElementById("tls-msg");
+  const tlsCertFile = document.getElementById("tls-cert-file");
+  const tlsKeyFile = document.getElementById("tls-key-file");
+  const tlsUpload = document.getElementById("tls-upload");
+  const tlsUploadMsg = document.getElementById("tls-upload-msg");
+  let tlsPollTimer = null;
+  let pendingTlsCert = null;
+  let pendingTlsKey = null;
+
+  function setTlsMsg(el, text, cls) {
+    el.textContent = text || "";
+    el.className = cls || "";
+  }
+
+  function formatTlsStatus(data) {
+    if (!data.present) {
+      return "No certificate installed. setup.sh creates a self-signed pair if these files are missing.";
+    }
+    const days = data.days_left;
+    const dayText = (days === null || days === undefined)
+      ? ""
+      : (days < 0 ? `expired ${-days} day(s) ago` : `${days} day(s) left`);
+    const src = data.source || "unknown";
+    const srcLabel = src === "lego" ? "Let's Encrypt"
+      : src === "upload" ? "uploaded"
+      : src === "self-signed" ? "self-signed"
+      : src;
+    const sans = (data.sans && data.sans.length) ? data.sans.join(", ") : (data.subject || "");
+    const lines = [
+      `Source: ${srcLabel}` + (data.self_signed ? " (browser warning until replaced)" : ""),
+      sans ? `Name: ${sans}` : "",
+      data.issuer ? `Issuer: ${data.issuer}` : "",
+      data.not_after ? `Expires: ${data.not_after}${dayText ? " · " + dayText : ""}` : "",
+      data.busy ? "A Let's Encrypt request is running — this page may disconnect while Apache is stopped." : "",
+    ];
+    return lines.filter(Boolean).join("\n");
+  }
+
+  function applyTlsForm(data) {
+    if (!tlsDomain.value) {
+      tlsDomain.value = data.domain || data.public_hostname || "";
+    }
+    if (!tlsEmail.value) {
+      tlsEmail.value = data.email || "";
+    }
+  }
+
+  async function refreshTlsStatus() {
+    const data = await api("tls_status", {});
+    tlsStatus.textContent = formatTlsStatus(data);
+    applyTlsForm(data);
+    if (isAdmin) {
+      tlsIssue.disabled = !!data.busy;
+    }
+    return data;
+  }
+
+  function stopTlsPoll() {
+    if (tlsPollTimer) {
+      clearInterval(tlsPollTimer);
+      tlsPollTimer = null;
+    }
+  }
+
+  function startTlsPoll() {
+    stopTlsPoll();
+    let n = 0;
+    tlsPollTimer = setInterval(async () => {
+      n += 1;
+      try {
+        const data = await refreshTlsStatus();
+        if (!data.busy) {
+          stopTlsPoll();
+          if (data.job && data.job.ok === false && data.job.error) {
+            setTlsMsg(tlsMsg, data.job.error, "err");
+          } else if (data.source === "lego") {
+            setTlsMsg(tlsMsg, "Certificate installed. Reload if this tab still shows a warning.", "ok");
+          }
+          if (isAdmin) tlsIssue.disabled = false;
+        } else {
+          setTlsMsg(tlsMsg, "Waiting for Let's Encrypt (this tab may drop while Apache is stopped)…", "");
+        }
+      } catch {
+        setTlsMsg(tlsMsg, "Web UI is down during the 443 challenge — retrying…", "");
+      }
+      if (n >= 45) {
+        stopTlsPoll();
+        if (isAdmin) tlsIssue.disabled = false;
+        setTlsMsg(tlsMsg, "Timed out waiting for the request. Reload and check status.", "err");
+      }
+    }, 2000);
+  }
+
+  function updateTlsUploadEnable() {
+    tlsUpload.disabled = !(pendingTlsCert && pendingTlsKey);
+  }
+
+  tlsPanel.hidden = false;
+  if (isAdmin) {
+    tlsAdmin.hidden = false;
+    wireFieldTip(document.querySelector('label[for="tls-domain"]'));
+    wireFieldTip(document.querySelector('label[for="tls-email"]'));
+    tlsIssue.addEventListener("click", async () => {
+      const domain = tlsDomain.value.trim();
+      const email = tlsEmail.value.trim();
+      if (!clientHostnameOk(domain) || !domain) {
+        setTlsMsg(tlsMsg, "Enter a DNS name like nexvue.example.com", "err");
+        tlsDomain.focus();
+        return;
+      }
+      if (!email || !email.includes("@")) {
+        setTlsMsg(tlsMsg, "Enter an email for Let's Encrypt notices", "err");
+        tlsEmail.focus();
+        return;
+      }
+      if (!tlsTos.checked) {
+        setTlsMsg(tlsMsg, "Agree to the Let's Encrypt Subscriber Agreement", "err");
+        return;
+      }
+      if (!confirm(
+        "Issue or renew a Let's Encrypt certificate? The web UI (port 443) will stop for about a minute so the challenge can run. Live video on :8889 stays up. This tab will disconnect — reload when it comes back."
+      )) return;
+      tlsIssue.disabled = true;
+      setTlsMsg(tlsMsg, "Starting Let's Encrypt…");
+      try {
+        await api("tls_issue", { email, domain, accept_tos: true });
+        setTlsMsg(tlsMsg, "Request started — waiting for Let's Encrypt…", "");
+        startTlsPoll();
+      } catch (err) {
+        setTlsMsg(tlsMsg, err.message, "err");
+        tlsIssue.disabled = false;
+      }
+    });
+    tlsCertFile.addEventListener("change", async () => {
+      pendingTlsCert = null;
+      updateTlsUploadEnable();
+      const file = tlsCertFile.files && tlsCertFile.files[0];
+      if (!file) return;
+      if (file.size > 131072) {
+        setTlsMsg(tlsUploadMsg, "Certificate exceeds 128 KB", "err");
+        tlsCertFile.value = "";
+        return;
+      }
+      pendingTlsCert = await fileToBase64(file);
+      updateTlsUploadEnable();
+    });
+    tlsKeyFile.addEventListener("change", async () => {
+      pendingTlsKey = null;
+      updateTlsUploadEnable();
+      const file = tlsKeyFile.files && tlsKeyFile.files[0];
+      if (!file) return;
+      if (file.size > 131072) {
+        setTlsMsg(tlsUploadMsg, "Private key exceeds 128 KB", "err");
+        tlsKeyFile.value = "";
+        return;
+      }
+      pendingTlsKey = await fileToBase64(file);
+      updateTlsUploadEnable();
+    });
+    tlsUpload.addEventListener("click", async () => {
+      if (!pendingTlsCert || !pendingTlsKey) return;
+      if (!confirm("Replace the live certificate and reload Apache + MediaMTX?")) return;
+      tlsUpload.disabled = true;
+      setTlsMsg(tlsUploadMsg, "Installing…");
+      try {
+        const data = await api("tls_upload", { cert: pendingTlsCert, key: pendingTlsKey });
+        pendingTlsCert = null;
+        pendingTlsKey = null;
+        tlsCertFile.value = "";
+        tlsKeyFile.value = "";
+        tlsStatus.textContent = formatTlsStatus({ ...data, present: true, source: data.source || "upload" });
+        setTlsMsg(tlsUploadMsg, "Installed — Apache and MediaMTX reloaded.", "ok");
+        await refreshTlsStatus();
+      } catch (err) {
+        setTlsMsg(tlsUploadMsg, err.message, "err");
+        updateTlsUploadEnable();
+      }
+    });
+  }
+  refreshTlsStatus().catch((err) => {
+    tlsStatus.textContent = err.message || "Could not read certificate status.";
+  });
+
   load();
 })();
 </script>

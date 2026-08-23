@@ -131,39 +131,33 @@ this box can't get additional ports opened.
   SDI/`not-negotiated`/exclusive-open races tear down capture only; publish
   holds last-frame then black (`SIGNAL_LOSS_HOLD_S`, default 15s) so WHEP
   stays up. No `input-selector` / slate (`nexvue-supervisor.py` unused).
-  Empty ports still auto-park after consecutive never-live unlocks.
+  Empty ports still auto-park after consecutive never-live unlocks, then
+  auto-unpark when DeckLink lock returns.
   Captions/LO/metrics/ops UI remain. Tests: `test/test_nexvue_encode.py`,
   `test/test-pipeline-assembly.sh`.
-  Publish is fed by a self-clocked appsrc pump (`_video_tick`/`_audio_tick`,
-  GLib timers) that pushes whatever `_last_video`/`_last_audio` currently
-  holds at a fixed cadence — this is *why* WHEP survives capture teardown
-  (deliberate; see `SIGNAL_LOSS_HOLD_S` above), but it means the pump's
-  declared per-push PTS/duration MUST match how often capture actually
-  refreshes that value, or every push mislabels its real sample/frame
-  count and the downstream clock quietly drifts — no GStreamer error, just
-  steady degradation. Video is fine because `videorate` in the capture
-  chain retimes to `output_fps` before the appsink, so one frame arrives
-  per output period by construction. Audio was NOT: `_a_dur` (the pump's
-  cadence) was wired to `AUDIO_FRAME_MS`, but that setting only sizes
-  `opusenc`'s own internal encode frame (its `frame-size` property) — it
-  has nothing to do with how capture delivers raw PCM, and nothing in the
-  capture audio chain rechunks to a fixed duration (`audiorate` fixes
-  sample *rate*, not buffer size; DeckLink delivers embedded audio per
-  video-frame callback, not per `AUDIO_FRAME_MS`). Real symptom (all
-  channels, both LAN and remote, zero journal errors — nothing crashes,
-  the clock just warps): audio/video "stuttering, sounds sluggish" vs. the
-  same content on the pre-split-pipeline v1.12 build. Fixed by decoupling
-  `_a_dur` from `AUDIO_FRAME_MS` entirely — it now equals `_v_dur`
-  (nanosecond-precise, `make_silence_s16_ns`) — `AUDIO_FRAME_MS` still only
-  controls `opusenc`'s frame size as documented; GStreamer re-chunks
-  arbitrary buffer boundaries internally regardless of how the appsrc
-  pushed them, so this doesn't affect the "10ms low-latency Opus frame"
-  behavior at all.
+  Publish video is still a self-clocked appsrc pump (`_video_tick`) that
+  repeats last-frame then black (`SIGNAL_LOSS_HOLD_S`) so WHEP survives
+  capture teardown. Audio is not sample-and-hold: capture enqueues unique
+  PCM chunks (`_audio_q`, cap `AUDIO_Q_MAX`); `_audio_tick` drains each
+  once, stamps duration from sample count (`pcm_duration_ns`), and advances
+  PTS as a running sum. Dead/stale capture gets fresh silence (never a
+  replayed waveform); a live-but-late underrun waits a few ms then inserts
+  one silence (`AUDIO_UNDERRUN_SLACK_S`) so appsrc does not starve. Capture
+  teardown clears the queue. `AUDIO_FRAME_MS` still only sizes `opusenc`'s
+  `frame-size` (10 ms default = lower packetization delay; 20 ms is more
+  robust on WAN) — it does not pace the relay. The 2.4.0–2.5.3 bug wired
+  the pump period to `AUDIO_FRAME_MS` (10 ms ticks of ~33 ms PCM); 2.5.4
+  set `_a_dur = _v_dur` but still replayed `_last_audio`. Both sounded
+  sluggish vs the pre-split gst-launch path (v1.12 / 2.2.3) with zero
+  journal errors.
 - **Phase 2: edge local auth landed** — bcrypt users (admin/operator/sharer/viewer),
   per-user channel ACL, named revocable share links with mandatory expiry
   (Users admin UI + Player/Multiview Share for admin/sharer; sharer sees own
   tokens only; Multiview shares ≤4 channels and auto-tune panes on open;
   Multiview Fullscreen is frameless (html:fullscreen hides chrome/borders);
+  Player / Multiview **▢ Fill window** (`html.theater`, `localStorage.nexvue-theater`)
+  is the same chrome-hide inside the tab; Player **⧉ PiP** is native
+  `requestPictureInPicture` (audio stays on the tab; CC/VU do not follow);
   raw share token stored for re-copy/email of the same URL; share viewers see
   time-left in the top nav; admin edit + delete revoked/expired;
   expired rows purged 7d after expires_at), MediaMTX JWT + local
@@ -200,8 +194,10 @@ this box can't get additional ports opened.
   the player over `http://` and every WHEP POST failed this way.
 - **Phase 3: DMZ** — MediaMTX API (`127.0.0.1:9997`) and status
   (`NEXVUE_STATUS_BIND=127.0.0.1:9998`) are loopback-bound; Player uses
-  `nexvue-mediamtx-api.php` + `nexvue-status.php`. Remaining: Entra OIDC,
-  CORS, portal relays. (TLS landed early — see README TLS section.)
+  `nexvue-mediamtx-api.php` + `nexvue-status.php`. Public ICE hosts
+  (`webrtcAdditionalHosts`) are set from Settings → Public reachability
+  (admin). Remaining: Entra OIDC, CORS, portal relays. (TLS landed early —
+  see README TLS section.)
 - **Phase 4: fleet / cloud portal — first slice landed.** Repo split:
   `web-node/` holds everything from Phases 1-3 (moved as a group, same
   flat relative layout, zero code changes — `setup.sh` source paths
@@ -272,24 +268,34 @@ this box can't get additional ports opened.
   `mediamtx` / `nexvue-status` / `nexvue-metrics` /
   `nexvue-decklink-configure` / `nexvue-encode@0..(MAX_CHANNELS-1)` (default
   8; Duo: `MAX_CHANNELS=4` disables `@4..7`). Empty ports rely on auto-park;
-  Services Enable/Disable still parks/unparks by hand.
+  **auto-unpark** (`nexvue-encode-auto-unpark.timer`) starts a disabled or
+  stopped DeckLink slot on unlocked→locked (or an auto-parked marker + lock).
+  Manual Disable/Stop of a still-locked feed is left down. `AUTO_UNPARK=false`
+  or `AUTO_UNPARK_LOCK_POLLS=0` disables. Services Enable/Disable still works
+  by hand.
 - Glass-to-glass latency still unmeasured with a burnt-in clock (datacenter
   deployment — no co-located source monitor). RTT-based estimate recorded in
   README; re-measure on bench when possible. Duo 2 connector-direction notes
   in README remain useful reference if a Duo is ever reinstalled.
 - `setup.sh` ensures `/etc/nexvue/tls/{fullchain,privkey}.pem` (creates a
   self-signed pair if missing; never overwrites existing), points Apache
-  HTTPS + MediaMTX WHEP/API at those paths (`root:ssl-cert`, key 640).
-  Apache HTTP `:80` stays open redirect-only (`000-default` + `Listen 80`
-  ensured, not disabled — `nexvue-apache-http-on.py` is the idempotent
-  ensure-step, replacing the old `nexvue-apache-http-off.py`); UI content
-  itself is HTTPS-only, `nexvue_web_https_redirect_target()` 301s the rest.
-  `setup.sh` `enable --now`s `apache2` and `ssh`, allows OpenSSH/80/443/8889/8189
-  in ufw, and enables ufw. Self-signed still needs a one-time
-  per-browser click-through on `:8889` (trust on `:443` does not extend to
-  other ports). Replace the PEMs with a real cert before wider users. Player
-  stats/dots use same-origin proxies (`nexvue-mediamtx-api.php`,
-  `nexvue-status.php`); `:9997`/`:9998` are loopback-only.
+  HTTPS + MediaMTX WHEP/API at those paths (`root:ssl-cert`, key 640),
+  and installs pinned `lego` v5.3.1 plus `nexvue-tls-renew.timer`.
+  Settings → Certificates (admin Issue/Upload; operators can read status)
+  either runs `lego run --tls` (TLS-ALPN-01 on `:443` only — these
+  stations cannot use port 80; Apache is stopped for the challenge and
+  always started again) or installs an uploaded PEM pair via
+  `nexvue-ops-tls.sh`. Do not add `apache2` to the general ops restart
+  allowlist. Apache HTTP `:80` stays open redirect-only (`000-default` +
+  `Listen 80` ensured, not disabled — `nexvue-apache-http-on.py` is the
+  idempotent ensure-step, replacing the old `nexvue-apache-http-off.py`);
+  UI content itself is HTTPS-only, `nexvue_web_https_redirect_target()`
+  301s the rest. `setup.sh` `enable --now`s `apache2` and `ssh`, allows
+  OpenSSH/80/443/8889/8189 in ufw, and enables ufw. Self-signed still
+  needs a one-time per-browser click-through on `:8889` (trust on `:443`
+  does not extend to other ports). Player stats/dots use same-origin
+  proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`); `:9997`/`:9998`
+  are loopback-only.
 - `decklink-status.cpp`'s active-detection probe takes ~0.7s per IDLE input
   it has to open and test; status daemon poll interval was raised to 5s
   (from 2s) to accommodate, and `STALE_AFTER_S` is set above the helper
@@ -332,16 +338,23 @@ this box can't get additional ports opened.
   Top nav: Player / Multiview / Metrics / Services / Settings / Users.
   Login at `/login` (session cookie); share links use `/player?t=` /
   `/multiview?t=` or `/s/<token>` (Multiview shares ≤4 channels, auto-tune
-  panes; Fullscreen near-frameless; admin edit name/channels/expiry; delete
+  panes; Fill window + Fullscreen near-frameless; Player PiP; admin edit name/channels/expiry; delete
   after revoke/expiry; purge 7d post-expiry). Roles: admin
-  (Users+Services+Settings+Metrics+all shares), operator (Settings+Metrics),
+  (Users+Services+Settings including Public reachability + Certificates issue/upload+Metrics+all shares), operator (Settings including certificate status+Metrics),
   sharer / UI **Viewer+Share** (watch + own share links via Player/Multiview
   Share), viewer (watch). Per-user channel ACL on Users (`users.channels`;
   null = all). MediaMTX JWT via local JWKS; encoders use `NEXVUE_PUBLISH_JWT`.
+  Player/Multiview **▢ Fill window** (`html.theater`,
+  `localStorage.nexvue-theater`) hides nav/bars so video fills the tab;
+  Player **⧉ PiP** is `requestPictureInPicture` (audio stays on the tab).
   Player/Multiview **CC** uses `nexvue-captions.js` + SSE (not WHEP text
   tracks). Player/Multiview **VU / audio program** use `nexvue-vu.js`
   (Web Audio on the WHEP MediaStream). Top-bar **VU** toggle (like CC)
   shows/hides the meter overlay (`localStorage.nexvue-vu-on`, default off).
+  **Safe** (`nexvue-safe.js`, `nexvue-safe-on`) is HD title/action + optional
+  center target and 4:3 cut. **Scope** (`nexvue-scopes.js`, `nexvue-scopes-on`)
+  is a decoded-frame waveform (IRE) + Rec.709 vectorscope (Multiview: focused
+  pane only). Both are browser-local and off by default.
   First-visit audio defaults: volume 20%, muted. Encode always opens DeckLink
   8ch and publishes 8ch positioned Opus
   (default `AUDIO_BITRATE_BPS=384000`) tee'd to HI+LO. No 16ch path.
@@ -363,7 +376,14 @@ this box can't get additional ports opened.
  to `DEINT_FIELDS` for 1080i→p quality. Field labels show a ~2s hover/focus tip
  (`#field-tip`) with purpose, recommended range, and blank semantics —
   same delay pattern as Player `#stat-tip`. Requires admin/operator session
-  (not share links). Services is admin-only.
+  (not share links). Services is admin-only. Settings **Public reachability**
+  (admin only — hidden from operators) writes `NEXVUE_PUBLIC_HOSTNAME` /
+  `NEXVUE_PUBLIC_IP` in `/etc/nexvue/nexvue.env` and patches MediaMTX
+  `webrtcAdditionalHosts` (drops deprecated `webrtcICEHostNAT1To1IPs`) via
+  `nexvue-ops-network-write.sh`, then restarts `mediamtx` only. Blank = LAN-only.
+  Settings **Certificates** (admin Issue/Upload; operators see status) uses
+  `nexvue-ops-tls.sh` + pinned `lego` TLS-ALPN-01 on `:443` (Apache stopped
+  only for that window) or a validated PEM upload onto `/etc/nexvue/tls/`.
  Services shows systemd enable state (`nexvue-ops-status.sh` prints
  `<is-active> <is-enabled>`) plus Enable/Disable (`set_enabled`, --now) and
  Start/Stop (`set_running`, runtime-only) toggles for `nexvue-encode@0-7`
@@ -375,7 +395,8 @@ this box can't get additional ports opened.
  zip…** (`support_bundle`) builds a redacted journals+config+metrics+state
  zip via `nexvue-ops-support-bundle.sh` → `nexvue-support-bundle.py`
  (hours 1|6|12|24|48|72; output `/var/lib/nexvue/support`, 24h retention).
- **Update from repo…** (`update_status` / `update_repo`) runs
+ **Update from repo…** (`update_status` / `update_repo`) is admin-only
+ (same gate as Services; operators cannot poll or apply). Runs
  `nexvue-ops-update.sh`: fetch + hard-reset to `origin/$NEXVUE_UPDATE_BRANCH`
  (default `main`) using `/etc/nexvue/repo.path`, then `setup.sh`. Status line
  is `vX.Y.Z · up to date` or `vX.Y.Z → vA.B.C · update available` (no SHA /

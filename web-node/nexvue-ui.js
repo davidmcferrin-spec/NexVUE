@@ -7,6 +7,9 @@
  *
  * localStorage key: nexvue-theme ("dark" | "light"); default dark.
  * Dispatches window event "nexvue-theme-changed" with detail: { theme }.
+ * Theater (fill-window) lives on pages marked data-theater-page (Player /
+ * Multiview). Key: nexvue-theater ("1" | unset); applied before first paint
+ * so wall monitors do not flash chrome. Dispatches "nexvue-theater-changed".
  * Version comes from nexvue-version.php (VERSION file + optional git stamp).
  */
 (function (global) {
@@ -16,6 +19,7 @@
   var LOGO_SRC = "/api/logo";
   var VERSION_URL = "/api/version";
   var ROTATE_KEY = "nexvue-video-rotate";
+  var THEATER_KEY = "nexvue-theater";
 
   function normalizeRotate(deg) {
     var n = Number(deg);
@@ -85,6 +89,157 @@
     video.style.maxHeight = "";
     video.style.objectFit = "";
     video.style.transform = parts.length ? parts.join(" ") : "";
+  }
+
+  function pageWantsTheater() {
+    var root = global.document && global.document.documentElement;
+    return !!(root && root.hasAttribute("data-theater-page"));
+  }
+
+  function getTheaterPref() {
+    try {
+      return global.localStorage.getItem(THEATER_KEY) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setTheaterPref(on) {
+    on = !!on;
+    try {
+      if (on) global.localStorage.setItem(THEATER_KEY, "1");
+      else global.localStorage.removeItem(THEATER_KEY);
+    } catch (e) {
+      /* private mode */
+    }
+    return on;
+  }
+
+  function applyTheater(on) {
+    on = !!on;
+    var root = global.document && global.document.documentElement;
+    if (root) {
+      if (on) root.classList.add("theater");
+      else root.classList.remove("theater");
+    }
+    return on;
+  }
+
+  function isTheater() {
+    var root = global.document && global.document.documentElement;
+    return !!(root && root.classList.contains("theater"));
+  }
+
+  function syncTheaterButton() {
+    var btn = global.document && global.document.getElementById("theater");
+    if (!btn) return;
+    var on = isTheater();
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  function setTheater(on) {
+    on = applyTheater(!!on);
+    setTheaterPref(on);
+    syncTheaterButton();
+    try {
+      global.dispatchEvent(
+        new CustomEvent("nexvue-theater-changed", { detail: { theater: on } })
+      );
+    } catch (e) {
+      /* ignore */
+    }
+    return on;
+  }
+
+  function toggleTheater() {
+    return setTheater(!isTheater());
+  }
+
+  function fullscreenElement() {
+    var doc = global.document;
+    if (!doc) return null;
+    return doc.fullscreenElement || doc.webkitFullscreenElement || null;
+  }
+
+  function wireTheaterControls() {
+    if (!pageWantsTheater()) return;
+    applyTheater(getTheaterPref());
+    syncTheaterButton();
+    var btn = global.document.getElementById("theater");
+    if (btn) {
+      btn.addEventListener("click", function () {
+        toggleTheater();
+      });
+    }
+    var exitBtn = global.document.getElementById("theater-exit");
+    if (exitBtn) {
+      exitBtn.addEventListener("click", function () {
+        setTheater(false);
+      });
+    }
+    global.document.addEventListener("keydown", function (ev) {
+      if (ev.key !== "Escape") return;
+      if (fullscreenElement()) return;
+      if (!isTheater()) return;
+      ev.preventDefault();
+      setTheater(false);
+    });
+  }
+
+  function pipSupported() {
+    try {
+      return !!(global.document && global.document.pictureInPictureEnabled);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function isPipActive(video) {
+    return !!(
+      global.document &&
+      video &&
+      global.document.pictureInPictureElement === video
+    );
+  }
+
+  function requestPip(video) {
+    if (!video || !pipSupported() || !video.srcObject) {
+      return Promise.resolve(false);
+    }
+    if (typeof video.requestPictureInPicture !== "function") {
+      return Promise.resolve(false);
+    }
+    return video
+      .requestPictureInPicture()
+      .then(function () {
+        return true;
+      })
+      .catch(function () {
+        return false;
+      });
+  }
+
+  function exitPip() {
+    if (!global.document || !global.document.pictureInPictureElement) {
+      return Promise.resolve(false);
+    }
+    if (typeof global.document.exitPictureInPicture !== "function") {
+      return Promise.resolve(false);
+    }
+    return global.document
+      .exitPictureInPicture()
+      .then(function () {
+        return false;
+      })
+      .catch(function () {
+        return false;
+      });
+  }
+
+  function togglePip(video) {
+    if (isPipActive(video)) return exitPip();
+    return requestPip(video);
   }
 
   function ensureVersionCss() {
@@ -241,6 +396,9 @@
 
   // Apply before paint (script is in <head>).
   applyTheme(readStoredTheme());
+  if (pageWantsTheater()) {
+    applyTheater(getTheaterPref());
+  }
 
   function ensureVersionEl() {
     var el = global.document.getElementById("nav-version");
@@ -308,6 +466,7 @@
       wireLogo(logos[i]);
     }
     loadVersion();
+    wireTheaterControls();
   });
 
   // Canonical name matches NexVueAuth / NexVueVu / NexVueCaptions. Keep
@@ -321,8 +480,20 @@
     getRotatePref: getRotatePref,
     setRotatePref: setRotatePref,
     applyVideoOrient: applyVideoOrient,
+    getTheaterPref: getTheaterPref,
+    setTheaterPref: setTheaterPref,
+    applyTheater: applyTheater,
+    isTheater: isTheater,
+    setTheater: setTheater,
+    toggleTheater: toggleTheater,
+    pipSupported: pipSupported,
+    isPipActive: isPipActive,
+    requestPip: requestPip,
+    exitPip: exitPip,
+    togglePip: togglePip,
     STORAGE_KEY: STORAGE_KEY,
     ROTATE_KEY: ROTATE_KEY,
+    THEATER_KEY: THEATER_KEY,
     LOGO_SRC: LOGO_SRC,
   };
   global.NexVueUI = api;

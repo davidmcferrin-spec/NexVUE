@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theater-page>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,6 +12,7 @@
   Share links (?t=) cap at 4 channels and auto-tune panes on open.
   Fullscreen (on <html>) hides chrome (nav/bar/pane selectors/borders) for a
   frameless wall; collapsed stats drawer hides unless already open.
+  Fill window (html.theater) is the same chrome hide inside the tab.
   Reuses the same WHEP + latency-hint pattern as index.html.
 -->
 <script src="/assets/nexvue-ui.js"></script>
@@ -221,12 +222,15 @@
 
   /* Near-frameless wall mode: hide chrome so dual/quad fill the display.
      Fullscreen is requested on <html> (documentElement), so match html:fullscreen
-     — body:fullscreen never fires and left the wall chrome visible. */
+     — body:fullscreen never fires and left the wall chrome visible.
+     html.theater is the same hide/fill inside the browser window (not OS FS). */
+  html.theater, html.theater body,
   html:fullscreen, html:-webkit-full-screen,
   body:fullscreen, body:-webkit-full-screen {
     width: 100%; height: 100%;
     background: #000;
   }
+  html.theater body,
   html:fullscreen body, html:-webkit-full-screen body,
   body:fullscreen, body:-webkit-full-screen {
     margin: 0; padding: 0;
@@ -234,12 +238,15 @@
     background: #000;
     overflow: hidden;
   }
+  html.theater .stage,
   html:fullscreen .stage, html:-webkit-full-screen .stage,
   body:fullscreen .stage, body:-webkit-full-screen .stage {
     flex: 1; min-height: 0; width: 100%; height: 100%;
   }
+  html.theater #grid,
   html:fullscreen #grid, html:-webkit-full-screen #grid,
   body:fullscreen #grid, body:-webkit-full-screen #grid { gap: 0; }
+  html.theater .topnav, html.theater .bar, html.theater .pane-bar, html.theater .audio-badge,
   html:fullscreen .topnav, html:-webkit-full-screen .topnav,
   html:fullscreen .bar, html:-webkit-full-screen .bar,
   html:fullscreen .pane-bar, html:-webkit-full-screen .pane-bar,
@@ -249,18 +256,31 @@
   body:fullscreen .pane-bar, body:-webkit-full-screen .pane-bar,
   body:fullscreen .audio-badge, body:-webkit-full-screen .audio-badge { display: none; }
   /* Collapsed metrics drawer off; leave it if the operator already opened it. */
+  html.theater .stats-drawer:not(.open),
   html:fullscreen .stats-drawer:not(.open), html:-webkit-full-screen .stats-drawer:not(.open),
   body:fullscreen .stats-drawer:not(.open), body:-webkit-full-screen .stats-drawer:not(.open) {
     display: none;
   }
+  html.theater .pane,
   html:fullscreen .pane, html:-webkit-full-screen .pane,
   body:fullscreen .pane, body:-webkit-full-screen .pane {
     border: none; border-radius: 0;
   }
+  html.theater .pane.audio-active,
   html:fullscreen .pane.audio-active, html:-webkit-full-screen .pane.audio-active,
   body:fullscreen .pane.audio-active, body:-webkit-full-screen .pane.audio-active {
     outline: 2px solid var(--acc); outline-offset: -2px;
   }
+  .theater-exit {
+    display: none; position: fixed; top: 12px; right: 12px; z-index: 70;
+    background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 6px 10px; font: inherit; font-size: 12px;
+    cursor: pointer; opacity: .35;
+  }
+  html.theater .theater-exit { display: block; }
+  html.theater .theater-exit:hover,
+  html.theater .theater-exit:focus-visible { opacity: 1; border-color: var(--acc); color: var(--acc); }
+  html:fullscreen .theater-exit, html:-webkit-full-screen .theater-exit { display: none !important; }
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
     background: var(--backdrop); align-items: center; justify-content: center; padding: 16px;
@@ -307,12 +327,15 @@
   <button id="q-lo" class="q active">LO</button>
   <button id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
   <button id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
+  <button id="safe" class="tgl" title="Title / action safe + center target (this browser only)">Safe</button>
+  <button id="scope" class="tgl" title="Waveform + vectorscope on the focused pane (this browser only)">Scope</button>
   <button id="mute" class="tgl" title="Mute focused pane (this browser only)">Mute</button>
   <span class="vol-wrap" title="Volume (this browser only — Web Audio)">
     <span class="qlabel">vol</span>
     <input type="range" id="volume" min="0" max="100" step="1" value="20" aria-label="Volume">
     <span id="vol-pct">100%</span>
   </span>
+  <button id="theater" class="tgl" title="Fill the browser window (hides chrome; not OS fullscreen)" aria-pressed="false">▢ Fill window</button>
   <button id="fs" title="Fullscreen multiview (hides chrome for a frameless wall)">⛶ Fullscreen</button>
   <span id="state">idle</span>
 </div>
@@ -322,6 +345,8 @@
     <!-- panes filled by JS -->
   </div>
 </div>
+
+<button type="button" id="theater-exit" class="theater-exit" title="Exit fill window (Esc)">✕ Exit fill</button>
 
 <div id="stats-drawer" class="stats-drawer">
   <button type="button" id="stats-toggle" aria-expanded="false" aria-controls="stats">
@@ -364,6 +389,8 @@
 <script src="/assets/nexvue-qr.js"></script>
 <script src="/assets/nexvue-captions.js"></script>
 <script src="/assets/nexvue-vu.js"></script>
+<script src="/assets/nexvue-safe.js"></script>
+<script src="/assets/nexvue-scopes.js"></script>
 <script src="/assets/nexvue-auth-gate.js"></script>
 <script src="/assets/nexvue-share-ui.js"></script>
 <script>
@@ -417,8 +444,14 @@
   const volPct = $("vol-pct");
   let vuOn = NexVueVu.getVisiblePref();
   let userMuted = NexVueVu.getMutedPref();
+  const safeBtn = $("safe");
+  const scopeBtn = $("scope");
+  let safeOn = window.NexVueSafe ? NexVueSafe.getOnPref() : false;
+  let scopeOn = window.NexVueScopes ? NexVueScopes.getOnPref() : false;
   ccBtn.classList.toggle("active", captionsOn);
   vuBtn.classList.toggle("active", vuOn);
+  safeBtn.classList.toggle("active", safeOn);
+  scopeBtn.classList.toggle("active", scopeOn);
   function paintAllCaptions() {
     for (const p of panes) {
       if (!p || !p.ccEl) continue;
@@ -429,6 +462,17 @@
     for (const p of panes) {
       if (p && p.vu) p.vu.setVisible(vuOn);
     }
+  }
+  function applySafeVisible() {
+    for (const p of panes) {
+      if (p && p.safe) p.safe.setVisible(safeOn);
+    }
+  }
+  function applyScopeVisible() {
+    const focus = audioPane >= 0 ? audioPane : panes.findIndex((p) => p && p.base);
+    panes.forEach((p, i) => {
+      if (p && p.scopes) p.scopes.setVisible(scopeOn && i === focus && !!p.base);
+    });
   }
   function applyVolumeAll() {
     const v = NexVueVu.getVolumePref();
@@ -462,6 +506,18 @@
     NexVueVu.setVisiblePref(vuOn);
     vuBtn.classList.toggle("active", vuOn);
     applyVuVisible();
+  });
+  safeBtn.addEventListener("click", () => {
+    safeOn = !safeOn;
+    if (window.NexVueSafe) NexVueSafe.setOnPref(safeOn);
+    safeBtn.classList.toggle("active", safeOn);
+    applySafeVisible();
+  });
+  scopeBtn.addEventListener("click", () => {
+    scopeOn = !scopeOn;
+    if (window.NexVueScopes) NexVueScopes.setOnPref(scopeOn);
+    scopeBtn.classList.toggle("active", scopeOn);
+    applyScopeVisible();
   });
   muteBtn.addEventListener("click", () => {
     userMuted = !userMuted;
@@ -593,6 +649,8 @@
       index, el, select, statusEl, video, empty, ccEl, kickedEl, kickedReasonEl,
       captionClient: null,
       vu: null,
+      safe: null,
+      scopes: null,
       lastCue: { text: "", clear: true, seq: 0, service: "CC1" },
       base: null, path: null, pc: null, sessionId: null,
       intentionalClose: false,
@@ -610,6 +668,12 @@
       visible: vuOn,
       volume: NexVueVu.getVolumePref(),
     });
+    pane.safe = window.NexVueSafe
+      ? NexVueSafe.attach({ container: videoBox, video, visible: safeOn })
+      : null;
+    pane.scopes = window.NexVueScopes
+      ? NexVueScopes.attach({ container: videoBox, video, visible: false })
+      : null;
 
     select.addEventListener("change", async () => {
       const val = select.value;
@@ -621,6 +685,7 @@
         setPaneStatus(pane, "idle");
         empty.classList.remove("hidden");
         if (audioPane === index) selectAudio(-1);
+        else applyScopeVisible();
         releaseWakeLockIfIdle();
         return;
       }
@@ -636,6 +701,7 @@
           pane.vu.setEmbeds(audioEmbedsByPath[val] || [1, 2, 3, 4, 5, 6, 7, 8]);
         }
       }).catch(() => {});
+      applyScopeVisible();
     });
     select.addEventListener("click", e => e.stopPropagation());
 
@@ -890,6 +956,7 @@
       p.video.muted = true;
     });
     applyListenAll();
+    applyScopeVisible();
     if (index >= 0) NexVueVu.resume();
     resetRtcBaseline();
     updateFocusLabel();

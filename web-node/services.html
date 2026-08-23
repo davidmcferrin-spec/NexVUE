@@ -6,7 +6,7 @@
 <title>NexVUE — Services</title>
 <!--
   Ops: systemd unit status + poll-based journal viewer (near tail -f).
-  Data: nexvue-ops.php via allowlisted sudo wrappers. Phase 1 LAN-trust.
+  Data: nexvue-ops.php via allowlisted sudo wrappers. Admin session only.
 -->
 <script src="/assets/nexvue-ui.js"></script>
 <style>
@@ -158,7 +158,7 @@
   <a href="/player">Player</a>
   <a href="/multiview">Multiview</a>
   <a href="/metrics" data-auth-role="admin,operator">Metrics</a>
-  <a href="/services" class="active">Services</a>
+  <a href="/services" class="active" data-auth-role="admin">Services</a>
   <a href="/settings" data-auth-role="admin,operator">Settings</a>
   <a href="/users" data-auth-role="admin">Users</a>
   <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false" title="Switch to light mode">Light</button>
@@ -179,8 +179,8 @@
       <option value="72">Last 72 hours</option>
     </select>
     <button type="button" class="primary" id="btn-support-bundle" title="Download redacted journals + config + runtime state as a zip">Download zip…</button>
-    <span class="update-meta" id="update-meta" title="Git update status">—</span>
-    <button type="button" id="btn-update-repo" title="Fetch origin, hard-reset the clone, and re-run setup.sh">Update from repo…</button>
+    <span class="update-meta" id="update-meta" data-auth-role="admin" title="Git update status">—</span>
+    <button type="button" id="btn-update-repo" data-auth-role="admin" title="Fetch origin, hard-reset the clone, and re-run setup.sh">Update from repo…</button>
   </div>
 </div>
 
@@ -222,7 +222,8 @@
 <script>
 "use strict";
 (async () => {
-  await NexVueAuth.requirePage({ roles: ["admin"] });
+  const authUser = await NexVueAuth.requirePage({ roles: ["admin"] });
+  const isAdmin = !!(authUser && authUser.role === "admin");
   const listEl = document.getElementById("unit-list");
   const logEl = document.getElementById("log");
   const statusEl = document.getElementById("status");
@@ -526,6 +527,11 @@
   const updateMeta = document.getElementById("update-meta");
   let lastUpdateStatus = null;
 
+  if (!isAdmin) {
+    if (updateBtn) updateBtn.hidden = true;
+    if (updateMeta) updateMeta.hidden = true;
+  }
+
   function paintUpdateMeta(data) {
     lastUpdateStatus = data;
     if (!updateMeta) return;
@@ -590,7 +596,7 @@
   }
 
   async function refreshUpdateStatus() {
-    if (!updateMeta) return;
+    if (!isAdmin || !updateMeta) return;
     updateMeta.textContent = "checking…";
     try {
       const data = await api("update_status", {});
@@ -600,7 +606,7 @@
     }
   }
 
-  if (updateBtn) {
+  if (isAdmin && updateBtn) {
     updateBtn.addEventListener("click", async () => {
       try {
         await refreshUpdateStatus();

@@ -60,6 +60,20 @@ class TestWebRouterFiles(unittest.TestCase):
         self.assertIn("NexVueAuth.whepUrl(path, jwt)", multi)
         self.assertNotIn("location.protocol", multi)
 
+    def test_update_from_repo_is_admin_only(self) -> None:
+        ops = (ROOT / "web-node" / "nexvue-ops.php").read_text(encoding="utf-8")
+        start = ops.index("$adminOnly = [")
+        block = ops[start : ops.index("];", start)]
+        self.assertIn("'update_status'", block)
+        self.assertIn("'update_repo'", block)
+        router = (ROOT / "web-node" / "nexvue-web-router.php").read_text(encoding="utf-8")
+        self.assertIn("'/services' => ['file' => 'services.html', 'roles' => ['admin']", router)
+        services = (ROOT / "web-node" / "services.html").read_text(encoding="utf-8")
+        self.assertIn('requirePage({ roles: ["admin"] })', services)
+        self.assertRegex(services, r'id="btn-update-repo"[^>]*data-auth-role="admin"')
+        self.assertIn("if (isAdmin && updateBtn)", services)
+        self.assertIn("if (!isAdmin || !updateMeta)", services)
+
     def test_login_page_has_non_blocking_portal_nudge(self) -> None:
         # Phase 4 — local sign-in must never be hidden/blocked by the nudge;
         # it only becomes visible via JS after a successful portal_status
@@ -78,12 +92,14 @@ class TestWebRouterPhpMaps(unittest.TestCase):
         code = f"""
 require '{ROUTER.as_posix()}';
 require '{LIB.as_posix()}';
+$pages = nexvue_web_pages();
 echo json_encode([
   'legacy_player' => nexvue_web_legacy_page_redirect('/index.html'),
   'legacy_settings' => nexvue_web_legacy_page_redirect('/channels.html'),
   'api_ops' => nexvue_web_legacy_api_path('/nexvue-ops.php'),
-  'pages' => array_keys(nexvue_web_pages()),
+  'pages' => array_keys($pages),
   'apis' => array_keys(nexvue_web_apis()),
+  'services_roles' => $pages['/services']['roles'] ?? null,
   'share_path' => auth_share_page_path('multiview'),
   'share_url' => auth_share_build_url('abc', 'player', 'https', 'edge.example'),
 ]);
@@ -96,6 +112,7 @@ echo json_encode([
         self.assertEqual(data["api_ops"], "/api/ops")
         self.assertIn("/login", data["pages"])
         self.assertIn("/api/ops", data["apis"])
+        self.assertEqual(data["services_roles"], ["admin"])
         self.assertEqual(data["share_path"], "multiview")
         self.assertEqual(data["share_url"], "https://edge.example/player?t=abc")
 

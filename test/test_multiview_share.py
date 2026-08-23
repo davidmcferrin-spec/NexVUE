@@ -18,7 +18,10 @@ class TestMultiviewShare(unittest.TestCase):
         self.assertIn("autoTuneFromShare", html)
         self.assertIn('authUser.auth !== "share"', html)
         self.assertIn("body:fullscreen .pane-bar", html)
+        self.assertIn("html.theater .pane-bar", html)
         self.assertIn("Near-frameless wall mode", html)
+        self.assertIn('data-theater-page', html)
+        self.assertIn('id="theater"', html)
 
     def test_share_ui_multiview_cap(self) -> None:
         js = (ROOT / "web-node" / "nexvue-share-ui.js").read_text(encoding="utf-8")

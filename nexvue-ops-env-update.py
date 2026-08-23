@@ -57,6 +57,7 @@ EDITABLE_KEYS = frozenset({
     "SIGNAL_ACQUIRE_DEBOUNCE_S",
     "DECKLINK_RETRY_S",
     "AUTO_PARK_UNLOCK_CYCLES",
+    "AUTO_UNPARK",
 })
 
 READONLY_KEYS = frozenset({"DEVICE_NUMBER", "CHANNEL_PATH", "RTSP_URL"})
@@ -213,7 +214,7 @@ def sanitize_value(key: str, value: str) -> str:
         return _require_int(key, value, lo=100, hi=50000)
     if key == "GOP_FRAMES":
         return _require_int(key, value, lo=1, hi=300)
-    if key in ("ENABLE_AUDIO", "LO_ENABLE"):
+    if key in ("ENABLE_AUDIO", "LO_ENABLE", "AUTO_UNPARK"):
         if value == "":
             return value
         low = value.lower()

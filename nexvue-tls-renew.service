@@ -1,0 +1,14 @@
+# /etc/systemd/system/nexvue-tls-renew.service
+#
+# Periodic renew check. No-ops unless Settings has saved a Let's Encrypt
+# domain/email and the installed cert is from lego and within 30 days of
+# expiry. When due, starts the same issue oneshot (brief Apache stop).
+
+[Unit]
+Description=NexVUE Let's Encrypt renew check
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nexvue-ops-tls.sh renew
+Nice=10
