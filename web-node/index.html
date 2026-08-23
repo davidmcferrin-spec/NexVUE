@@ -470,6 +470,7 @@
 
   // ---- Session / quality state -------------------------------------------------
   let pc = null, statsTimer = null, apiTimer = null;
+  let sessionGen = 0;           // invalidates in-flight openSession (JWT/TURN)
   let currentBase = null;       // e.g. "ch3" (channel identity)
   let currentPath = null;       // e.g. "ch3" or "ch3lo" (stream being watched)
   let currentSessionId = null;  // MediaMTX WebRTC UUID from WHEP ID header
@@ -770,8 +771,10 @@
   }
 
   async function openSession(path) {
+    const gen = ++sessionGen;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     closeSession();
+    if (gen !== sessionGen) return;
     intentionalDisconnect = false;   // a new session is starting; arm auto-reconnect
     hideKickedOverlay();
     currentPath = path;
@@ -782,6 +785,7 @@
     try {
       sess = await NexVueAuth.whepJwt(path);
     } catch (err) {
+      if (gen !== sessionGen) return;
       const raw = err && err.message ? err.message : String(err);
       const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
       setState(`error: ${msg}`, "bad");
@@ -790,11 +794,14 @@
       }
       return;
     }
+    if (gen !== sessionGen) return;
     const iceServers = NexVueAuth.iceServersFrom(sess);
-    pc = new RTCPeerConnection(iceServers.length ? { iceServers } : {});
-    pc.addTransceiver("video", { direction: "recvonly" });
-    pc.addTransceiver("audio", { direction: "recvonly" });
-    pc.ontrack = ev => {
+    const thisPc = new RTCPeerConnection(iceServers.length ? { iceServers } : {});
+    pc = thisPc;
+    thisPc.addTransceiver("video", { direction: "recvonly" });
+    thisPc.addTransceiver("audio", { direction: "recvonly" });
+    thisPc.ontrack = ev => {
+      if (gen !== sessionGen || pc !== thisPc) return;
       // Minimal receive buffering — the biggest LAN latency knob. Both hints
       // set because browser support differs.
       try { ev.receiver.playoutDelayHint = 0; } catch (e) { /* unsupported */ }
@@ -811,34 +818,42 @@
         paintMuteBtn();
       }
     };
-    pc.onconnectionstatechange = () => {
-      if (!pc) return;
-      if (pc.connectionState === "connected") {
+    thisPc.onconnectionstatechange = () => {
+      if (gen !== sessionGen || pc !== thisPc) return;
+      if (thisPc.connectionState === "connected") {
         setState(`connected ${path}`, "ok");
         reconnectAttempt = 0;
         acquireWakeLock();
         restoreFullscreenIfNeeded();
         restorePipIfNeeded();
-      } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
-        setState(pc.connectionState, "bad");
+      } else if (["failed", "disconnected", "closed"].includes(thisPc.connectionState)) {
+        setState(thisPc.connectionState, "bad");
         // Only auto-recover from an UNEXPECTED drop — not a user-initiated
         // disconnect/channel-switch/quality-switch, which already have their
         // own deliberate teardown+reopen paths. Admin kicks are detected via
         // kick_check before scheduleReconnect runs.
         if (!intentionalDisconnect && currentBase) {
-          maybeReconnect(currentBase, rendition, pc.connectionState);
+          maybeReconnect(currentBase, rendition, thisPc.connectionState);
         }
       }
     };
 
     try {
-      const offer = await pc.createOffer();
+      const offer = await thisPc.createOffer();
       // Chrome won't advertise multiopus; MediaMTX rejects >2ch Opus without it.
       const prepared = await NexVueVu.prepareWhepOffer(offer);
-      await pc.setLocalDescription({ type: "offer", sdp: prepared.sdp });
-      await NexVueAuth.waitIceGathering(pc, iceServers.length ? 12000 : 2000);
+      await thisPc.setLocalDescription({ type: "offer", sdp: prepared.sdp });
+      await NexVueAuth.waitIceGathering(thisPc, iceServers.length ? 12000 : 2000);
+      if (gen !== sessionGen || pc !== thisPc) {
+        try { thisPc.close(); } catch (e) { /* ignore */ }
+        return;
+      }
 
-      const exchanged = await NexVueAuth.whepExchange(sess, path, pc.localDescription.sdp);
+      const exchanged = await NexVueAuth.whepExchange(sess, path, thisPc.localDescription.sdp);
+      if (gen !== sessionGen || pc !== thisPc) {
+        try { thisPc.close(); } catch (e) { /* ignore */ }
+        return;
+      }
       if (exchanged.status < 200 || exchanged.status >= 300) {
         let detail = "";
         try {
@@ -856,12 +871,20 @@
         );
       }
       currentSessionId = exchanged.res ? parseWhepSessionId(exchanged.res) : null;
-      await pc.setRemoteDescription({ type: "answer", sdp: exchanged.sdp });
+      await thisPc.setRemoteDescription({ type: "answer", sdp: exchanged.sdp });
+      if (gen !== sessionGen || pc !== thisPc) {
+        try { thisPc.close(); } catch (e) { /* ignore */ }
+        return;
+      }
 
       statsTimer = setInterval(pollRtcStats, 1000);
       apiTimer = setInterval(pollApiStats, 2000);
       pollApiStats();
     } catch (err) {
+      if (gen !== sessionGen) {
+        try { thisPc.close(); } catch (e) { /* ignore */ }
+        return;
+      }
       const raw = err && err.message ? err.message : String(err);
       const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
       const sid = currentSessionId;

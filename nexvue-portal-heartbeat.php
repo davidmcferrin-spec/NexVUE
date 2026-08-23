@@ -97,6 +97,30 @@ function heartbeat_collect_channels(): array {
     return $out;
 }
 
+/**
+ * Attach TURN credentials only when the result is definitive.
+ * Omit ice_servers on a transient mint failure so the portal keeps its
+ * last good cache instead of treating [] as "TURN off".
+ *
+ * @param array<string,mixed> $payload
+ * @return array<string,mixed>
+ */
+function heartbeat_apply_turn(array $payload): array {
+    try {
+        $turn = auth_turn_ice_servers_for_viewer();
+        if (empty($turn['enabled'])) {
+            $payload['ice_servers'] = [];
+            $payload['ice_servers_expires_at'] = '';
+        } elseif (!empty($turn['ice_servers'])) {
+            $payload['ice_servers'] = $turn['ice_servers'];
+            $payload['ice_servers_expires_at'] = (string)($turn['expires_at'] ?? '');
+        }
+    } catch (Throwable $e) {
+        // omit — catalog sync must still run; portal keeps cached relays
+    }
+    return $payload;
+}
+
 function main(): int {
     if (!auth_portal_adopted()) {
         exit(0);
@@ -111,21 +135,12 @@ function main(): int {
     if (is_readable($vp)) {
         $edgeVersion = trim((string)file_get_contents($vp));
     }
-    $payload = [
+    $payload = heartbeat_apply_turn([
         'status' => 'active',
         'edge_version' => $edgeVersion,
         'channels' => heartbeat_collect_channels(),
-        'ice_servers' => [],
-        'ice_servers_expires_at' => '',
         'sfu' => ['mode' => 'off', 'play' => []],
-    ];
-    try {
-        $turn = auth_turn_ice_servers_for_viewer();
-        $payload['ice_servers'] = $turn['ice_servers'];
-        $payload['ice_servers_expires_at'] = $turn['expires_at'];
-    } catch (Throwable $e) {
-        // TURN mint is best-effort — catalog sync must still run.
-    }
+    ]);
     try {
         $payload['sfu'] = auth_sfu_heartbeat_payload();
     } catch (Throwable $e) {

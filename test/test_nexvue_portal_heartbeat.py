@@ -162,6 +162,30 @@ class TestPortalHeartbeat(unittest.TestCase):
         self.assertIn("ice_servers_expires_at", _StubHandler.received[0])
         self.assertEqual(_StubHandler.received[0]["sfu"], {"mode": "off", "play": {}})
 
+    def test_turn_off_sends_empty_ice_servers(self) -> None:
+        data = self._php_include_only(
+            "auth_migrate(); echo json_encode(heartbeat_apply_turn([]));"
+        )
+        self.assertEqual(data.get("ice_servers"), [])
+        self.assertEqual(data.get("ice_servers_expires_at"), "")
+
+    def test_turn_mint_fail_omits_ice_servers(self) -> None:
+        data = self._php_include_only(
+            """
+auth_migrate();
+auth_turn_put([
+  'enabled' => true,
+  'key_id' => 'turnkey12-fail-0000000000000000',
+  'api_token' => 'cf-token-secret-value-ok',
+]);
+echo json_encode(heartbeat_apply_turn(['keep' => true]));
+""",
+            extra_env={"NEXVUE_TURN_HTTP_FAIL": "1", "NEXVUE_TURN_HTTP_STUB": ""},
+        )
+        self.assertTrue(data.get("keep"))
+        self.assertNotIn("ice_servers", data)
+        self.assertNotIn("ice_servers_expires_at", data)
+
     def test_success_refreshes_jwks_cache(self) -> None:
         _StubHandler.response_body = {
             "ok": True,

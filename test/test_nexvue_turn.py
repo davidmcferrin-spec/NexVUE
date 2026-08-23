@@ -79,6 +79,13 @@ class TestTurnUiWiring(unittest.TestCase):
         self.assertIn("iceServersFrom", watch)
         hb = (ROOT / "nexvue-portal-heartbeat.php").read_text(encoding="utf-8")
         self.assertIn("auth_turn_ice_servers_for_viewer", hb)
+        self.assertIn("function heartbeat_apply_turn", hb)
+        player = (ROOT / "web-node" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("let sessionGen = 0", player)
+        self.assertIn("if (gen !== sessionGen) return", player)
+        mv = (ROOT / "web-node" / "multiview.html").read_text(encoding="utf-8")
+        self.assertIn("openGen: 0", mv)
+        self.assertIn("if (gen !== pane.openGen) return", mv)
 
 
 def _php_sqlite_ok() -> bool:

@@ -699,6 +699,7 @@
       scopes: null,
       lastCue: { text: "", clear: true, seq: 0, service: "CC1" },
       base: null, path: null, pc: null, sessionId: null,
+      openGen: 0,
       intentionalClose: false,
       reconnectTimer: null, reconnectAttempt: 0
     };
@@ -889,11 +890,13 @@
 
   async function openPane(pane) {
     if (!pane.base) return;
+    const gen = ++pane.openGen;
     if (pane.reconnectTimer) {
       clearTimeout(pane.reconnectTimer);
       pane.reconnectTimer = null;
     }
     closePane(pane, false);
+    if (gen !== pane.openGen) return;
     pane.intentionalClose = false;
     hidePaneKicked(pane);
     const path = pathFor(pane.base);
@@ -905,6 +908,7 @@
     try {
       sess = await NexVueAuth.whepJwt(path);
     } catch (err) {
+      if (gen !== pane.openGen) return;
       const raw = err && err.message ? err.message : String(err);
       const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
       setPaneStatus(pane, "error: " + msg, "bad");
@@ -914,12 +918,14 @@
       updateGlobalState();
       return;
     }
+    if (gen !== pane.openGen) return;
     const iceServers = NexVueAuth.iceServersFrom(sess);
     const pc = new RTCPeerConnection(iceServers.length ? { iceServers } : {});
     pane.pc = pc;
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
     pc.ontrack = ev => {
+      if (gen !== pane.openGen || pane.pc !== pc) return;
       try { ev.receiver.playoutDelayHint = 0; } catch (e) { /* unsupported */ }
       try { ev.receiver.jitterBufferTarget = 0; } catch (e) { /* unsupported */ }
       if (!pane.video.srcObject) pane.video.srcObject = ev.streams[0];
@@ -934,7 +940,7 @@
       }
     };
     pc.onconnectionstatechange = () => {
-      if (!pane.pc || pane.pc !== pc) return;
+      if (gen !== pane.openGen || pane.pc !== pc) return;
       if (pc.connectionState === "connected") {
         setPaneStatus(pane, path, "ok");
         pane.reconnectAttempt = 0;
@@ -955,9 +961,16 @@
       const prepared = await NexVueVu.prepareWhepOffer(offer);
       await pc.setLocalDescription({ type: "offer", sdp: prepared.sdp });
       await NexVueAuth.waitIceGathering(pc, iceServers.length ? 12000 : 2000);
-      if (pane.pc !== pc) return;  // superseded
+      if (gen !== pane.openGen || pane.pc !== pc) {
+        try { pc.close(); } catch (e) { /* ignore */ }
+        return;
+      }
 
       const exchanged = await NexVueAuth.whepExchange(sess, path, pc.localDescription.sdp);
+      if (gen !== pane.openGen || pane.pc !== pc) {
+        try { pc.close(); } catch (e) { /* ignore */ }
+        return;
+      }
       if (exchanged.status < 200 || exchanged.status >= 300) {
         let detail = "";
         try {
@@ -976,7 +989,14 @@
       }
       pane.sessionId = exchanged.res ? parseWhepSessionId(exchanged.res) : null;
       await pc.setRemoteDescription({ type: "answer", sdp: exchanged.sdp });
+      if (gen !== pane.openGen || pane.pc !== pc) {
+        try { pc.close(); } catch (e) { /* ignore */ }
+      }
     } catch (err) {
+      if (gen !== pane.openGen) {
+        try { pc.close(); } catch (e) { /* ignore */ }
+        return;
+      }
       const raw = err && err.message ? err.message : String(err);
       const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
       setPaneStatus(pane, `error: ${msg}`, "bad");
