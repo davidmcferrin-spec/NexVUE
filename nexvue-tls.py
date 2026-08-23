@@ -12,12 +12,14 @@ Commands:
                       a write-through alias of that name.
   validate            stdin JSON {cert, key} → inspect + match (no write)
   install             stdin JSON {cert, key, source} → atomic install
-  deploy              copy LEGO_CERT_PATH / LEGO_CERT_KEY_PATH into /etc/nexvue/tls
+  deploy              copy lego hook cert+key into /etc/nexvue/tls
+                      (LEGO_HOOK_CERT_* from lego v5; LEGO_CERT_* v4 fallback;
+                      else <lego>/certificates/<public-hostname>.{crt,key})
   should-renew        JSON {renew: bool} — Lego cert within --days (default 30)
 
 Env overrides (tests):
   NEXVUE_TLS_DIR NEXVUE_TLS_CERT NEXVUE_TLS_KEY NEXVUE_TLS_STATE_DIR
-  NEXVUE_STATION_ENV NEXVUE_LEGO NEXVUE_TLS_RENEW_DAYS
+  NEXVUE_STATION_ENV NEXVUE_LEGO NEXVUE_LEGO_PATH NEXVUE_TLS_RENEW_DAYS
 """
 from __future__ import annotations
 
@@ -88,6 +90,42 @@ def station_env() -> Path:
 
 def lego_bin() -> Path:
     return Path(os.environ.get("NEXVUE_LEGO", "/usr/local/bin/lego"))
+
+
+def lego_store_dir() -> Path:
+    return Path(os.environ.get("NEXVUE_LEGO_PATH", "/var/lib/nexvue/lego"))
+
+
+def lego_deploy_paths() -> tuple[Path, Path]:
+    """Resolve the lego-issued pair for the deploy hook.
+
+    Lego v5 sets LEGO_HOOK_CERT_PATH / LEGO_HOOK_CERT_KEY_PATH. v4 used
+    LEGO_CERT_PATH / LEGO_CERT_KEY_PATH. If the hook env is missing, fall
+    back to the on-disk store using Public hostname (Settings-owned).
+    """
+    cert = (
+        os.environ.get("LEGO_HOOK_CERT_PATH")
+        or os.environ.get("LEGO_CERT_PATH")
+        or ""
+    ).strip()
+    key = (
+        os.environ.get("LEGO_HOOK_CERT_KEY_PATH")
+        or os.environ.get("LEGO_CERT_KEY_PATH")
+        or ""
+    ).strip()
+    if cert and key:
+        return Path(cert), Path(key)
+    try:
+        domain = resolve_domain()
+    except ValueError:
+        domain = ""
+    if domain:
+        base = lego_store_dir() / "certificates"
+        crt = base / f"{domain}.crt"
+        keyp = base / f"{domain}.key"
+        if crt.is_file() and keyp.is_file():
+            return crt, keyp
+    raise ValueError("lego did not pass certificate paths")
 
 
 def renew_days() -> int:
@@ -476,12 +514,9 @@ def install_pair(cert_pem: bytes, key_pem: bytes, source: str) -> dict:
 
 
 def deploy_from_lego() -> dict:
-    cert_file = os.environ.get("LEGO_CERT_PATH", "")
-    key_file = os.environ.get("LEGO_CERT_KEY_PATH", "")
-    if not cert_file or not key_file:
-        raise ValueError("LEGO_CERT_PATH / LEGO_CERT_KEY_PATH not set")
-    cert_pem = Path(cert_file).read_bytes()
-    key_pem = Path(key_file).read_bytes()
+    cert_file, key_file = lego_deploy_paths()
+    cert_pem = cert_file.read_bytes()
+    key_pem = key_file.read_bytes()
     return install_pair(cert_pem, key_pem, "lego")
 
 

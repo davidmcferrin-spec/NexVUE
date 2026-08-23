@@ -405,7 +405,10 @@ this box can't get additional ports opened.
   Settings **Certificates** (admin only — hidden from operators) uses
   `nexvue-ops-tls.sh` + pinned `lego` TLS-ALPN-01 on `:443` (Apache stopped
   only for that window) or a validated PEM upload onto `/etc/nexvue/tls/`.
-  Issue / renew read Public hostname.
+  Issue / renew read Public hostname. The lego deploy hook prefers
+  `LEGO_HOOK_CERT_*` (v5) and falls back to `LEGO_CERT_*` (v4) or
+  `/var/lib/nexvue/lego/certificates/<hostname>.{crt,key}` — operators
+  never copy PEMs by hand.
  Services shows systemd enable state (`nexvue-ops-status.sh` prints
  `<is-active> <is-enabled>`) plus Enable/Disable (`set_enabled`, --now) and
  Start/Stop (`set_running`, runtime-only) toggles for `nexvue-encode@0-7`

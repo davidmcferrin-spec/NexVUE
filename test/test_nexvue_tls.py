@@ -420,6 +420,89 @@ class TestWiring(unittest.TestCase):
         self.assertIn("port 80 is never used", text)
         self.assertIn("systemctl stop apache2", text)
 
+    def test_deploy_hook_reads_lego_v5_env(self) -> None:
+        text = TLS_PY.read_text(encoding="utf-8")
+        self.assertIn("LEGO_HOOK_CERT_PATH", text)
+        self.assertIn("LEGO_HOOK_CERT_KEY_PATH", text)
+        hook = DEPLOY_SH.read_text(encoding="utf-8")
+        self.assertIn("LEGO_HOOK_CERT_", hook)
+
+
+class TestLegoDeployPaths(unittest.TestCase):
+    def setUp(self) -> None:
+        self.mod = _load()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.td = Path(self.tmp.name)
+        self._saved = {
+            k: os.environ.get(k)
+            for k in (
+                "LEGO_HOOK_CERT_PATH",
+                "LEGO_HOOK_CERT_KEY_PATH",
+                "LEGO_CERT_PATH",
+                "LEGO_CERT_KEY_PATH",
+                "NEXVUE_LEGO_PATH",
+                "NEXVUE_STATION_ENV",
+            )
+        }
+
+    def tearDown(self) -> None:
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.tmp.cleanup()
+
+    def _clear_hook_env(self) -> None:
+        for k in (
+            "LEGO_HOOK_CERT_PATH",
+            "LEGO_HOOK_CERT_KEY_PATH",
+            "LEGO_CERT_PATH",
+            "LEGO_CERT_KEY_PATH",
+        ):
+            os.environ.pop(k, None)
+
+    def test_prefers_v5_hook_vars(self) -> None:
+        self._clear_hook_env()
+        os.environ["LEGO_HOOK_CERT_PATH"] = "/v5/cert.crt"
+        os.environ["LEGO_HOOK_CERT_KEY_PATH"] = "/v5/cert.key"
+        os.environ["LEGO_CERT_PATH"] = "/v4/cert.crt"
+        os.environ["LEGO_CERT_KEY_PATH"] = "/v4/cert.key"
+        cert, key = self.mod.lego_deploy_paths()
+        self.assertEqual(cert, Path("/v5/cert.crt"))
+        self.assertEqual(key, Path("/v5/cert.key"))
+
+    def test_falls_back_to_v4_vars(self) -> None:
+        self._clear_hook_env()
+        os.environ["LEGO_CERT_PATH"] = "/v4/cert.crt"
+        os.environ["LEGO_CERT_KEY_PATH"] = "/v4/cert.key"
+        cert, key = self.mod.lego_deploy_paths()
+        self.assertEqual(cert, Path("/v4/cert.crt"))
+        self.assertEqual(key, Path("/v4/cert.key"))
+
+    def test_falls_back_to_lego_store(self) -> None:
+        self._clear_hook_env()
+        store = self.td / "lego" / "certificates"
+        store.mkdir(parents=True)
+        crt = store / "nexvue.example.com.crt"
+        keyp = store / "nexvue.example.com.key"
+        crt.write_text("crt", encoding="utf-8")
+        keyp.write_text("key", encoding="utf-8")
+        envf = self.td / "nexvue.env"
+        envf.write_text("NEXVUE_PUBLIC_HOSTNAME=nexvue.example.com\n", encoding="utf-8")
+        os.environ["NEXVUE_LEGO_PATH"] = str(self.td / "lego")
+        os.environ["NEXVUE_STATION_ENV"] = str(envf)
+        cert, key = self.mod.lego_deploy_paths()
+        self.assertEqual(cert, crt)
+        self.assertEqual(key, keyp)
+
+    def test_missing_paths_raise(self) -> None:
+        self._clear_hook_env()
+        os.environ["NEXVUE_LEGO_PATH"] = str(self.td / "empty-lego")
+        os.environ["NEXVUE_STATION_ENV"] = str(self.td / "missing.env")
+        with self.assertRaises(ValueError):
+            self.mod.lego_deploy_paths()
+
 
 if __name__ == "__main__":
     unittest.main()

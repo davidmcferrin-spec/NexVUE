@@ -725,7 +725,9 @@ dots stay gray and **SDI input** shows `status unreachable`, check that
      reachability) already pointing at the box, an email for Let's Encrypt
      notices, and accepting the subscriber agreement. Writes
      `NEXVUE_TLS_EMAIL` and mirrors the hostname onto `NEXVUE_TLS_DOMAIN`.
-     `nexvue-tls-renew.timer`
+     The deploy hook copies the issued pair into
+     `/etc/nexvue/tls/` (`LEGO_HOOK_CERT_*` on lego v5; v4 names and the
+     on-disk lego store are fallbacks). `nexvue-tls-renew.timer`
      re-runs the same path when a Lego cert is within 30 days of expiry
      (no-op for self-signed or uploaded certs).
    - **Upload your own** accepts a PEM full chain + matching key, validates
