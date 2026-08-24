@@ -8,6 +8,8 @@
 #   sudo ./setup.sh            full install + sanity checks
 #   sudo ./setup.sh --check    sanity checks only (e.g. after HWE reboot or
 #                              after installing Desktop Video)
+# Last run is teed to /var/lib/nexvue/update-setup.log (Services → Setup log).
+#
 #   sudo ./setup.sh --firewall apply ufw rules (SSH/443/8889/8189, no :80) and
 #                              enable ufw. Full install already does this;
 #                              the flag is a legacy alias and also works with
@@ -26,6 +28,48 @@ if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
 fi
 set -euo pipefail
+
+# Capture the full run to /var/lib/nexvue/update-setup.log so Services can
+# show a failed Update without SSH. Re-exec once; inner run does the work.
+# TTY (SSH) still streams to the console via tee.
+if [ -z "${NEXVUE_SETUP_LOGGING:-}" ]; then
+  _nexvue_setup_log="${NEXVUE_SETUP_LOG:-/var/lib/nexvue/update-setup.log}"
+  _nexvue_setup_state="${NEXVUE_SETUP_STATE:-/var/lib/nexvue/update-setup.state}"
+  if mkdir -p "$(dirname "${_nexvue_setup_log}")" 2>/dev/null; then
+    export NEXVUE_SETUP_LOGGING=1
+    {
+      echo "===== $(date -u +%Y-%m-%dT%H:%M:%SZ) setup.sh $* ====="
+      echo "pwd=$(pwd) user=$(id -un 2>/dev/null || echo ?)"
+    } >"${_nexvue_setup_log}" || true
+    set +e
+    if [ -t 1 ]; then
+      bash "$0" "$@" 2>&1 | tee -a "${_nexvue_setup_log}"
+      _nexvue_setup_ec=${PIPESTATUS[0]}
+    else
+      bash "$0" "$@" >>"${_nexvue_setup_log}" 2>&1
+      _nexvue_setup_ec=$?
+    fi
+    set -e
+    if [ "${_nexvue_setup_ec}" -eq 0 ]; then
+      _nexvue_setup_st=OK
+    else
+      _nexvue_setup_st=FAIL
+    fi
+    echo "${_nexvue_setup_st} $(date -u +%Y-%m-%dT%H:%M:%SZ)" >"${_nexvue_setup_state}" || true
+    chmod 640 "${_nexvue_setup_log}" "${_nexvue_setup_state}" 2>/dev/null || true
+    chgrp www-data "${_nexvue_setup_log}" "${_nexvue_setup_state}" 2>/dev/null || true
+    if [ -f "${_nexvue_setup_log}" ]; then
+      _nexvue_setup_sz="$(wc -c <"${_nexvue_setup_log}" 2>/dev/null || echo 0)"
+      if [ "${_nexvue_setup_sz:-0}" -gt 524288 ]; then
+        tail -c 262144 "${_nexvue_setup_log}" >"${_nexvue_setup_log}.tmp" \
+          && mv "${_nexvue_setup_log}.tmp" "${_nexvue_setup_log}" \
+          && chmod 640 "${_nexvue_setup_log}" 2>/dev/null || true
+        chgrp www-data "${_nexvue_setup_log}" 2>/dev/null || true
+      fi
+    fi
+    exit "${_nexvue_setup_ec}"
+  fi
+fi
 
 # ---- Output helpers -------------------------------------------------------------
 GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'

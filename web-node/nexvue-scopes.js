@@ -6,16 +6,22 @@
  * boxes + skin-tone I-line on the vectorscope. Never burned into encode.
  *
  * Click the strip to pop a ~2× panel onto the page (escapes overflow-hidden
- * panes). Esc or click again docks. Per-browser prefs:
+ * panes). Esc or click again docks. Popped panel is page-fixed, stacks above
+ * the Session metrics drawer, and can be dragged; a short move does not dock.
+ * Per-browser prefs:
  *   nexvue-scopes-on   1 | 0   (default off)
  *   nexvue-scopes-pop  1 | 0   (default docked)
+ *   nexvue-scopes-pos  {"left":N,"top":N}  (viewport px; only after a drag)
  */
 (function (global) {
   "use strict";
 
   const PREF_ON = "nexvue-scopes-on";
   const PREF_POP = "nexvue-scopes-pop";
+  const PREF_POS = "nexvue-scopes-pos";
   const FADE = 0.22;
+  const DRAG_THRESHOLD = 6;
+  const POS_PAD = 8;
 
   function layoutFor(pop) {
     const wfmW = pop ? 440 : 220;
@@ -95,10 +101,52 @@
     } catch (e) { /* private mode */ }
   }
 
+  function parsePos(raw) {
+    if (raw == null || raw === "") return null;
+    let o = raw;
+    if (typeof raw === "string") {
+      try { o = JSON.parse(raw); } catch (e) { return null; }
+    }
+    if (!o || typeof o !== "object") return null;
+    const left = Number(o.left);
+    const top = Number(o.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+    return { left: left, top: top };
+  }
+
+  function clampPos(left, top, width, height, vw, vh, pad) {
+    pad = pad == null ? POS_PAD : pad;
+    width = Math.max(0, Number(width) || 0);
+    height = Math.max(0, Number(height) || 0);
+    vw = Math.max(0, Number(vw) || 0);
+    vh = Math.max(0, Number(vh) || 0);
+    const maxL = Math.max(pad, vw - width - pad);
+    const maxT = Math.max(pad, vh - height - pad);
+    return {
+      left: Math.min(maxL, Math.max(pad, left)),
+      top: Math.min(maxT, Math.max(pad, top)),
+    };
+  }
+
   function getOnPref() { return prefOn(PREF_ON, false); }
   function setOnPref(on) { setPref(PREF_ON, on); }
   function getPopPref() { return prefOn(PREF_POP, false); }
   function setPopPref(on) { setPref(PREF_POP, on); }
+  function getPosPref() {
+    try {
+      return parsePos(localStorage.getItem(PREF_POS));
+    } catch (e) {
+      return null;
+    }
+  }
+  function setPosPref(pos) {
+    const next = parsePos(pos);
+    try {
+      if (!next) localStorage.removeItem(PREF_POS);
+      else localStorage.setItem(PREF_POS, JSON.stringify(next));
+    } catch (e) { /* private mode */ }
+    return next;
+  }
 
   function ensureStyles() {
     if (document.getElementById("nexvue-scopes-css")) return;
@@ -115,9 +163,14 @@
 }
 .nexvue-scopes[hidden] { display: none !important; }
 .nexvue-scopes.nexvue-scopes-pop {
-  position: fixed; left: 12px; bottom: 12px; z-index: 40;
+  position: fixed; left: 12px; bottom: 12px; z-index: 55;
   gap: 8px;
   font-size: 11px;
+  cursor: grab;
+  touch-action: none;
+}
+.nexvue-scopes.nexvue-scopes-pop.nexvue-scopes-drag {
+  cursor: grabbing;
 }
 .nexvue-scopes-pane {
   background: rgba(8, 12, 16, .78);
@@ -246,21 +299,47 @@
 
     let visible = opts.visible !== undefined ? !!opts.visible : getOnPref();
     let popped = getPopPref();
+    let pos = getPosPref();
     let running = false;
     let handle = 0;
     let usingRaf = false;
+    let drag = null;
+    let suppressClick = false;
 
     function dockHost() {
       return document.body || container;
+    }
+
+    function applyPosition() {
+      if (!(popped && visible) || !pos) {
+        root.style.left = "";
+        root.style.top = "";
+        root.style.bottom = "";
+        return;
+      }
+      const w = root.offsetWidth;
+      const h = root.offsetHeight;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const next = clampPos(pos.left, pos.top, w, h, vw, vh, POS_PAD);
+      if (w > 0 && h > 0 && (next.left !== pos.left || next.top !== pos.top)) {
+        pos = next;
+        setPosPref(pos);
+      }
+      root.style.left = next.left + "px";
+      root.style.top = next.top + "px";
+      root.style.bottom = "auto";
     }
 
     function applyHost() {
       const host = popped && visible ? dockHost() : container;
       if (host && root.parentNode !== host) host.appendChild(root);
       root.classList.toggle("nexvue-scopes-pop", !!(popped && visible));
-      root.title = popped ? "Click to dock · Esc" : "Click to enlarge";
+      root.classList.toggle("nexvue-scopes-drag", !!(drag && drag.moved));
+      root.title = popped ? "Drag to move · click to dock · Esc" : "Click to enlarge";
       root.setAttribute("aria-pressed", popped ? "true" : "false");
       root.setAttribute("aria-label", popped ? "Dock waveform and vectorscope" : "Enlarge waveform and vectorscope");
+      applyPosition();
     }
 
     function applyLayout() {
@@ -418,10 +497,68 @@
       ev.stopPropagation();
     }
 
+    function onPointerDown(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!popped || !visible) return;
+      if (ev.button != null && ev.button !== 0) return;
+      const rect = root.getBoundingClientRect();
+      drag = {
+        pointerId: ev.pointerId,
+        startX: ev.clientX,
+        startY: ev.clientY,
+        origL: rect.left,
+        origT: rect.top,
+        moved: false,
+      };
+      try { root.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+    }
+
+    function onPointerMove(ev) {
+      if (!drag || ev.pointerId !== drag.pointerId) return;
+      const dx = ev.clientX - drag.startX;
+      const dy = ev.clientY - drag.startY;
+      if (!drag.moved && (dx * dx + dy * dy) < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
+      ev.preventDefault();
+      drag.moved = true;
+      pos = clampPos(
+        drag.origL + dx,
+        drag.origT + dy,
+        root.offsetWidth,
+        root.offsetHeight,
+        window.innerWidth,
+        window.innerHeight,
+        POS_PAD
+      );
+      applyHost();
+    }
+
+    function endDrag(ev) {
+      if (!drag || (ev && ev.pointerId != null && ev.pointerId !== drag.pointerId)) return;
+      const moved = drag.moved;
+      const pointerId = drag.pointerId;
+      drag = null;
+      root.classList.remove("nexvue-scopes-drag");
+      try { root.releasePointerCapture(pointerId); } catch (e) { /* ignore */ }
+      if (moved) {
+        pos = setPosPref(pos) || pos;
+        suppressClick = true;
+      }
+    }
+
     function onClick(ev) {
       ev.preventDefault();
       ev.stopPropagation();
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
       togglePopped();
+    }
+
+    function onResize() {
+      if (!popped || !visible || !pos) return;
+      applyPosition();
     }
 
     function onKey(ev) {
@@ -441,10 +578,14 @@
       setPopped(false);
     }
 
-    root.addEventListener("pointerdown", onPointer);
+    root.addEventListener("pointerdown", onPointerDown);
+    root.addEventListener("pointermove", onPointerMove);
+    root.addEventListener("pointerup", endDrag);
+    root.addEventListener("pointercancel", endDrag);
     root.addEventListener("click", onClick);
     root.addEventListener("dblclick", onPointer);
     document.addEventListener("keydown", onKey, true);
+    window.addEventListener("resize", onResize);
 
     applyLayout();
     applyVisible();
@@ -460,6 +601,7 @@
       destroy: function () {
         stopLoop();
         document.removeEventListener("keydown", onKey, true);
+        window.removeEventListener("resize", onResize);
         if (root.parentNode) root.parentNode.removeChild(root);
       },
     };
@@ -468,6 +610,9 @@
   global.NexVueScopes = {
     PREF_ON,
     PREF_POP,
+    PREF_POS,
+    DRAG_THRESHOLD,
+    POS_PAD,
     SAMPLE_W,
     SAMPLE_H,
     PLOT_W,
@@ -477,10 +622,14 @@
     rgbToYcbcr,
     yToIre,
     barTargets,
+    parsePos,
+    clampPos,
     getOnPref,
     setOnPref,
     getPopPref,
     setPopPref,
+    getPosPref,
+    setPosPref,
     attach,
   };
 })(typeof window !== "undefined" ? window : globalThis);

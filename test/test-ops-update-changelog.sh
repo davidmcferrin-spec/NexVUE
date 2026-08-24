@@ -59,6 +59,8 @@ echo "$JSON" | grep -q 'fix captions idle erase' || fail "changelog missing olde
 # Operator-facing fields present; SHA still in JSON but UI no longer paints it.
 echo "$JSON" | grep -q '"git_sha":"' || fail "git_sha missing: $JSON"
 echo "$JSON" | grep -q '"changelog":\[' || fail "changelog array: $JSON"
+echo "$JSON" | grep -q '"last_setup_ok":null' || fail "last_setup_ok default: $JSON"
+echo "$JSON" | grep -q '"setup_tail":""' || fail "setup_tail default: $JSON"
 
 pass "status reports remote_version + changelog when behind"
 
@@ -71,4 +73,24 @@ echo "$JSON2" | grep -q '"changelog":\[\]' || fail "empty changelog when current
 echo "$JSON2" | grep -q '"remote_version":"1.0.2"' || fail "remote_version when current: $JSON2"
 
 pass "status empty changelog when up to date"
+
+# Failed apply must leave a setup log + setup_tail in the JSON (Services UI).
+printf '%s\n' '#!/bin/bash' 'echo "[FAIL] missing foo — run from the repo root"' 'exit 1' > setup.sh
+chmod +x setup.sh
+printf '9.9.9\n' > VERSION
+git add setup.sh VERSION
+git commit -m "broken setup for log test" >/dev/null
+git push origin HEAD:main >/dev/null 2>&1
+git reset --hard HEAD~1 >/dev/null
+set +e
+JSON3="$("$HELPER" apply 2>/dev/null)"
+apply_ec=$?
+set -e
+[[ "$apply_ec" -ne 0 ]] || fail "apply should fail: $JSON3"
+echo "$JSON3" | grep -q 'missing foo' || fail "setup_tail missing fail line: $JSON3"
+echo "$JSON3" | grep -q '"last_setup_ok":false' || fail "last_setup_ok false: $JSON3"
+[[ -f "$DATA/update-setup.log" ]] || fail "update-setup.log not written"
+grep -q 'missing foo' "$DATA/update-setup.log" || fail "log missing fail line"
+
+pass "apply failure writes setup log + setup_tail"
 echo "ALL PASSED"

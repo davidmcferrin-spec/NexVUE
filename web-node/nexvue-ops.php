@@ -14,7 +14,7 @@
  *   services | journal | journal_clear | audio_probe | channels_list | channel_get | channel_put
  *   | channels_bulk | restart | restart_encoders | set_enabled | set_running | aliases
  *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete | support_bundle
- *   | update_status | update_repo | network_get | network_put | network_test
+ *   | update_status | update_repo | update_setup_log | network_get | network_put | network_test
  *   | tls_status | tls_issue | tls_upload
  *   | turn_get | turn_put | turn_test
  *   | sfu_get | sfu_put | sfu_test
@@ -113,6 +113,114 @@ function fail(int $status, string $message): never {
     http_response_code($status);
     echo json_encode(['ok' => false, 'error' => $message]);
     exit;
+}
+
+function ops_setup_log_path(): string {
+    $override = getenv('NEXVUE_SETUP_LOG');
+    if (is_string($override) && $override !== '') {
+        return $override;
+    }
+    $data = getenv('NEXVUE_DATA');
+    if (is_string($data) && $data !== '') {
+        return rtrim($data, '/\\') . '/update-setup.log';
+    }
+    return '/var/lib/nexvue/update-setup.log';
+}
+
+function ops_setup_state_path(): string {
+    $override = getenv('NEXVUE_SETUP_STATE');
+    if (is_string($override) && $override !== '') {
+        return $override;
+    }
+    $log = ops_setup_log_path();
+    if (str_ends_with($log, '.log')) {
+        return substr($log, 0, -4) . '.state';
+    }
+    return $log . '.state';
+}
+
+function ops_strip_ansi(string $s): string {
+    $s = preg_replace('/\x1B\[[0-9;]*[A-Za-z]/', '', $s) ?? $s;
+    return str_replace("\r", '', $s);
+}
+
+/** @return array{ok:bool|null, at:string} */
+function ops_read_setup_state(): array {
+    $path = ops_setup_state_path();
+    $out = ['ok' => null, 'at' => ''];
+    if (!is_readable($path)) {
+        return $out;
+    }
+    $line = trim((string)@file_get_contents($path));
+    if ($line === '') {
+        return $out;
+    }
+    $parts = preg_split('/\s+/', $line, 2) ?: [];
+    $status = $parts[0] ?? '';
+    if ($status === 'OK') {
+        $out['ok'] = true;
+    } elseif ($status === 'FAIL') {
+        $out['ok'] = false;
+    }
+    $out['at'] = $parts[1] ?? '';
+    return $out;
+}
+
+function ops_setup_log_tail(int $maxLines = 40): string {
+    $path = ops_setup_log_path();
+    if (!is_readable($path)) {
+        return '';
+    }
+    $lines = @file($path, FILE_IGNORE_NEW_LINES);
+    if (!is_array($lines) || $lines === []) {
+        return '';
+    }
+    $slice = array_slice($lines, -$maxLines);
+    return ops_strip_ansi(implode("\n", $slice));
+}
+
+function ops_setup_log_text(int $maxBytes = 200000): array {
+    $path = ops_setup_log_path();
+    if (!is_readable($path)) {
+        return ['log' => '', 'truncated' => false];
+    }
+    $size = @filesize($path);
+    $size = is_int($size) ? $size : 0;
+    $truncated = $size > $maxBytes;
+    if (!$truncated) {
+        $raw = (string)@file_get_contents($path);
+        return ['log' => ops_strip_ansi($raw), 'truncated' => false];
+    }
+    $fh = @fopen($path, 'rb');
+    if ($fh === false) {
+        return ['log' => '', 'truncated' => true];
+    }
+    fseek($fh, -$maxBytes, SEEK_END);
+    $raw = (string)stream_get_contents($fh);
+    fclose($fh);
+    $nl = strpos($raw, "\n");
+    if ($nl !== false) {
+        $raw = substr($raw, $nl + 1);
+    }
+    return ['log' => ops_strip_ansi($raw), 'truncated' => true];
+}
+
+/**
+ * @param array<string,mixed> $parsed
+ * @return array<string,mixed>
+ */
+function ops_merge_setup_log_fields(array $parsed): array {
+    $st = ops_read_setup_state();
+    if (!array_key_exists('last_setup_ok', $parsed) || $parsed['last_setup_ok'] === null) {
+        $parsed['last_setup_ok'] = $st['ok'];
+    }
+    if (!isset($parsed['last_setup_at']) || $parsed['last_setup_at'] === '') {
+        $parsed['last_setup_at'] = $st['at'];
+    }
+    if (!isset($parsed['setup_tail']) || $parsed['setup_tail'] === '') {
+        $parsed['setup_tail'] = ops_setup_log_tail();
+    }
+    return $parsed;
 }
 
 function kick_is_uuid(string $id): bool {
@@ -1136,7 +1244,7 @@ function ops_require_auth(string $action): void {
     }
     $adminOnly = [
         'services', 'journal', 'journal_clear', 'set_enabled', 'set_running',
-        'support_bundle', 'update_status', 'update_repo',
+        'support_bundle', 'update_status', 'update_repo', 'update_setup_log',
         'network_get', 'network_put', 'network_test',
         'tls_status', 'tls_issue', 'tls_upload',
         'turn_get', 'turn_put', 'turn_test',
@@ -1349,14 +1457,45 @@ if ($action === 'update_status' || $action === 'update_repo') {
             . 're-run sudo ./setup.sh from the clone to install nexvue-ops-update.sh + sudoers'
         );
     }
+    $parsed = ops_merge_setup_log_fields($parsed);
     if ($r['code'] !== 0 || empty($parsed['ok'])) {
-        fail(500, (string)($parsed['error'] ?? 'update helper failed'));
+        if (!headers_sent()) {
+            header('Content-Type: application/json');
+            header('Cache-Control: no-store');
+        }
+        http_response_code(500);
+        $parsed['ok'] = false;
+        if (!isset($parsed['error']) || $parsed['error'] === '') {
+            $parsed['error'] = 'update helper failed';
+        }
+        echo json_encode($parsed, JSON_UNESCAPED_SLASHES);
+        exit;
     }
     if (!headers_sent()) {
         header('Content-Type: application/json');
         header('Cache-Control: no-store');
     }
     echo json_encode($parsed, JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+if ($action === 'update_setup_log') {
+    $st = ops_read_setup_state();
+    $blob = ops_setup_log_text();
+    if ($blob['log'] === '' && !is_readable(ops_setup_log_path())) {
+        fail(404, 'no setup.sh log yet — run Update from repo or sudo ./setup.sh');
+    }
+    if (!headers_sent()) {
+        header('Content-Type: application/json');
+        header('Cache-Control: no-store');
+    }
+    echo json_encode([
+        'ok' => true,
+        'last_setup_ok' => $st['ok'],
+        'last_setup_at' => $st['at'],
+        'truncated' => $blob['truncated'],
+        'log' => $blob['log'],
+    ], JSON_UNESCAPED_SLASHES);
     exit;
 }
 

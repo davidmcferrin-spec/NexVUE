@@ -181,6 +181,7 @@
     <button type="button" class="primary" id="btn-support-bundle" title="Download redacted journals + config + runtime state as a zip">Download zip…</button>
     <span class="update-meta" id="update-meta" data-auth-role="admin" title="Git update status">—</span>
     <button type="button" id="btn-update-repo" data-auth-role="admin" title="Fetch origin, hard-reset the clone, and re-run setup.sh">Update from repo…</button>
+    <button type="button" id="btn-setup-log" data-auth-role="admin" title="Last setup.sh run (Update from repo or sudo ./setup.sh)">Setup log</button>
   </div>
 </div>
 
@@ -245,6 +246,7 @@
   let lastLine = "";
   let sinceCursor = "";
   let lastServices = [];
+  let viewingSetupLog = false;
 
   async function api(action, body) {
     const opts = body
@@ -253,7 +255,12 @@
     const url = body ? "/api/ops" : `/api/ops?action=${encodeURIComponent(action)}`;
     const res = await fetch(url, opts);
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok || data.ok === false) {
+      const err = new Error(data.error || `HTTP ${res.status}`);
+      err.setup_tail = data.setup_tail || "";
+      err.payload = data;
+      throw err;
+    }
     return data;
   }
 
@@ -331,6 +338,7 @@
   }
 
   function selectUnit(unit) {
+    viewingSetupLog = false;
     selected = unit;
     lastLine = "";
     sinceCursor = "";
@@ -359,8 +367,22 @@
     logEl.scrollTop = logEl.scrollHeight;
   }
 
+  function showSetupLog(text, meta) {
+    viewingSetupLog = true;
+    selected = null;
+    follow = false;
+    followBtn.classList.remove("active");
+    [...listEl.querySelectorAll(".unit")].forEach(el => el.classList.remove("selected"));
+    restartBtn.disabled = true;
+    clearJournalBtn.disabled = true;
+    updateUnitButtons();
+    logEl.textContent = text || "(empty setup.sh log)";
+    statusEl.textContent = meta || "setup.sh log";
+    scrollToBottom();
+  }
+
   async function pollJournal(full) {
-    if (!selected) return;
+    if (viewingSetupLog || !selected) return;
     try {
       const stick = full || nearBottom();
       const body = { unit: selected, lines: full || !sinceCursor ? 150 : 80 };
@@ -535,11 +557,13 @@
   }
 
   const updateBtn = document.getElementById("btn-update-repo");
+  const setupLogBtn = document.getElementById("btn-setup-log");
   const updateMeta = document.getElementById("update-meta");
   let lastUpdateStatus = null;
 
   if (!isAdmin) {
     if (updateBtn) updateBtn.hidden = true;
+    if (setupLogBtn) setupLogBtn.hidden = true;
     if (updateMeta) updateMeta.hidden = true;
   }
 
@@ -564,9 +588,14 @@
     }
     updateMeta.textContent = txt;
     updateMeta.classList.toggle("available", behind > 0);
-    updateMeta.title =
-      "repo " + (data.repo || "?") + " · branch " + (data.update_branch || data.git_branch || "?") +
-      (data.fetch_warning ? "\nfetch: " + data.fetch_warning : "");
+    let tip =
+      "repo " + (data.repo || "?") + " · branch " + (data.update_branch || data.git_branch || "?");
+    if (data.last_setup_at) {
+      tip += "\nlast setup.sh: " + (data.last_setup_ok === false ? "failed" : data.last_setup_ok ? "ok" : "?");
+      tip += " " + data.last_setup_at;
+    }
+    if (data.fetch_warning) tip += "\nfetch: " + data.fetch_warning;
+    updateMeta.title = tip;
     const nav = document.getElementById("nav-version");
     if (nav) {
       nav.classList.toggle("update-available", behind > 0);
@@ -663,11 +692,34 @@
           "Reload this page to pick up UI changes. Restart encoders if encode scripts changed."
         );
       } catch (err) {
+        const tail = err.setup_tail || "";
         statusEl.textContent = "update error: " + err.message;
-        alert(err.message);
+        if (tail) showSetupLog(tail, "setup.sh failed — last 40 lines");
+        alert(tail ? err.message + "\n\n" + tail : err.message);
       } finally {
         updateBtn.disabled = false;
         refreshUpdateStatus();
+      }
+    });
+  }
+
+  if (isAdmin && setupLogBtn) {
+    setupLogBtn.addEventListener("click", async () => {
+      setupLogBtn.disabled = true;
+      statusEl.textContent = "loading setup.sh log…";
+      try {
+        const data = await api("update_setup_log", {});
+        const when = data.last_setup_at || "";
+        const st = data.last_setup_ok === false ? "failed" : data.last_setup_ok ? "ok" : "unknown";
+        let meta = "setup.sh log · " + st;
+        if (when) meta += " · " + when;
+        if (data.truncated) meta += " · truncated";
+        showSetupLog(data.log || "", meta);
+      } catch (err) {
+        statusEl.textContent = "setup log: " + err.message;
+        alert(err.message);
+      } finally {
+        setupLogBtn.disabled = false;
       }
     });
   }

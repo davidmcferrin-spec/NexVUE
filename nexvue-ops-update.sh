@@ -5,12 +5,20 @@
 #   nexvue-ops-update.sh status   — JSON: version, remote_version, changelog,
 #                                   ahead/behind, dirty (dirty for apply warn only)
 #   nexvue-ops-update.sh apply    — fetch, hard-reset to origin/<branch>, setup.sh
+#                                   (captures setup.sh to update-setup.log)
 #
 # Repo path: NEXVUE_REPO, else /etc/nexvue/repo.path (written by setup.sh).
 # Branch:    NEXVUE_UPDATE_BRANCH (default main), else from nexvue.env if set.
 #
 # Prints one JSON object on stdout (and only that — progress goes to stderr).
 set -euo pipefail
+
+# Defaults so fail_json / ERR trap can mention setup logs before paths are
+# fully resolved from nexvue.env.
+DATA="${NEXVUE_DATA:-/var/lib/nexvue}"
+SETUP_LOG="${NEXVUE_SETUP_LOG:-${DATA}/update-setup.log}"
+SETUP_STATE="${NEXVUE_SETUP_STATE:-${DATA}/update-setup.state}"
+SETUP_TAIL_LINES=40
 
 json_escape() {
   # Minimal JSON string escape for paths / short messages.
@@ -23,15 +31,55 @@ json_escape() {
   printf '%s' "$s"
 }
 
+setup_log_tail() {
+  if [[ ! -f "$SETUP_LOG" ]]; then
+    return 0
+  fi
+  tail -n "$SETUP_TAIL_LINES" "$SETUP_LOG" 2>/dev/null \
+    | tr -d '\r' \
+    | sed 's/\x1B\[[0-9;]*[A-Za-z]//g' \
+    || true
+}
+
+read_setup_state() {
+  SETUP_STATE_OK="null"
+  SETUP_STATE_AT=""
+  if [[ ! -f "$SETUP_STATE" ]]; then
+    return 0
+  fi
+  local status ts
+  read -r status ts < "$SETUP_STATE" || true
+  if [[ "$status" == "OK" ]]; then
+    SETUP_STATE_OK="true"
+  elif [[ "$status" == "FAIL" ]]; then
+    SETUP_STATE_OK="false"
+  fi
+  SETUP_STATE_AT="${ts:-}"
+}
+
+# Extra JSON fields (leading comma) so a failed Update can show setup.sh.
+print_setup_json_fields() {
+  local tail
+  read_setup_state
+  tail="$(setup_log_tail)"
+  printf '"last_setup_ok":%s,' "$SETUP_STATE_OK"
+  printf '"last_setup_at":"%s",' "$(json_escape "$SETUP_STATE_AT")"
+  printf '"setup_tail":"%s"' "$(json_escape "$tail")"
+}
+
 fail_json() {
   trap - ERR
   local msg="$1"
-  echo "{\"ok\":false,\"error\":\"$(json_escape "$msg")\"}"
+  printf '{'
+  printf '"ok":false,'
+  printf '"error":"%s",' "$(json_escape "$msg")"
+  print_setup_json_fields
+  printf '}\n'
   exit 1
 }
 
 # Any unexpected set -e abort still returns JSON (PHP parses stdout).
-trap 'ec=$?; trap - ERR; echo "{\"ok\":false,\"error\":\"update helper aborted (exit ${ec})\"}"; exit 1' ERR
+trap 'ec=$?; trap - ERR; printf "{\"ok\":false,\"error\":\"update helper aborted (exit %s)\"," "$ec"; print_setup_json_fields; printf "}\n"; exit 1' ERR
 
 CMD="${1:-}"
 case "$CMD" in
@@ -46,6 +94,10 @@ DATA="${NEXVUE_DATA:-/var/lib/nexvue}"
 ENV_FILE="${ETC}/nexvue.env"
 REPO_PATH_FILE="${ETC}/repo.path"
 VERSION_STAMP="${DATA}/version.json"
+SETUP_LOG="${NEXVUE_SETUP_LOG:-${DATA}/update-setup.log}"
+SETUP_STATE="${NEXVUE_SETUP_STATE:-${DATA}/update-setup.state}"
+export NEXVUE_SETUP_LOG="$SETUP_LOG"
+export NEXVUE_SETUP_STATE="$SETUP_STATE"
 
 # Optional station overrides from nexvue.env (safe KEY=value lines only).
 if [[ -f "$ENV_FILE" ]]; then
@@ -207,7 +259,8 @@ collect_status() {
   if [[ -n "$fetch_note" ]]; then
     printf '"fetch_warning":"%s",' "$(json_escape "$fetch_note")"
   fi
-  printf '"update_available":%s' "$([[ "${behind:-0}" -gt 0 ]] && echo true || echo false)"
+  printf '"update_available":%s,' "$([[ "${behind:-0}" -gt 0 ]] && echo true || echo false)"
+  print_setup_json_fields
   printf '}\n'
 }
 
@@ -232,7 +285,8 @@ apply_update() {
     printf '"git_sha":"%s",' "$(json_escape "$sha")"
     printf '"git_branch":"%s",' "$(json_escape "$BRANCH")"
     printf '"repo":"%s",' "$(json_escape "$REPO")"
-    printf '"message":"already up to date"'
+    printf '"message":"already up to date",'
+    print_setup_json_fields
     printf '}\n'
     return 0
   fi
@@ -243,9 +297,24 @@ apply_update() {
   git reset --hard "origin/${BRANCH}"
 
   echo "running setup.sh…" >&2
-  # Keep stdout JSON-only — setup banners/progress must not pollute the parse.
-  if ! bash "$REPO/setup.sh" >&2; then
-    fail_json "setup.sh failed after git reset — clone is at origin/${BRANCH}; fix errors and re-run setup.sh"
+  # Keep stdout JSON-only. Capture setup.sh even if this clone's script
+  # predates the in-script tee (Services reads update-setup.log).
+  mkdir -p "$DATA"
+  {
+    echo "===== $(date -u +%Y-%m-%dT%H:%M:%SZ) update apply ====="
+    echo "repo=${REPO} branch=${BRANCH}"
+  } >"$SETUP_LOG"
+  set +e
+  bash "$REPO/setup.sh" >>"$SETUP_LOG" 2>&1
+  local setup_ec=$?
+  set -e
+  if [[ ! -f "$SETUP_STATE" ]]; then
+    echo "$([[ "$setup_ec" -eq 0 ]] && echo OK || echo FAIL) $(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$SETUP_STATE"
+  fi
+  chmod 640 "$SETUP_LOG" "$SETUP_STATE" 2>/dev/null || true
+  chgrp www-data "$SETUP_LOG" "$SETUP_STATE" 2>/dev/null || true
+  if [[ "$setup_ec" -ne 0 ]]; then
+    fail_json "setup.sh failed after git reset — clone is at origin/${BRANCH}; open Setup log on Services or re-run sudo ./setup.sh"
   fi
 
   write_stamp
@@ -262,7 +331,8 @@ apply_update() {
   printf '"git_branch":"%s",' "$(json_escape "$BRANCH")"
   printf '"repo":"%s",' "$(json_escape "$REPO")"
   printf '"behind_applied":%s,' "$behind"
-  printf '"message":"updated and redeployed — restart encoders if needed"'
+  printf '"message":"updated and redeployed — restart encoders if needed",'
+  print_setup_json_fields
   printf '}\n'
 }
 

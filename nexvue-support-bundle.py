@@ -160,6 +160,8 @@ def collect_host(dest: Path) -> None:
     for src, name in (
         (Path("/usr/local/share/nexvue/VERSION"), "nexvue-VERSION.txt"),
         (Path("/var/lib/nexvue/version.json"), "nexvue-version.json"),
+        (Path("/var/lib/nexvue/update-setup.log"), "nexvue-update-setup.log"),
+        (Path("/var/lib/nexvue/update-setup.state"), "nexvue-update-setup.state"),
         (Path("/etc/nexvue/repo.path"), "nexvue-repo.path.txt"),
     ):
         if src.is_file():

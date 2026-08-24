@@ -66,11 +66,15 @@ class TestWebRouterFiles(unittest.TestCase):
         block = ops[start : ops.index("];", start)]
         self.assertIn("'update_status'", block)
         self.assertIn("'update_repo'", block)
+        self.assertIn("'update_setup_log'", block)
         router = (ROOT / "web-node" / "nexvue-web-router.php").read_text(encoding="utf-8")
         self.assertIn("'/services' => ['file' => 'services.html', 'roles' => ['admin']", router)
         services = (ROOT / "web-node" / "services.html").read_text(encoding="utf-8")
         self.assertIn('requirePage({ roles: ["admin"] })', services)
         self.assertRegex(services, r'id="btn-update-repo"[^>]*data-auth-role="admin"')
+        self.assertRegex(services, r'id="btn-setup-log"[^>]*data-auth-role="admin"')
+        self.assertIn("update_setup_log", services)
+        self.assertIn("setup_tail", services)
         self.assertIn("if (isAdmin && updateBtn)", services)
         self.assertIn("if (!isAdmin || !updateMeta)", services)
 

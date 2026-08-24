@@ -41,10 +41,15 @@ class TestOverlayContracts(unittest.TestCase):
         js = SCOPES.read_text(encoding="utf-8")
         self.assertIn('PREF_ON = "nexvue-scopes-on"', js)
         self.assertIn('PREF_POP = "nexvue-scopes-pop"', js)
+        self.assertIn('PREF_POS = "nexvue-scopes-pos"', js)
         self.assertIn("layoutFor", js)
         self.assertIn("sampleW: plotW", js)
         self.assertIn("nexvue-scopes-pop", js)
+        self.assertIn("z-index: 55", js)
         self.assertIn("Click to enlarge", js)
+        self.assertIn("Drag to move", js)
+        self.assertIn("clampPos", js)
+        self.assertIn("parsePos", js)
         self.assertIn("rgbToYcbcr", js)
         self.assertIn("yToIre", js)
         self.assertIn("0.2126", js)
@@ -105,6 +110,20 @@ if (pop.sampleW !== pop.plotW) throw new Error("pop sampleW");
 if (dock.wfmW !== 220 || dock.vecSize !== 140) throw new Error("dock size");
 if (pop.wfmW !== 440 || pop.vecSize !== 280) throw new Error("pop size");
 if (pop.plotW <= dock.plotW) throw new Error("pop not wider");
+if (S.parsePos(null) !== null) throw new Error("parse null");
+if (S.parsePos("nope") !== null) throw new Error("parse junk");
+if (S.parsePos('{{"left":12}}') !== null) throw new Error("parse incomplete");
+const p = S.parsePos('{{"left":40.5,"top":80}}');
+if (!p || p.left !== 40.5 || p.top !== 80) throw new Error("parse pos");
+const obj = S.parsePos({{ left: 10, top: 20 }});
+if (!obj || obj.left !== 10 || obj.top !== 20) throw new Error("parse object");
+const c = S.clampPos(-40, -10, 200, 100, 1000, 800, 8);
+if (c.left !== 8 || c.top !== 8) throw new Error("clamp low " + JSON.stringify(c));
+const d = S.clampPos(900, 750, 200, 100, 1000, 800, 8);
+if (d.left !== 792 || d.top !== 692) throw new Error("clamp high " + JSON.stringify(d));
+const tiny = S.clampPos(0, 0, 900, 700, 400, 300, 8);
+if (tiny.left !== 8 || tiny.top !== 8) throw new Error("clamp overflow " + JSON.stringify(tiny));
+if (S.DRAG_THRESHOLD !== 6) throw new Error("threshold");
 """
         r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=15)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)

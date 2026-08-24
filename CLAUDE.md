@@ -376,8 +376,9 @@ this box can't get additional ports opened.
   center target and 4:3 cut.   **Scope** (`nexvue-scopes.js`, `nexvue-scopes-on`)
   is a decoded-frame waveform (IRE) + Rec.709 vectorscope (Multiview: focused
   pane only). Click the strip to pop a ~2× page-level panel
-  (`nexvue-scopes-pop`; Esc or click docks). Both are browser-local and off
-  by default.
+  (`nexvue-scopes-pop`; Esc or click docks). The popped panel floats above
+  the Session metrics drawer and can be dragged (`nexvue-scopes-pos`).
+  Both are browser-local and off by default.
   First-visit audio defaults: volume 20%, muted. Encode always opens DeckLink
   8ch and publishes 8ch positioned Opus
   (default `AUDIO_BITRATE_BPS=384000`) tee'd to HI+LO. No 16ch path.
@@ -447,8 +448,11 @@ this box can't get additional ports opened.
  (default `main`) using `/etc/nexvue/repo.path`, then `setup.sh`. Status line
  is `vX.Y.Z · up to date` or `vX.Y.Z → vA.B.C · update available` (no SHA /
  dirty); confirm dialog shows `remote_version` + commit-subject changelog
- (`HEAD..origin/<branch>`). Semver lives in repo `VERSION`; top-nav badge via
- `nexvue-version.php` + `/var/lib/nexvue/version.json`.
+ (`HEAD..origin/<branch>`). `setup.sh` tees `/var/lib/nexvue/update-setup.log`
+ (640 www-data); failed Update JSON includes `setup_tail`; **Setup log**
+ (`update_setup_log`) shows the last run in the journal pane. Semver lives
+ in repo `VERSION`; top-nav badge via `nexvue-version.php` +
+ `/var/lib/nexvue/version.json`.
  Settings Channel list shows LO yes/no and
  **Restart all encoders** (`restart_encoders`: systemd-enabled encode slots
  only); Services has the same bulk restart. Channel editor **Factory

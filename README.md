@@ -261,7 +261,8 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   (`NEXVUE_MAIL_FROM`), else falls back to `mailto:`.
 - **Player audio defaults (first visit):** volume 20%, muted, VU meters off
   (`nexvue-vu.js` localStorage). Safe overlay and Scope are also off
-  (`nexvue-safe-on` / `nexvue-scopes-on`; enlarge is `nexvue-scopes-pop`).
+  (`nexvue-safe-on` / `nexvue-scopes-on`; enlarge is `nexvue-scopes-pop`,
+  drag position is `nexvue-scopes-pos`).
   Existing prefs unchanged.
 - **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`
   (existing station `.env` files unchanged until rewritten).
@@ -423,10 +424,14 @@ Then from a LAN machine:
   and runs `setup.sh` (`nexvue-ops-update.sh` + sudoers). Status shows
   `vX.Y.Z · up to date` or `vX.Y.Z → vA.B.C · update available`; confirming an
   update lists the commit subjects between the running clone and origin.
-  First enable requires one SSH `sudo ./setup.sh` from the clone so the helper
-  is installed; after that an admin can self-update. Does not restart encoders.
-  Top-nav shows **vX.Y.Z** from the `VERSION` file (`nexvue-version.php`).
-  Services page and `update_status` / `update_repo` are admin-only.
+  `setup.sh` writes `/var/lib/nexvue/update-setup.log` (last run; www-data
+  readable). A failed Update returns `setup_tail` (last 40 lines) in the
+  alert and journal pane; **Setup log** (`update_setup_log`) shows the full
+  file. First enable requires one SSH `sudo ./setup.sh` from the clone so the
+  helper is installed; after that an admin can self-update. Does not restart
+  encoders. Top-nav shows **vX.Y.Z** from the `VERSION` file
+  (`nexvue-version.php`). Services page and `update_status` / `update_repo`
+  / `update_setup_log` are admin-only.
 - **Settings:** top nav → Settings — optional station **logo** (Branding
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
   shown in the top nav next to **NexVUE** when present); admin-only **Public
@@ -1089,6 +1094,8 @@ expired; JWT auth is the lasting gate.
   Rec.709 vectorscope with 75% bar boxes (`nexvue-scopes.js`) sampled from
   the decoded video — confidence only, not an SDI rasterizer. Click the
   scopes to pop a ~2× panel (`nexvue-scopes-pop`; Esc or click again docks).
+  The enlarged panel is page-fixed above the Session metrics drawer and can
+  be dragged; the last position is remembered (`nexvue-scopes-pos`).
   Multiview Safe is per-pane; Scope runs on the focused pane only.
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Every UI except Settings channel setup shows the
