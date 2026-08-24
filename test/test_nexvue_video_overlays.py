@@ -40,6 +40,11 @@ class TestOverlayContracts(unittest.TestCase):
     def test_scopes_exports_rec709_and_ire(self) -> None:
         js = SCOPES.read_text(encoding="utf-8")
         self.assertIn('PREF_ON = "nexvue-scopes-on"', js)
+        self.assertIn('PREF_POP = "nexvue-scopes-pop"', js)
+        self.assertIn("layoutFor", js)
+        self.assertIn("sampleW: plotW", js)
+        self.assertIn("nexvue-scopes-pop", js)
+        self.assertIn("Click to enlarge", js)
         self.assertIn("rgbToYcbcr", js)
         self.assertIn("yToIre", js)
         self.assertIn("0.2126", js)
@@ -48,7 +53,6 @@ class TestOverlayContracts(unittest.TestCase):
         self.assertIn("NexVueScopes", js)
         self.assertIn("i += 4", js)
         self.assertNotIn("i += 16", js)
-        self.assertIn("const SAMPLE_W = PLOT_W", js)
 
     def test_player_has_safe_and_scope_toggles(self) -> None:
         html = PLAYER.read_text(encoding="utf-8")
@@ -94,6 +98,13 @@ const t = S.barTargets();
 if (t.length !== 6) throw new Error("targets " + t.length);
 const names = t.map((x) => x.name).join(",");
 if (names !== "R,Mg,B,Cy,G,Yl") throw new Error(names);
+const dock = S.layoutFor(false);
+const pop = S.layoutFor(true);
+if (dock.sampleW !== dock.plotW) throw new Error("dock sampleW");
+if (pop.sampleW !== pop.plotW) throw new Error("pop sampleW");
+if (dock.wfmW !== 220 || dock.vecSize !== 140) throw new Error("dock size");
+if (pop.wfmW !== 440 || pop.vecSize !== 280) throw new Error("pop size");
+if (pop.plotW <= dock.plotW) throw new Error("pop not wider");
 """
         r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=15)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)

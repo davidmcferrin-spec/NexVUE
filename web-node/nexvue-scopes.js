@@ -5,26 +5,50 @@
  * IRE = Y′×100 (post-browser YUV→RGB; treat as 0–100 IRE). 75% Rec.709 bar
  * boxes + skin-tone I-line on the vectorscope. Never burned into encode.
  *
- * Per-browser prefs:
- *   nexvue-scopes-on  1 | 0   (default off)
+ * Click the strip to pop a ~2× panel onto the page (escapes overflow-hidden
+ * panes). Esc or click again docks. Per-browser prefs:
+ *   nexvue-scopes-on   1 | 0   (default off)
+ *   nexvue-scopes-pop  1 | 0   (default docked)
  */
 (function (global) {
   "use strict";
 
   const PREF_ON = "nexvue-scopes-on";
-  const WFM_W = 220;
-  const WFM_H = 140;
-  const PLOT_L = 22;
-  const PLOT_R = 4;
-  const PLOT_T = 8;
-  const PLOT_B = 12;
-  const PLOT_W = WFM_W - PLOT_L - PLOT_R;
-  const PLOT_H = WFM_H - PLOT_T - PLOT_B;
-  // 1:1 with the WFM plot so every X column gets samples (no barcode gaps).
-  const SAMPLE_W = PLOT_W;
-  const SAMPLE_H = 90;
-  const VEC_SIZE = 140;
+  const PREF_POP = "nexvue-scopes-pop";
   const FADE = 0.22;
+
+  function layoutFor(pop) {
+    const wfmW = pop ? 440 : 220;
+    const wfmH = pop ? 280 : 140;
+    const plotL = pop ? 32 : 22;
+    const plotR = pop ? 8 : 4;
+    const plotT = pop ? 12 : 8;
+    const plotB = pop ? 18 : 12;
+    const plotW = wfmW - plotL - plotR;
+    const plotH = wfmH - plotT - plotB;
+    return {
+      wfmW: wfmW,
+      wfmH: wfmH,
+      plotL: plotL,
+      plotR: plotR,
+      plotT: plotT,
+      plotB: plotB,
+      plotW: plotW,
+      plotH: plotH,
+      sampleW: plotW,
+      sampleH: pop ? 140 : 90,
+      vecSize: pop ? 280 : 140,
+      font: pop ? 11 : 9,
+      box: pop ? 5 : 4,
+      vecInset: pop ? 16 : 10,
+    };
+  }
+
+  const COMPACT = layoutFor(false);
+  const SAMPLE_W = COMPACT.sampleW;
+  const SAMPLE_H = COMPACT.sampleH;
+  const PLOT_W = COMPACT.plotW;
+  const PLOT_H = COMPACT.plotH;
 
   // Rec.709 (display RGB 0–1) → Y′ / Cb / Cr (Cb/Cr centered at 0, ±0.5).
   function rgbToYcbcr(r, g, b) {
@@ -73,6 +97,8 @@
 
   function getOnPref() { return prefOn(PREF_ON, false); }
   function setOnPref(on) { setPref(PREF_ON, on); }
+  function getPopPref() { return prefOn(PREF_POP, false); }
+  function setPopPref(on) { setPref(PREF_POP, on); }
 
   function ensureStyles() {
     if (document.getElementById("nexvue-scopes-css")) return;
@@ -82,16 +108,25 @@
 .nexvue-scopes {
   position: absolute; left: 8px; bottom: 8px; z-index: 3;
   display: flex; flex-direction: row; align-items: flex-end; gap: 6px;
-  pointer-events: none;
+  pointer-events: auto; cursor: pointer;
   font: 9px/1.2 ui-monospace, "Cascadia Mono", Consolas, monospace;
   color: #d6dde6;
+  user-select: none;
 }
 .nexvue-scopes[hidden] { display: none !important; }
+.nexvue-scopes.nexvue-scopes-pop {
+  position: fixed; left: 12px; bottom: 12px; z-index: 40;
+  gap: 8px;
+  font-size: 11px;
+}
 .nexvue-scopes-pane {
   background: rgba(8, 12, 16, .78);
   border: 1px solid rgba(44, 53, 66, .9);
   border-radius: 3px;
   padding: 3px 4px 2px;
+}
+.nexvue-scopes.nexvue-scopes-pop .nexvue-scopes-pane {
+  padding: 5px 6px 4px;
 }
 .nexvue-scopes-label {
   color: #98a6b5; letter-spacing: .04em; margin-bottom: 2px;
@@ -110,28 +145,35 @@
     return c;
   }
 
-  function drawWfmGraticule(ctx) {
+  function resizeCanvas(c, w, h) {
+    if (c.width !== w) c.width = w;
+    if (c.height !== h) c.height = h;
+    c.style.width = w + "px";
+    c.style.height = h + "px";
+  }
+
+  function drawWfmGraticule(ctx, L) {
     ctx.save();
     ctx.strokeStyle = "rgba(214,221,230,.28)";
     ctx.fillStyle = "rgba(176,187,200,.7)";
     ctx.lineWidth = 1;
-    ctx.font = "9px ui-monospace, Cascadia Mono, Consolas, monospace";
+    ctx.font = L.font + "px ui-monospace, Cascadia Mono, Consolas, monospace";
     [0, 50, 100].forEach(function (ire) {
-      const y = PLOT_T + PLOT_H - (ire / 100) * PLOT_H;
+      const y = L.plotT + L.plotH - (ire / 100) * L.plotH;
       ctx.beginPath();
-      ctx.moveTo(PLOT_L, y);
-      ctx.lineTo(WFM_W - PLOT_R, y);
+      ctx.moveTo(L.plotL, y);
+      ctx.lineTo(L.wfmW - L.plotR, y);
       ctx.stroke();
       ctx.fillText(String(ire), 2, y + 3);
     });
-    ctx.fillText("IRE", 2, 10);
+    ctx.fillText("IRE", 2, L.font + 2);
     ctx.restore();
   }
 
-  function drawVecGraticule(ctx, targets) {
-    const cx = VEC_SIZE / 2;
-    const cy = VEC_SIZE / 2;
-    const r = VEC_SIZE / 2 - 10;
+  function drawVecGraticule(ctx, targets, L) {
+    const cx = L.vecSize / 2;
+    const cy = L.vecSize / 2;
+    const r = L.vecSize / 2 - L.vecInset;
     ctx.save();
     ctx.strokeStyle = "rgba(214,221,230,.28)";
     ctx.lineWidth = 1;
@@ -151,11 +193,12 @@
     ctx.moveTo(cx - Math.cos(ang) * r, cy + Math.sin(ang) * r);
     ctx.lineTo(cx + Math.cos(ang) * r, cy - Math.sin(ang) * r);
     ctx.stroke();
+    const box = L.box;
     targets.forEach(function (t) {
       const x = cx + t.cb * 2 * r;
       const y = cy - t.cr * 2 * r;
       ctx.strokeStyle = t.color;
-      ctx.strokeRect(x - 4, y - 4, 8, 8);
+      ctx.strokeRect(x - box, y - box, box * 2, box * 2);
     });
     ctx.restore();
   }
@@ -172,9 +215,12 @@
     if (!container || !video) return null;
 
     const targets = barTargets();
+    let L = layoutFor(false);
     const root = document.createElement("div");
     root.className = "nexvue-scopes";
     root.hidden = true;
+    root.setAttribute("role", "button");
+    root.setAttribute("tabindex", "0");
     root.innerHTML =
       '<div class="nexvue-scopes-pane">' +
       '<div class="nexvue-scopes-label">WFM · IRE</div>' +
@@ -183,8 +229,8 @@
       '<div class="nexvue-scopes-label">VEC · 75%</div>' +
       "</div>";
     const panes = root.querySelectorAll(".nexvue-scopes-pane");
-    const wfm = makeCanvas(WFM_W, WFM_H);
-    const vec = makeCanvas(VEC_SIZE, VEC_SIZE);
+    const wfm = makeCanvas(L.wfmW, L.wfmH);
+    const vec = makeCanvas(L.vecSize, L.vecSize);
     panes[0].appendChild(wfm);
     panes[1].appendChild(vec);
     container.appendChild(root);
@@ -192,39 +238,58 @@
     const wfmCtx = wfm.getContext("2d", { alpha: false });
     const vecCtx = vec.getContext("2d", { alpha: false });
     const wfmTrace = document.createElement("canvas");
-    wfmTrace.width = WFM_W;
-    wfmTrace.height = WFM_H;
     const wfmTraceCtx = wfmTrace.getContext("2d", { alpha: false });
     const vecTrace = document.createElement("canvas");
-    vecTrace.width = VEC_SIZE;
-    vecTrace.height = VEC_SIZE;
     const vecTraceCtx = vecTrace.getContext("2d", { alpha: false });
     const sample = document.createElement("canvas");
-    sample.width = SAMPLE_W;
-    sample.height = SAMPLE_H;
     const sampleCtx = sample.getContext("2d", { willReadFrequently: true, alpha: false });
 
     let visible = opts.visible !== undefined ? !!opts.visible : getOnPref();
+    let popped = getPopPref();
     let running = false;
     let handle = 0;
     let usingRaf = false;
 
+    function dockHost() {
+      return document.body || container;
+    }
+
+    function applyHost() {
+      const host = popped && visible ? dockHost() : container;
+      if (host && root.parentNode !== host) host.appendChild(root);
+      root.classList.toggle("nexvue-scopes-pop", !!(popped && visible));
+      root.title = popped ? "Click to dock · Esc" : "Click to enlarge";
+      root.setAttribute("aria-pressed", popped ? "true" : "false");
+      root.setAttribute("aria-label", popped ? "Dock waveform and vectorscope" : "Enlarge waveform and vectorscope");
+    }
+
+    function applyLayout() {
+      L = layoutFor(popped);
+      resizeCanvas(wfm, L.wfmW, L.wfmH);
+      resizeCanvas(vec, L.vecSize, L.vecSize);
+      resizeCanvas(wfmTrace, L.wfmW, L.wfmH);
+      resizeCanvas(vecTrace, L.vecSize, L.vecSize);
+      resizeCanvas(sample, L.sampleW, L.sampleH);
+      applyHost();
+      clearScopes();
+    }
+
     function clearTraces() {
       wfmTraceCtx.fillStyle = "#0b1014";
-      wfmTraceCtx.fillRect(0, 0, WFM_W, WFM_H);
+      wfmTraceCtx.fillRect(0, 0, L.wfmW, L.wfmH);
       vecTraceCtx.fillStyle = "#0b1014";
-      vecTraceCtx.fillRect(0, 0, VEC_SIZE, VEC_SIZE);
+      vecTraceCtx.fillRect(0, 0, L.vecSize, L.vecSize);
     }
 
     function paintDisplay() {
       wfmCtx.fillStyle = "#0b1014";
-      wfmCtx.fillRect(0, 0, WFM_W, WFM_H);
+      wfmCtx.fillRect(0, 0, L.wfmW, L.wfmH);
       wfmCtx.drawImage(wfmTrace, 0, 0);
-      drawWfmGraticule(wfmCtx);
+      drawWfmGraticule(wfmCtx, L);
       vecCtx.fillStyle = "#0b1014";
-      vecCtx.fillRect(0, 0, VEC_SIZE, VEC_SIZE);
+      vecCtx.fillRect(0, 0, L.vecSize, L.vecSize);
       vecCtx.drawImage(vecTrace, 0, 0);
-      drawVecGraticule(vecCtx, targets);
+      drawVecGraticule(vecCtx, targets, L);
     }
 
     function clearScopes() {
@@ -235,29 +300,29 @@
     function sampleFrame() {
       if (!visible || video.readyState < 2 || !video.videoWidth) return;
       try {
-        sampleCtx.drawImage(video, 0, 0, SAMPLE_W, SAMPLE_H);
+        sampleCtx.drawImage(video, 0, 0, L.sampleW, L.sampleH);
       } catch (e) {
         return;
       }
       let data;
       try {
-        data = sampleCtx.getImageData(0, 0, SAMPLE_W, SAMPLE_H).data;
+        data = sampleCtx.getImageData(0, 0, L.sampleW, L.sampleH).data;
       } catch (e) {
         return;
       }
 
       wfmTraceCtx.fillStyle = "rgba(11,16,20," + FADE + ")";
-      wfmTraceCtx.fillRect(0, 0, WFM_W, WFM_H);
+      wfmTraceCtx.fillRect(0, 0, L.wfmW, L.wfmH);
       vecTraceCtx.fillStyle = "rgba(11,16,20," + FADE + ")";
-      vecTraceCtx.fillRect(0, 0, VEC_SIZE, VEC_SIZE);
+      vecTraceCtx.fillRect(0, 0, L.vecSize, L.vecSize);
 
-      const vcx = VEC_SIZE / 2;
-      const vcy = VEC_SIZE / 2;
-      const vr = VEC_SIZE / 2 - 10;
+      const vcx = L.vecSize / 2;
+      const vcy = L.vecSize / 2;
+      const vr = L.vecSize / 2 - L.vecInset;
 
-      const wfmImg = wfmTraceCtx.getImageData(0, 0, WFM_W, WFM_H);
+      const wfmImg = wfmTraceCtx.getImageData(0, 0, L.wfmW, L.wfmH);
       const wfmD = wfmImg.data;
-      const vecImg = vecTraceCtx.getImageData(0, 0, VEC_SIZE, VEC_SIZE);
+      const vecImg = vecTraceCtx.getImageData(0, 0, L.vecSize, L.vecSize);
       const vecD = vecImg.data;
 
       for (let i = 0; i < data.length; i += 4) {
@@ -265,12 +330,12 @@
         const g = data[i + 1] / 255;
         const b = data[i + 2] / 255;
         const ycc = rgbToYcbcr(r, g, b);
-        const px = (i / 4) % SAMPLE_W;
-        const x = PLOT_L + px;
+        const px = (i / 4) % L.sampleW;
+        const x = L.plotL + px;
         const ire = Math.max(0, Math.min(100, yToIre(ycc.y)));
-        const y = PLOT_T + PLOT_H - 1 - Math.floor((ire / 100) * (PLOT_H - 1));
-        if (x >= PLOT_L && x < PLOT_L + PLOT_W && y >= PLOT_T && y < PLOT_T + PLOT_H) {
-          const o = (y * WFM_W + x) * 4;
+        const y = L.plotT + L.plotH - 1 - Math.floor((ire / 100) * (L.plotH - 1));
+        if (x >= L.plotL && x < L.plotL + L.plotW && y >= L.plotT && y < L.plotT + L.plotH) {
+          const o = (y * L.wfmW + x) * 4;
           wfmD[o] = Math.min(255, wfmD[o] + 50);
           wfmD[o + 1] = Math.min(255, wfmD[o + 1] + 160);
           wfmD[o + 2] = Math.min(255, wfmD[o + 2] + 95);
@@ -278,8 +343,8 @@
         }
         const vx = Math.round(vcx + ycc.cb * 2 * vr);
         const vy = Math.round(vcy - ycc.cr * 2 * vr);
-        if (vx >= 0 && vx < VEC_SIZE && vy >= 0 && vy < VEC_SIZE) {
-          const o = (vy * VEC_SIZE + vx) * 4;
+        if (vx >= 0 && vx < L.vecSize && vy >= 0 && vy < L.vecSize) {
+          const o = (vy * L.vecSize + vx) * 4;
           vecD[o] = Math.min(255, vecD[o] + data[i] * 0.55 + 40);
           vecD[o + 1] = Math.min(255, vecD[o + 1] + data[i + 1] * 0.55 + 40);
           vecD[o + 2] = Math.min(255, vecD[o + 2] + data[i + 2] * 0.55 + 40);
@@ -328,10 +393,60 @@
 
     function applyVisible() {
       root.hidden = !visible;
+      applyHost();
       if (visible) startLoop();
       else stopLoop();
     }
 
+    function setPopped(on) {
+      on = !!on;
+      if (popped === on) {
+        applyHost();
+        return;
+      }
+      popped = on;
+      setPopPref(popped);
+      applyLayout();
+    }
+
+    function togglePopped() {
+      setPopped(!popped);
+    }
+
+    function onPointer(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+
+    function onClick(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      togglePopped();
+    }
+
+    function onKey(ev) {
+      if (ev.key === "Enter" || ev.key === " ") {
+        if (ev.target !== root) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        togglePopped();
+        return;
+      }
+      if (ev.key !== "Escape") return;
+      if (!popped || !visible) return;
+      if (document.querySelector("dialog[open]")) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
+      setPopped(false);
+    }
+
+    root.addEventListener("pointerdown", onPointer);
+    root.addEventListener("click", onClick);
+    root.addEventListener("dblclick", onPointer);
+    document.addEventListener("keydown", onKey, true);
+
+    applyLayout();
     applyVisible();
 
     return {
@@ -340,8 +455,11 @@
         applyVisible();
       },
       isVisible: function () { return visible; },
+      setPopped: setPopped,
+      isPopped: function () { return popped; },
       destroy: function () {
         stopLoop();
+        document.removeEventListener("keydown", onKey, true);
         if (root.parentNode) root.parentNode.removeChild(root);
       },
     };
@@ -349,16 +467,20 @@
 
   global.NexVueScopes = {
     PREF_ON,
+    PREF_POP,
     SAMPLE_W,
     SAMPLE_H,
     PLOT_W,
     PLOT_H,
     BAR75,
+    layoutFor,
     rgbToYcbcr,
     yToIre,
     barTargets,
     getOnPref,
     setOnPref,
+    getPopPref,
+    setPopPref,
     attach,
   };
 })(typeof window !== "undefined" ? window : globalThis);

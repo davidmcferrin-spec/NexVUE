@@ -261,7 +261,8 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   (`NEXVUE_MAIL_FROM`), else falls back to `mailto:`.
 - **Player audio defaults (first visit):** volume 20%, muted, VU meters off
   (`nexvue-vu.js` localStorage). Safe overlay and Scope are also off
-  (`nexvue-safe-on` / `nexvue-scopes-on`). Existing prefs unchanged.
+  (`nexvue-safe-on` / `nexvue-scopes-on`; enlarge is `nexvue-scopes-pop`).
+  Existing prefs unchanged.
 - **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`
   (existing station `.env` files unchanged until rewritten).
 - **MediaMTX:** `authMethod: jwt`, JWKS at
@@ -1086,8 +1087,9 @@ expired; JWT auth is the lasting gate.
   boxes (90% / 93%) plus an optional center target and 4:3 center-cut
   (`nexvue-safe.js`). **Scope** is a player-local luma waveform (IRE) and
   Rec.709 vectorscope with 75% bar boxes (`nexvue-scopes.js`) sampled from
-  the decoded video — confidence only, not an SDI rasterizer. Multiview
-  Safe is per-pane; Scope runs on the focused pane only.
+  the decoded video — confidence only, not an SDI rasterizer. Click the
+  scopes to pop a ~2× panel (`nexvue-scopes-pop`; Esc or click again docks).
+  Multiview Safe is per-pane; Scope runs on the focused pane only.
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Every UI except Settings channel setup shows the
   alias when set (Player, Multiview, Users, share dialogs, Metrics, Services,

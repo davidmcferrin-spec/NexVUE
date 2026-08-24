@@ -373,9 +373,11 @@ this box can't get additional ports opened.
   (Web Audio on the WHEP MediaStream). Top-bar **VU** toggle (like CC)
   shows/hides the meter overlay (`localStorage.nexvue-vu-on`, default off).
   **Safe** (`nexvue-safe.js`, `nexvue-safe-on`) is HD title/action + optional
-  center target and 4:3 cut. **Scope** (`nexvue-scopes.js`, `nexvue-scopes-on`)
+  center target and 4:3 cut.   **Scope** (`nexvue-scopes.js`, `nexvue-scopes-on`)
   is a decoded-frame waveform (IRE) + Rec.709 vectorscope (Multiview: focused
-  pane only). Both are browser-local and off by default.
+  pane only). Click the strip to pop a ~2× page-level panel
+  (`nexvue-scopes-pop`; Esc or click docks). Both are browser-local and off
+  by default.
   First-visit audio defaults: volume 20%, muted. Encode always opens DeckLink
   8ch and publishes 8ch positioned Opus
   (default `AUDIO_BITRATE_BPS=384000`) tee'd to HI+LO. No 16ch path.
