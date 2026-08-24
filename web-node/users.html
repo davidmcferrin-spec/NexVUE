@@ -234,17 +234,36 @@
 <script>
 (async function () {
   const user = await NexVueAuth.requirePage({ roles: ["admin"] });
+  if (window.NexVueUI && NexVueUI.loadChannelAliases) {
+    await NexVueUI.loadChannelAliases();
+  }
 
   const chGrid = document.getElementById("share-channels");
   const userChGrid = document.getElementById("user-channels");
-  for (let i = 0; i < 8; i++) {
-    const lab = document.createElement("label");
-    lab.innerHTML = `<input type="checkbox" value="ch${i}"> ch${i}`;
-    chGrid.appendChild(lab);
-    const ulab = document.createElement("label");
-    ulab.innerHTML = `<input type="checkbox" value="ch${i}"> ch${i}`;
-    userChGrid.appendChild(ulab);
+
+  function paintChannelGrid(grid) {
+    const checked = {};
+    grid.querySelectorAll("input").forEach(function (c) {
+      checked[c.value] = c.checked;
+    });
+    grid.innerHTML = "";
+    for (let i = 0; i < 8; i++) {
+      const path = "ch" + i;
+      const lab = document.createElement("label");
+      const text = (window.NexVueUI && NexVueUI.channelLabel)
+        ? NexVueUI.channelLabel(path)
+        : path;
+      const tip = (window.NexVueUI && NexVueUI.channelTitle)
+        ? NexVueUI.channelTitle(path)
+        : path;
+      lab.title = tip;
+      lab.innerHTML = `<input type="checkbox" value="${path}"> ${esc(text)}`;
+      if (checked[path]) lab.querySelector("input").checked = true;
+      grid.appendChild(lab);
+    }
   }
+  paintChannelGrid(chGrid);
+  paintChannelGrid(userChGrid);
 
   function setUserChannelChecks(channels) {
     const all = channels == null;
@@ -264,6 +283,9 @@
   }
 
   function channelsLabel(channels) {
+    if (window.NexVueUI && NexVueUI.channelLabels) {
+      return NexVueUI.channelLabels(channels);
+    }
     if (channels == null) return "all";
     if (!Array.isArray(channels) || channels.length === 0) return "—";
     return channels.join(", ");
@@ -445,7 +467,7 @@
     (data.shares || []).forEach(function (s) {
       const tr = document.createElement("tr");
       const who = s.created_by_username || s.created_by || "—";
-      tr.innerHTML = `<td>${esc(s.name)}</td><td>${esc((s.channels || []).join(", "))}</td><td>${esc(s.expires_at)}</td><td>${esc(who)}</td><td class="status-${esc(s.status)}">${esc(s.status)}</td><td class="share-row-actions"></td>`;
+      tr.innerHTML = `<td>${esc(s.name)}</td><td>${esc(channelsLabel(s.channels || []))}</td><td>${esc(s.expires_at)}</td><td>${esc(who)}</td><td class="status-${esc(s.status)}">${esc(s.status)}</td><td class="share-row-actions"></td>`;
       const td = tr.lastElementChild;
       if (s.url && s.status === "active") {
         td.appendChild(btn("Copy", function () {

@@ -358,7 +358,10 @@ this box can't get additional ports opened.
   (Users+Services+Settings including Public reachability + Certificates + Cloudflare TURN + Cloudflare Stream + Metrics+all shares), operator (Settings+Metrics; no Public reachability, Certificates, Cloudflare TURN, or Cloudflare Stream),
   sharer / UI **Viewer+Share** (watch + own share links via Player/Multiview
   Share), viewer (watch). Per-user channel ACL on Users (`users.channels`;
-  null = all). MediaMTX JWT via local JWKS; encoders use `NEXVUE_PUBLISH_JWT`.
+  null = all). UIs show `CHANNEL_ALIAS` everywhere except Settings channel
+  setup (Path / `DEVICE_NUMBER` stay identity); ACL, WHEP, MediaMTX, and
+  systemd still use `chN`. MediaMTX JWT via local JWKS; encoders use
+  `NEXVUE_PUBLISH_JWT`.
   Player/Multiview tool bars are clustered (quality, listen, overlays,
   window icons pinned right). Player **Orient ▾** is a popover for
   mirror/flip/rotate + Reset (parent `.active` while any transform is on).

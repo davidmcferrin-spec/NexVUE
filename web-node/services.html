@@ -224,6 +224,13 @@
 (async () => {
   const authUser = await NexVueAuth.requirePage({ roles: ["admin"] });
   const isAdmin = !!(authUser && authUser.role === "admin");
+  if (window.NexVueUI && NexVueUI.loadChannelAliases) {
+    await NexVueUI.loadChannelAliases();
+  }
+
+  function escHtml(s) {
+    return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
   const listEl = document.getElementById("unit-list");
   const logEl = document.getElementById("log");
   const statusEl = document.getElementById("status");
@@ -302,7 +309,11 @@
         const b = document.createElement("button");
         b.type = "button";
         b.className = "unit" + (keep === s.unit ? " selected" : "");
-        b.innerHTML = `<div class="name">${s.unit}</div><div class="state ${stateClass(s.state, s.enabled)}">${stateText(s)}</div>`;
+        b.dataset.unit = s.unit;
+        const name = (window.NexVueUI && NexVueUI.unitLabel)
+          ? NexVueUI.unitLabel(s.unit)
+          : s.unit;
+        b.innerHTML = `<div class="name">${escHtml(name)}</div><div class="state ${stateClass(s.state, s.enabled)}">${stateText(s)}</div>`;
         b.addEventListener("click", () => selectUnit(s.unit));
         listEl.appendChild(b);
       }
@@ -325,7 +336,7 @@
     sinceCursor = "";
     logEl.textContent = "";
     [...listEl.querySelectorAll(".unit")].forEach(el => {
-      el.classList.toggle("selected", el.querySelector(".name").textContent === unit);
+      el.classList.toggle("selected", el.dataset.unit === unit);
     });
     restartBtn.disabled = false;
     clearJournalBtn.disabled = false;

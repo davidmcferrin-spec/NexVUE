@@ -1089,8 +1089,11 @@ expired; JWT auth is the lasting gate.
   the decoded video — confidence only, not an SDI rasterizer. Multiview
   Safe is per-pane; Scope runs on the focused pane only.
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
-  `channels-example.env`). Player and Multiview show the alias when set;
-  WHEP still uses `CHANNEL_PATH` (`ch0`, …). Edit aliases on the Settings page.
+  `channels-example.env`). Every UI except Settings channel setup shows the
+  alias when set (Player, Multiview, Users, share dialogs, Metrics, Services,
+  portal catalog/watch). Settings keeps Path + Alias columns so operators can
+  edit identity. WHEP, ACL, MediaMTX, and systemd still use `CHANNEL_PATH`
+  (`ch0`, …). Edit aliases on the Settings page.
   Encode **always** opens DeckLink 8ch and publishes **8ch positioned Opus**
   (default `AUDIO_BITRATE_BPS=384000`) to HI and LO (one Opus encode, tee'd).
   Per-branch mono `channel-mask` through deinterleave/interleave is required:

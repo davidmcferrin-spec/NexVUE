@@ -67,6 +67,7 @@
   const stationId = params.get("station") || "";
   const channel = (params.get("channel") || "").toLowerCase();
   const stationName = params.get("name") || "";
+  const alias = params.get("alias") || "";
   const video = document.getElementById("video");
   const stateEl = document.getElementById("state");
   let pc = null;
@@ -81,7 +82,8 @@
       setState("missing station/channel", "bad");
       return;
     }
-    document.getElementById("title").textContent = (stationName || stationId) + " — " + channel;
+    document.getElementById("title").textContent =
+      (stationName || stationId) + " — " + (alias || channel);
     document.getElementById("meta").textContent = "station " + stationId;
 
     let jwtResp;

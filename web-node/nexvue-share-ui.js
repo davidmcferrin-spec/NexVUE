@@ -294,11 +294,34 @@
         return /^ch[0-7]$/.test(c) && arr.indexOf(c) === idx;
       })
       .sort();
-    allowed.forEach(function (c) {
-      var lab = document.createElement("label");
-      lab.innerHTML = '<input type="checkbox" value="' + esc(c) + '"> ' + esc(c);
-      chBox.appendChild(lab);
-    });
+    function chLabel(path) {
+      return global.NexVueUI && NexVueUI.channelLabel
+        ? NexVueUI.channelLabel(path)
+        : path;
+    }
+
+    function chTitle(path) {
+      return global.NexVueUI && NexVueUI.channelTitle
+        ? NexVueUI.channelTitle(path)
+        : path;
+    }
+
+    function paintShareChecks() {
+      var checked = {};
+      chBox.querySelectorAll("input").forEach(function (inp) {
+        checked[inp.value] = inp.checked;
+      });
+      chBox.innerHTML = "";
+      allowed.forEach(function (c) {
+        var lab = document.createElement("label");
+        lab.title = chTitle(c);
+        lab.innerHTML =
+          '<input type="checkbox" value="' + esc(c) + '"> ' + esc(chLabel(c));
+        if (checked[c]) lab.querySelector("input").checked = true;
+        chBox.appendChild(lab);
+      });
+      syncChannelMax();
+    }
 
     var maxShareChannels = page === "multiview" ? 4 : 0; // 0 = no cap
 
@@ -326,6 +349,14 @@
       }
       syncChannelMax();
     });
+
+    paintShareChecks();
+    if (global.NexVueUI && NexVueUI.loadChannelAliases) {
+      NexVueUI.loadChannelAliases().then(function () {
+        paintShareChecks();
+        if (dlg.open) loadList();
+      });
+    }
 
     function setDefaults() {
       var defaults = (getDefaultChannels() || []).map(basePath);
@@ -369,7 +400,11 @@
               "<td>" +
               esc(s.name) +
               "</td><td>" +
-              esc((s.channels || []).join(", ")) +
+              esc(
+                global.NexVueUI && NexVueUI.channelLabels
+                  ? NexVueUI.channelLabels(s.channels || [])
+                  : (s.channels || []).join(", ")
+              ) +
               "</td><td>" +
               esc(s.expires_at) +
               "</td><td>" +

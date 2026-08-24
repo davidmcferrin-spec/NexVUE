@@ -1373,7 +1373,9 @@
     for (let i = 0; i < 8; i++) {
       const path = `ch${i}`;
       if (!NexVueAuth.channelAllowed(path, authUser)) continue;
-      const label = aliases[path] || aliases[String(i)] || path;
+      const label = (window.NexVueUI && NexVueUI.channelLabel)
+        ? NexVueUI.channelLabel(path, aliases)
+        : (aliases[path] || aliases[String(i)] || path);
       const device = (devices && Number.isFinite(devices[path]))
         ? devices[path]
         : i;
@@ -1382,7 +1384,9 @@
       b.dataset.path = path;
       b.dataset.device = String(device);
       b.textContent = label;
-      b.title = path === label ? path : `${label} (${path})`;
+      b.title = (window.NexVueUI && NexVueUI.channelTitle)
+        ? NexVueUI.channelTitle(path, aliases)
+        : (path === label ? path : `${label} (${path})`);
       if (prevActive === path) b.classList.add("active");
       b.addEventListener("click", () => connectChannel(path, b));
       host.appendChild(b);
@@ -1398,7 +1402,12 @@
         credentials: "same-origin",
       });
       const data = await res.json();
-      if (data && data.ok && data.aliases) aliases = data.aliases;
+      if (data && data.ok && data.aliases) {
+        aliases = data.aliases;
+        if (window.NexVueUI && NexVueUI.setChannelAliases) {
+          NexVueUI.setChannelAliases(aliases);
+        }
+      }
       if (data && data.ok && data.devices) devices = data.devices;
       if (data && data.ok && data.audio_layouts) {
         audioLayoutByPath = data.audio_layouts;

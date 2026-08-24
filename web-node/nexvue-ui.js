@@ -453,6 +453,102 @@
     loadVersion();
   }
 
+  // CHANNEL_ALIAS display — path (chN / chNlo) stays identity for ACL, WHEP,
+  // MediaMTX, and systemd. Empty alias falls back to the path. LO renditions
+  // append " LO" to the base-channel label.
+  var _aliasCache = {};
+  var _aliasPromise = null;
+
+  function channelBase(path) {
+    var s = String(path == null ? "" : path).trim().toLowerCase();
+    var m = s.match(/^ch([0-7])(?:lo)?$/);
+    if (m) return "ch" + m[1];
+    m = s.match(/^([0-7])$/);
+    if (m) return "ch" + m[1];
+    return s;
+  }
+
+  function channelLabel(path, aliases) {
+    var raw = String(path == null ? "" : path).trim();
+    if (!raw) return "";
+    var base = channelBase(raw);
+    var map = aliases || _aliasCache;
+    var alias = "";
+    if (map && typeof map === "object") {
+      alias = map[base] || map[String(base).replace(/^ch/, "")] || "";
+    }
+    var label = alias || base || raw;
+    if (/^ch[0-7]lo$/i.test(raw.replace(/\s+/g, ""))) {
+      return label + " LO";
+    }
+    return label;
+  }
+
+  function channelTitle(path, aliases) {
+    var raw = String(path == null ? "" : path).trim();
+    if (!raw) return "";
+    var label = channelLabel(raw, aliases);
+    if (label === raw) return raw;
+    return label + " (" + raw + ")";
+  }
+
+  function channelLabels(list, aliases) {
+    if (list == null) return "all";
+    if (!Array.isArray(list) || !list.length) return "—";
+    return list
+      .map(function (c) {
+        return channelLabel(c, aliases);
+      })
+      .join(", ");
+  }
+
+  function unitLabel(unit, aliases) {
+    var u = String(unit == null ? "" : unit);
+    var m = u.match(/^nexvue-encode@([0-7])$/);
+    if (!m) return u;
+    var path = "ch" + m[1];
+    var lab = channelLabel(path, aliases);
+    if (!lab || lab === path) return u;
+    return u + " (" + lab + ")";
+  }
+
+  function getChannelAliases() {
+    return _aliasCache;
+  }
+
+  function setChannelAliases(map) {
+    if (map && typeof map === "object") {
+      _aliasCache = map;
+    }
+    return _aliasCache;
+  }
+
+  function loadChannelAliases(force) {
+    if (force) _aliasPromise = null;
+    if (_aliasPromise) return _aliasPromise;
+    if (typeof global.fetch !== "function") {
+      return Promise.resolve(_aliasCache);
+    }
+    _aliasPromise = global
+      .fetch("/api/ops?action=aliases", {
+        cache: "no-store",
+        credentials: "same-origin",
+      })
+      .then(function (res) {
+        return res.json();
+      })
+      .then(function (data) {
+        if (data && data.ok && data.aliases && typeof data.aliases === "object") {
+          _aliasCache = data.aliases;
+        }
+        return _aliasCache;
+      })
+      .catch(function () {
+        return _aliasCache;
+      });
+    return _aliasPromise;
+  }
+
   onReady(function () {
     syncToggle();
     var btn = global.document.getElementById("theme-toggle");
@@ -491,6 +587,14 @@
     requestPip: requestPip,
     exitPip: exitPip,
     togglePip: togglePip,
+    channelBase: channelBase,
+    channelLabel: channelLabel,
+    channelTitle: channelTitle,
+    channelLabels: channelLabels,
+    unitLabel: unitLabel,
+    getChannelAliases: getChannelAliases,
+    setChannelAliases: setChannelAliases,
+    loadChannelAliases: loadChannelAliases,
     STORAGE_KEY: STORAGE_KEY,
     ROTATE_KEY: ROTATE_KEY,
     THEATER_KEY: THEATER_KEY,

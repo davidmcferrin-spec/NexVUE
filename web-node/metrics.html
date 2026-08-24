@@ -286,7 +286,7 @@
       <tr class="viewer-filters">
         <th><input type="search" data-filter="status" placeholder="live / ended" aria-label="Filter status" autocomplete="off" spellcheck="false"></th>
         <th><input type="search" data-filter="ip" placeholder="IP text /regex/" aria-label="Filter IP address" autocomplete="off" spellcheck="false"></th>
-        <th><input type="search" data-filter="channel" placeholder="ch0 /regex/" aria-label="Filter channel" autocomplete="off" spellcheck="false"></th>
+        <th><input type="search" data-filter="channel" placeholder="alias or ch0" aria-label="Filter channel" autocomplete="off" spellcheck="false"></th>
         <th></th>
         <th></th>
         <th></th>
@@ -334,6 +334,18 @@
 "use strict";
 (async () => {
   await NexVueAuth.requirePage({ roles: ["admin", "operator"] });
+  if (window.NexVueUI && NexVueUI.loadChannelAliases) {
+    await NexVueUI.loadChannelAliases();
+  }
+  function escHtml(s) {
+    return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function chLabel(path) {
+    return (window.NexVueUI && NexVueUI.channelLabel) ? NexVueUI.channelLabel(path) : String(path || "");
+  }
+  function chTitle(path) {
+    return (window.NexVueUI && NexVueUI.channelTitle) ? NexVueUI.channelTitle(path) : String(path || "");
+  }
   const stateEl = document.getElementById("state");
   let range = "24h";
   let customFrom = null;  // unix seconds, or null when using presets
@@ -892,7 +904,7 @@
     if (rows.length === 0) { tbody.innerHTML = ""; empty.style.display = "block"; return; }
     empty.style.display = "none";
     tbody.innerHTML = rows.map(r => `<tr>
-      <td>${r.channel}</td>
+      <td title="${escAttr(chTitle(r.channel))}">${escHtml(chLabel(r.channel))}</td>
       <td class="num">${fmtBps(r.avg_bandwidth_bps)}</td>
       <td class="num">${fmtBps(r.peak_bandwidth_bps)}</td>
       <td class="num">${Number(r.avg_readers).toFixed(1)}</td>
@@ -909,10 +921,14 @@
     for (const ch of knownChannels) {
       if (!existing.has(ch)) {
         const opt = document.createElement("option");
-        opt.value = ch; opt.textContent = ch;
+        opt.value = ch;
+        opt.textContent = chLabel(ch);
         channelFilterEl.appendChild(opt);
       }
     }
+    [...channelFilterEl.options].forEach(opt => {
+      if (opt.value) opt.textContent = chLabel(opt.value);
+    });
     channelFilterEl.value = current;
   }
 
@@ -1058,7 +1074,7 @@
   }
 
   async function kickViewer(sessionId, ip, channel) {
-    const label = `${ip || "?"} / ${channel || "?"}`;
+    const label = `${ip || "?"} / ${chLabel(channel) || "?"}`;
     if (!confirm(
       `Kick viewer ${label}?\n\n` +
       `They will see a disconnect message and auto-reconnect will stop.\n` +
@@ -1124,7 +1140,7 @@
       return `<tr>
         <td><span class="dot ${dotClass}"></span>${r.active ? "live" : "ended"}</td>
         <td>${ip}</td>
-        <td>${r.channel}</td>
+        <td title="${escAttr(chTitle(r.channel))}">${escHtml(chLabel(r.channel))}</td>
         <td>${r.user || "—"}</td>
         <td>${fmtTime(r.first_seen * 1000)}</td>
         <td>${fmtTime(r.last_seen * 1000)}</td>

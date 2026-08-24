@@ -1422,6 +1422,9 @@
       });
       const data = await res.json();
       if (!data || !data.ok || !data.aliases) return;
+      if (window.NexVueUI && NexVueUI.setChannelAliases) {
+        NexVueUI.setChannelAliases(data.aliases);
+      }
       if (data.audio_layouts) {
         audioLayoutByPath = data.audio_layouts;
       } else if (data.audio_channels) {
@@ -1434,8 +1437,13 @@
       panes.forEach(p => {
         [...p.select.options].forEach(opt => {
           if (!opt.value) return;
-          const label = data.aliases[opt.value] || data.aliases[opt.value.replace(/\D/g, "")];
-          if (label) opt.textContent = label === opt.value ? opt.value : `${label} (${opt.value})`;
+          const label = (window.NexVueUI && NexVueUI.channelLabel)
+            ? NexVueUI.channelLabel(opt.value, data.aliases)
+            : (data.aliases[opt.value] || data.aliases[opt.value.replace(/\D/g, "")] || opt.value);
+          const title = (window.NexVueUI && NexVueUI.channelTitle)
+            ? NexVueUI.channelTitle(opt.value, data.aliases)
+            : (label === opt.value ? opt.value : `${label} (${opt.value})`);
+          opt.textContent = title;
         });
         if (p.base && p.vu) {
           p.vu.setLayout(audioLayoutByPath[p.base] || "51_sap");

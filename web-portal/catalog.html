@@ -83,7 +83,8 @@
         a.className = "ch-btn";
         a.href = "/watch?station=" + encodeURIComponent(s.id) +
           "&channel=" + encodeURIComponent(ch.channel_base) +
-          "&name=" + encodeURIComponent(s.name);
+          "&name=" + encodeURIComponent(s.name) +
+          "&alias=" + encodeURIComponent(ch.alias || ch.channel_base);
         a.textContent = ch.alias || ch.channel_base;
         row.appendChild(a);
       }
