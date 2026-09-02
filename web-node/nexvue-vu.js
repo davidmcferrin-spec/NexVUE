@@ -333,8 +333,8 @@
     s.textContent = `
 .nexvue-vu {
   position: absolute; top: 8px; bottom: 8px; right: 8px; z-index: 3;
-  display: flex; flex-direction: column; align-items: stretch; gap: 4px;
-  width: auto; max-width: 48%; pointer-events: auto;
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+  width: min-content; max-width: 48%; pointer-events: auto;
   font: 10px/1.2 ui-monospace, "Cascadia Mono", Consolas, monospace;
   color: var(--text, #d6dde6);
 }
@@ -377,6 +377,7 @@
   flex: 1; min-height: 0; display: flex; flex-direction: row;
   align-items: stretch; gap: 3px; justify-content: flex-end;
   width: max-content; max-width: 100%; margin-left: auto;
+  padding-top: 6px;
 }
 .nexvue-vu-scale {
   position: relative; width: 30px; flex: 0 0 30px;
