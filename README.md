@@ -1114,9 +1114,9 @@ expired; JWT auth is the lasting gate.
   in-flow so iOS Chrome's toolbar does not detach it);
   Multiview focuses the audio-active pane. Hover a tile ~2s for
   an explainer. **VU meters** follow channel `AUDIO_LAYOUT`
-  (stereo / 5.1 / stereo+SAP / 5.1+SAP). On Player they sit as a frost
-  rail beside the picture (not on it); click the rail chrome to float
-  (`nexvue-vu-pop` / `nexvue-vu-pos`). Multiview keeps per-pane overlay.
+  (stereo / 5.1 / stereo+SAP / 5.1+SAP). On Player they sit as a panel-chrome
+  rail (gap from the picture, 16px tubes, −20 align line); click chrome to
+  float (`nexvue-vu-pop` / `nexvue-vu-pos`). Multiview keeps per-pane overlay.
   Toolbar: **Main**/**SAP**,
   **St** (5.1→stereo fold) / **5.1** (discrete surround to the PC), plus
   engineering solo — all **this browser only** (`nexvue-vu.js` localStorage).

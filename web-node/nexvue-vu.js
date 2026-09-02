@@ -342,23 +342,21 @@
 .nexvue-vu.nexvue-vu-rail {
   position: relative; top: auto; right: auto; bottom: auto; left: auto;
   max-width: none; height: auto; align-self: stretch;
-  padding: 6px 7px 8px;
-  background: rgba(8, 12, 16, .78);
-  border: 1px solid rgba(44, 53, 66, .9);
-  border-radius: 3px;
+  padding: 6px 8px 8px;
+  background: var(--panel, #1d232b);
+  border: 1px solid var(--edge, #2c3542);
+  border-radius: 4px;
+  box-shadow: var(--shadow, none);
   cursor: pointer;
-}
-.nexvue-vu.nexvue-vu-rail .nexvue-vu-toolbar,
-.nexvue-vu.nexvue-vu-pop .nexvue-vu-toolbar {
-  flex-direction: column; align-items: stretch; justify-content: flex-start;
 }
 .nexvue-vu.nexvue-vu-pop {
   position: fixed; left: 12px; top: 12px; right: auto; bottom: auto;
   z-index: 55; height: min(72vh, 560px); max-width: none;
-  padding: 6px 7px 8px;
-  background: rgba(8, 12, 16, .86);
-  border: 1px solid rgba(44, 53, 66, .9);
-  border-radius: 3px;
+  padding: 6px 8px 8px;
+  background: var(--panel, #1d232b);
+  border: 1px solid var(--edge, #2c3542);
+  border-radius: 4px;
+  box-shadow: var(--shadow, none);
   cursor: grab; touch-action: none;
 }
 .nexvue-vu.nexvue-vu-pop.nexvue-vu-drag { cursor: grabbing; }
@@ -399,6 +397,10 @@
 }
 .nexvue-vu-scale-mark.fs { color: #e5484d; font-weight: 500; }
 .nexvue-vu-scale-mark.align { color: #56c4f5; font-weight: 600; }
+.nexvue-vu-rail .nexvue-vu-scale,
+.nexvue-vu-pop .nexvue-vu-scale { font-size: 10px; }
+.nexvue-vu-rail .nexvue-vu-scale-mark,
+.nexvue-vu-pop .nexvue-vu-scale-mark { text-shadow: none; }
 .nexvue-vu-bars {
   flex: 0 0 auto; min-height: 0; display: flex; flex-direction: row;
   align-items: stretch; gap: 3px; justify-content: flex-end;
@@ -409,13 +411,13 @@
   background:
     linear-gradient(to top, transparent calc(90% - .5px), rgba(214,221,230,.35) calc(90% - .5px), rgba(214,221,230,.35) calc(90% + .5px), transparent calc(90% + .5px)),
     linear-gradient(to top, transparent calc(80% - .5px), rgba(214,221,230,.35) calc(80% - .5px), rgba(214,221,230,.35) calc(80% + .5px), transparent calc(80% + .5px)),
-    linear-gradient(to top, transparent calc(66.667% - .5px), rgba(86,196,245,.9) calc(66.667% - .5px), rgba(86,196,245,.9) calc(66.667% + .5px), transparent calc(66.667% + .5px)),
+    linear-gradient(to top, transparent calc(66.667% - 1px), #56c4f5 calc(66.667% - 1px), #56c4f5 calc(66.667% + 1px), transparent calc(66.667% + 1px)),
     linear-gradient(to top, transparent calc(50% - .5px), rgba(214,221,230,.18) calc(50% - .5px), rgba(214,221,230,.18) calc(50% + .5px), transparent calc(50% + .5px)),
     linear-gradient(to top, transparent calc(33.333% - .5px), rgba(214,221,230,.14) calc(33.333% - .5px), rgba(214,221,230,.14) calc(33.333% + .5px), transparent calc(33.333% + .5px));
 }
 .nexvue-vu-ch {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
-  min-width: 14px; flex: 0 0 auto; cursor: pointer;
+  min-width: 16px; flex: 0 0 auto; cursor: pointer;
   background: transparent; border: none; padding: 0; color: inherit; font: inherit;
 }
 .nexvue-vu-ch:focus-visible { outline: 2px solid var(--acc, #56c4f5); outline-offset: 1px; }
@@ -423,6 +425,11 @@
   flex: 1; width: 10px; min-height: 48px; position: relative;
   background: rgba(0,0,0,.55); border: 1px solid var(--edge, #2c3542);
   border-radius: 2px; overflow: hidden;
+}
+.nexvue-vu-rail .nexvue-vu-track,
+.nexvue-vu-pop .nexvue-vu-track {
+  width: 16px;
+  background: #05080b;
 }
 .nexvue-vu-ch.solo .nexvue-vu-track {
   border-color: var(--acc, #56c4f5); box-shadow: 0 0 0 1px var(--acc, #56c4f5);
@@ -436,6 +443,14 @@
     var(--warn, #f5a623) 75%,
     var(--bad, #e5484d) 92%);
   transition: height 50ms linear;
+}
+.nexvue-vu-rail .nexvue-vu-fill,
+.nexvue-vu-pop .nexvue-vu-fill {
+  background: linear-gradient(to top,
+    #5ee0a0 0%,
+    #5ee0a0 50%,
+    #ffc14d 75%,
+    #ff5a60 92%);
 }
 .nexvue-vu-peak {
   position: absolute; left: 0; right: 0; height: 2px; z-index: 2;
