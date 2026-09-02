@@ -64,11 +64,17 @@ class TestOverlayContracts(unittest.TestCase):
     def test_spectrum_exports_rta_scale(self) -> None:
         js = SPECTRUM.read_text(encoding="utf-8")
         self.assertIn('PREF_ON = "nexvue-spectrum-on"', js)
+        self.assertIn('PREF_POP = "nexvue-spectrum-pop"', js)
+        self.assertIn('PREF_POS = "nexvue-spectrum-pos"', js)
         self.assertIn("BANDS = 64", js)
         self.assertIn("F_MIN = 10", js)
         self.assertIn("F_MAX = 22000", js)
         self.assertIn("DB_MIN = -60", js)
         self.assertIn("DB_MAX = 0", js)
+        self.assertIn("0, -6, -12, -20, -30, -40, -60", js)
+        self.assertIn('return db === 0 ? "FS"', js)
+        self.assertIn("z-index: 55", js)
+        self.assertIn("Click to enlarge", js)
         self.assertIn("bandEdges", js)
         self.assertIn("fillBands", js)
         self.assertIn("getSpectrumPair", js)
@@ -80,6 +86,10 @@ class TestOverlayContracts(unittest.TestCase):
         self.assertIn("function wireSpectrum", js)
         self.assertIn("getSpectrumPair", js)
         self.assertIn("MediaStreamSource", js)
+        self.assertIn('return db === 0 ? "FS"', js)
+        self.assertIn(".nexvue-vu-track::after", js)
+        self.assertIn("rgba(229,72,77,.95)", js)
+        self.assertIn("SCALE_MARKS_DB", js)
 
     def test_player_has_safe_and_scope_toggles(self) -> None:
         html = PLAYER.read_text(encoding="utf-8")
@@ -202,6 +212,19 @@ if (!(edges[hit] <= 1000 && edges[hit + 1] >= 1000)) throw new Error("1kHz band 
 if (S.freqLabel(10) !== "10") throw new Error("lab 10");
 if (S.freqLabel(1000) !== "1k") throw new Error("lab 1k");
 if (S.freqLabel(22000) !== "22k") throw new Error("lab 22k");
+if (S.dbScaleLabel(0) !== "FS") throw new Error("fs label");
+if (S.dbScaleLabel(-6) !== "-6") throw new Error("m6 label");
+if (S.DB_MARKS.join(",") !== "0,-6,-12,-20,-30,-40,-60") throw new Error("marks");
+const dock = S.layoutFor(false);
+const pop = S.layoutFor(true);
+if (dock.w !== 520 || pop.w !== 880) throw new Error("rta size");
+if (pop.plotH <= dock.plotH || pop.w <= dock.w) throw new Error("rta pop not larger");
+if (S.parsePos(null) !== null) throw new Error("parse null");
+const rp = S.parsePos('{{"left":40,"top":80}}');
+if (!rp || rp.left !== 40 || rp.top !== 80) throw new Error("parse pos");
+const rc = S.clampPos(-10, -10, 200, 100, 1000, 800, 8);
+if (rc.left !== 8 || rc.top !== 8) throw new Error("clamp");
+if (S.DRAG_THRESHOLD !== 6) throw new Error("threshold");
 """
         r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=15)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)

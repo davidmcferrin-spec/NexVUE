@@ -392,8 +392,10 @@ this box can't get additional ports opened.
   Metrics Viewer sessions show a Report column (View snapshots/events).
   Player **RTA** (`nexvue-spectrum.js`, `nexvue-spectrum-on`) is a stereo
   spectrum on the listen L/R pair (64 log bars each, 10 Hz–22 kHz,
-  −60…0 dBFS); Multiview has no RTA. Overlays are browser-local and off
-  by default.
+  −60…0 dBFS with FS / −6 / −12 / −20 hairlines). Click the strip to pop
+  a ~2× page-level panel (`nexvue-spectrum-pop`; Esc or click docks; drag
+  is `nexvue-spectrum-pos`). VU tracks share the same FS marks. Multiview
+  has no RTA. Overlays are browser-local and off by default.
   First-visit audio defaults: volume 20%, muted. Encode always opens DeckLink
   8ch and publishes 8ch positioned Opus
   (default `AUDIO_BITRATE_BPS=384000`) tee'd to HI+LO. No 16ch path.

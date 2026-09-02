@@ -264,7 +264,8 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
 - **Player audio defaults (first visit):** volume 20%, muted, VU meters off
   (`nexvue-vu.js` localStorage). Safe overlay, Scope, and Player RTA are also
   off (`nexvue-safe-on` / `nexvue-scopes-on` / `nexvue-spectrum-on`; enlarge
-  is `nexvue-scopes-pop`, drag position is `nexvue-scopes-pos`).
+  is `nexvue-scopes-pop` / `nexvue-spectrum-pop`, drag position is
+  `nexvue-scopes-pos` / `nexvue-spectrum-pos`).
   Existing prefs unchanged.
 - **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`
   (existing station `.env` files unchanged until rewritten).
@@ -1125,9 +1126,12 @@ expired; JWT auth is the lasting gate.
   The enlarged panel is page-fixed above the Session metrics drawer and can
   be dragged; the last position is remembered (`nexvue-scopes-pos`).
   Player **RTA** (`nexvue-spectrum.js`) is a stereo spectrum (64 log bars
-  L + 64 R, 10 Hz–22 kHz, −60…0 dBFS) on the current Main/SAP pair; off by
-  default (`nexvue-spectrum-on`). Multiview has no RTA. Multiview Safe is
-  per-pane; Scope runs on the focused pane only.
+  L + 64 R, 10 Hz–22 kHz, −60…0 dBFS with FS / −6 / −12 / −20 hairlines) on
+  the current Main/SAP pair; off by default (`nexvue-spectrum-on`). Click
+  to pop a ~2× panel (`nexvue-spectrum-pop`; Esc or click docks; drag
+  remembers `nexvue-spectrum-pos`). VU tracks use the same FS marks.
+  Multiview has no RTA. Multiview Safe is per-pane; Scope runs on the
+  focused pane only.
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Every UI except Settings channel setup shows the
   alias when set (Player, Multiview, Users, share dialogs, Metrics, Services,
