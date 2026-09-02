@@ -73,6 +73,8 @@ class TestOverlayContracts(unittest.TestCase):
         self.assertIn("DB_MAX = 0", js)
         self.assertIn("0, -6, -12, -20, -30, -40, -60", js)
         self.assertIn('return db === 0 ? "FS"', js)
+        self.assertIn("ALIGN_DB = -20", js)
+        self.assertIn("rgba(86,196,245", js)
         self.assertIn("z-index: 55", js)
         self.assertIn("Click to enlarge", js)
         self.assertIn("bandEdges", js)
@@ -86,9 +88,13 @@ class TestOverlayContracts(unittest.TestCase):
         self.assertIn("function wireSpectrum", js)
         self.assertIn("getSpectrumPair", js)
         self.assertIn("MediaStreamSource", js)
+        self.assertIn('source.channelInterpretation = "discrete"', js)
+        self.assertIn('splitter.channelInterpretation = "discrete"', js)
         self.assertIn('return db === 0 ? "FS"', js)
         self.assertIn(".nexvue-vu-track::after", js)
-        self.assertIn("rgba(229,72,77,.95)", js)
+        self.assertIn("rgba(86,196,245,.9)", js)
+        self.assertIn("text-shadow: 0 0 3px #000", js)
+        self.assertIn("ALIGN_DB", js)
         self.assertIn("SCALE_MARKS_DB", js)
 
     def test_player_has_safe_and_scope_toggles(self) -> None:
@@ -214,6 +220,7 @@ if (S.freqLabel(1000) !== "1k") throw new Error("lab 1k");
 if (S.freqLabel(22000) !== "22k") throw new Error("lab 22k");
 if (S.dbScaleLabel(0) !== "FS") throw new Error("fs label");
 if (S.dbScaleLabel(-6) !== "-6") throw new Error("m6 label");
+if (S.ALIGN_DB !== -20) throw new Error("align");
 if (S.DB_MARKS.join(",") !== "0,-6,-12,-20,-30,-40,-60") throw new Error("marks");
 const dock = S.layoutFor(false);
 const pop = S.layoutFor(true);

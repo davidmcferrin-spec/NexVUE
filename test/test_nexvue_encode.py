@@ -30,6 +30,13 @@ class TestLoadConfig(unittest.TestCase):
     def test_module_imports(self) -> None:
         self.assertTrue(hasattr(mod, "load_config"))
         self.assertTrue(hasattr(mod, "decide_capture_failure"))
+        self.assertTrue(hasattr(mod, "CHROME_8CH_GST_CAPS"))
+        self.assertIn("coupled-count=4", mod.CHROME_8CH_GST_CAPS)
+
+    def test_setup_installs_opus_ms_sibling(self) -> None:
+        setup = (Path(__file__).resolve().parent.parent / "setup.sh").read_text(encoding="utf-8")
+        self.assertIn("nexvue_opus_ms.py", setup)
+        self.assertIn("libopus0", setup)
 
     def test_defaults_match_production_encode(self) -> None:
         cfg = mod.load_config(env())
@@ -128,6 +135,7 @@ class TestPipelineAssembly(unittest.TestCase):
     def test_no_audio_omits_decklinkaudiosrc(self) -> None:
         blob = mod.print_pipelines(mod.load_config(env(ENABLE_AUDIO="false")))
         self.assertNotIn("opusenc", blob)
+        self.assertNotIn("audio/x-opus", blob)
         self.assertNotIn("decklinkaudiosrc", blob)
 
     def test_captions_unbuffered_filesink(self) -> None:
@@ -146,7 +154,11 @@ class TestPipelineAssembly(unittest.TestCase):
         self.assertIn("channel-mask=(bitmask)0x400", blob)
         self.assertIn("channel-mask=(bitmask)0x800", blob)
         self.assertIn("decklinkaudiosrc device-number=0 channels=8", blob)
-        self.assertIn("opusenc bitrate=384000", blob)
+        self.assertIn("audio/x-opus,rate=48000,channels=8,channel-mapping-family=1", blob)
+        self.assertIn("stream-count=5,coupled-count=4", blob)
+        self.assertIn("channel-mapping=(int)<0, 6, 1, 4, 5, 2, 3, 7>", blob)
+        self.assertIn("opusparse", blob)
+        self.assertNotIn("opusenc", blob)
 
     def test_x264_fallback(self) -> None:
         blob = mod.print_pipelines(mod.load_config(env(VIDEO_ENCODER="x264enc")))
@@ -354,7 +366,8 @@ class TestAudioRelayCadence(unittest.TestCase):
     """Unique-chunk drain: each captured PCM buffer is pushed once with
     duration from its sample count. Repeating `_last_audio` at a fixed
     cadence (and earlier, pacing that cadence at AUDIO_FRAME_MS) was the
-    post-split stutter vs gst-launch. AUDIO_FRAME_MS remains opusenc-only.
+    post-split stutter vs gst-launch. AUDIO_FRAME_MS sizes the Chrome-mapping
+    Opus framer only — it does not pace this relay.
     """
 
     def test_silence_chunk_matches_video_period_not_frame_ms(self) -> None:

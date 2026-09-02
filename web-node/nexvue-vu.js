@@ -34,7 +34,9 @@
   const MAX_CH = 8;
   // dBFS marks (0 = full scale). Same set on the always-on track hairlines
   // and the optional side scale (matches heightFromDb −60…0 → 0…100%).
+  // ALIGN_DB (−20) is SMPTE digital 0 VU / dialog-align — highlighted, not FS.
   const SCALE_MARKS_DB = [0, -6, -12, -20, -30, -40, -60];
+  const ALIGN_DB = -20;
 
   function dbScaleLabel(db) {
     return db === 0 ? "FS" : String(db);
@@ -297,34 +299,31 @@
   position: relative; width: 30px; flex: 0 0 30px;
   /* Sit beside the meter tracks (labels are ~12px under the tracks). */
   margin-bottom: 12px; pointer-events: none;
-  color: var(--dim, #98a6b5); font-size: 8px; line-height: 1;
+  background: transparent;
+  color: #e8eef4; font-size: 9px; line-height: 1;
 }
 .nexvue-vu-scale[hidden] { display: none !important; }
 .nexvue-vu-scale-mark {
   position: absolute; left: 0; right: 2px; text-align: right;
   transform: translateY(50%);
   white-space: nowrap;
+  text-shadow: 0 0 3px #000, 0 1px 2px #000;
 }
-.nexvue-vu-scale-mark.fs { color: #e5484d; font-weight: 600; }
-.nexvue-vu-scale-unit {
-  position: absolute; left: 0; right: 2px; top: -10px;
-  text-align: right; font-size: 7px; letter-spacing: .04em;
-  color: var(--muted, #b0bbc8);
-}
+.nexvue-vu-scale-mark.fs { color: #e5484d; font-weight: 500; }
+.nexvue-vu-scale-mark.align { color: #56c4f5; font-weight: 600; }
 .nexvue-vu-bars {
   flex: 0 0 auto; min-height: 0; display: flex; flex-direction: row;
   align-items: stretch; gap: 3px; justify-content: flex-end;
 }
 .nexvue-vu-track::after {
   content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
-  /* 0 FS, −6, −12, −20, −30, −40 (linear −60…0 dBFS). */
+  /* −6, −12, −20 align (cyan), −30, −40. FS is the tube cap, not a banner. */
   background:
-    linear-gradient(to top, transparent calc(100% - 1.5px), rgba(229,72,77,.95) calc(100% - 1.5px), rgba(229,72,77,.95) 100%),
-    linear-gradient(to top, transparent calc(90% - .5px), rgba(214,221,230,.45) calc(90% - .5px), rgba(214,221,230,.45) calc(90% + .5px), transparent calc(90% + .5px)),
-    linear-gradient(to top, transparent calc(80% - .5px), rgba(214,221,230,.45) calc(80% - .5px), rgba(214,221,230,.45) calc(80% + .5px), transparent calc(80% + .5px)),
-    linear-gradient(to top, transparent calc(66.667% - .5px), rgba(214,221,230,.28) calc(66.667% - .5px), rgba(214,221,230,.28) calc(66.667% + .5px), transparent calc(66.667% + .5px)),
-    linear-gradient(to top, transparent calc(50% - .5px), rgba(214,221,230,.2) calc(50% - .5px), rgba(214,221,230,.2) calc(50% + .5px), transparent calc(50% + .5px)),
-    linear-gradient(to top, transparent calc(33.333% - .5px), rgba(214,221,230,.16) calc(33.333% - .5px), rgba(214,221,230,.16) calc(33.333% + .5px), transparent calc(33.333% + .5px));
+    linear-gradient(to top, transparent calc(90% - .5px), rgba(214,221,230,.35) calc(90% - .5px), rgba(214,221,230,.35) calc(90% + .5px), transparent calc(90% + .5px)),
+    linear-gradient(to top, transparent calc(80% - .5px), rgba(214,221,230,.35) calc(80% - .5px), rgba(214,221,230,.35) calc(80% + .5px), transparent calc(80% + .5px)),
+    linear-gradient(to top, transparent calc(66.667% - .5px), rgba(86,196,245,.9) calc(66.667% - .5px), rgba(86,196,245,.9) calc(66.667% + .5px), transparent calc(66.667% + .5px)),
+    linear-gradient(to top, transparent calc(50% - .5px), rgba(214,221,230,.18) calc(50% - .5px), rgba(214,221,230,.18) calc(50% + .5px), transparent calc(50% + .5px)),
+    linear-gradient(to top, transparent calc(33.333% - .5px), rgba(214,221,230,.14) calc(33.333% - .5px), rgba(214,221,230,.14) calc(33.333% + .5px), transparent calc(33.333% + .5px));
 }
 .nexvue-vu-ch {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
@@ -488,12 +487,12 @@
       }
       scaleEl.hidden = false;
       scaleEl.setAttribute("aria-hidden", "false");
-      let html = '<span class="nexvue-vu-scale-unit">dBFS</span>';
+      let html = "";
       for (const db of SCALE_MARKS_DB) {
         const bottom = heightFromDb(db);
-        const label = dbScaleLabel(db);
-        html += '<span class="nexvue-vu-scale-mark' + (db === 0 ? " fs" : "") +
-          '" style="bottom:' + bottom.toFixed(1) + '%">' + label + "</span>";
+        const cls = db === 0 ? " fs" : (db === ALIGN_DB ? " align" : "");
+        html += '<span class="nexvue-vu-scale-mark' + cls +
+          '" style="bottom:' + bottom.toFixed(1) + '%">' + dbScaleLabel(db) + "</span>";
       }
       scaleEl.innerHTML = html;
     }
@@ -804,8 +803,22 @@
       try {
         const audioStream = new MediaStream(audioTracks);
         source = ctx.createMediaStreamSource(audioStream);
+        // Discrete: a default "speakers" mix of 8ch→2ch (or 2ch→8ch)
+        // treats Vorbis-order Opus as WAVE and makes R a downmix leftover.
+        try {
+          source.channelCountMode = "explicit";
+          source.channelInterpretation = "discrete";
+          if (detected >= 2) {
+            source.channelCount = Math.min(MAX_CH, Math.max(detected, 2));
+          }
+        } catch { /* MediaStreamSource may ignore */ }
         const splitN = Math.max(8, detected || 8);
         splitter = ctx.createChannelSplitter(Math.min(MAX_CH, Math.max(splitN, 8)));
+        try {
+          splitter.channelCountMode = "explicit";
+          splitter.channelInterpretation = "discrete";
+          splitter.channelCount = Math.min(MAX_CH, Math.max(splitN, 8));
+        } catch { /* ignore */ }
         masterGain = ctx.createGain();
         masterGain.gain.value = effectiveMasterGain();
 
@@ -996,6 +1009,8 @@
   // "codecs not supported by client", even though the RTSP path is online.
   // Fmtp strings MUST match mediamtx internal/protocols/webrtc/from_stream.go
   // multichannelOpusSDP (pion matches MimeType + Channels + fmtp).
+  // Encode (nexvue_opus_ms.py) writes the same 8ch table — stock opusenc
+  // family-1 surround does not, and Chrome then decodes L/R as mid-side.
   const MULTICHANNEL_OPUS_FMTP = {
     3: "channel_mapping=0,2,1;num_streams=2;coupled_streams=1",
     4: "channel_mapping=0,1,2,3;num_streams=2;coupled_streams=2",
@@ -1158,6 +1173,7 @@
     MAX_CH,
     SPEC_FFT,
     SCALE_MARKS_DB,
+    ALIGN_DB,
     dbScaleLabel,
     LAYOUTS,
     TRANSPORT_LABELS,

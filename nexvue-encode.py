@@ -19,6 +19,7 @@ GStreamer. main() exits 69 if GI is missing at runtime.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import logging
 import os
@@ -31,6 +32,16 @@ from collections import deque
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Optional
+
+_OPUS_MS_PATH = Path(__file__).resolve().parent / "nexvue_opus_ms.py"
+_opus_ms_spec = importlib.util.spec_from_file_location("nexvue_opus_ms", _OPUS_MS_PATH)
+if _opus_ms_spec is None or _opus_ms_spec.loader is None:
+    raise ImportError(f"cannot load {_OPUS_MS_PATH}")
+nexvue_opus_ms = importlib.util.module_from_spec(_opus_ms_spec)
+_opus_ms_spec.loader.exec_module(nexvue_opus_ms)
+CHROME_8CH_GST_CAPS = nexvue_opus_ms.CHROME_8CH_GST_CAPS
+ChromeMsEncoder = nexvue_opus_ms.ChromeMsEncoder
+OpusChromeFramer = nexvue_opus_ms.OpusChromeFramer
 
 LOG_PREFIX = "[nexvue-encode]"
 logging.basicConfig(
@@ -729,10 +740,13 @@ def publish_pipeline_desc(cfg: EncodeConfig) -> str:
 
     if cfg.enable_audio:
         q = cfg.audio_queue_buffers
+        # PCM is framed + encoded in Python (Chrome/MediaMTX multiopus
+        # mapping). Stock opusenc writes libopus family-1 surround, which
+        # Chrome decodes as mid-side on L/R. AUDIO_BITRATE_BPS / FRAME_MS
+        # size that encoder — they are not Gst properties anymore.
         parts.append(
             "appsrc name=asrc is-live=true format=time do-timestamp=false block=false "
-            "! audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f "
-            f"! opusenc bitrate={cfg.audio_bitrate_bps} frame-size={cfg.audio_frame_ms}"
+            f"! {CHROME_8CH_GST_CAPS} ! opusparse"
         )
         if cfg.lo_enable:
             parts.append("! tee name=at")
@@ -825,7 +839,7 @@ class EncodeRuntime:
         # Silence chunk for dead capture only. Live audio is unique-chunk
         # drain: each captured PCM buffer is pushed once with duration
         # from its sample count (pcm_duration_ns), PTS as a running sum.
-        # AUDIO_FRAME_MS still only sizes opusenc's `frame-size` — it
+        # AUDIO_FRAME_MS sizes the Chrome-mapping Opus framer only — it
         # does not pace this relay (that mismatch was the 2.4.0–2.5.3
         # stutter). Repeating `_last_audio` at a fixed cadence was the
         # remaining 2.5.4 gap vs the pre-split gst-launch path.
@@ -843,6 +857,28 @@ class EncodeRuntime:
         self._cap_null_poll_id = 0
         self._cap_fail_why = ""
         self._got_video_frame = False
+        self._opus_enc = None
+        self._opus_framer = None
+
+    def _ensure_opus(self) -> None:
+        if self._opus_framer is not None or not self.cfg.enable_audio:
+            return
+        self._opus_enc = ChromeMsEncoder(
+            bitrate_bps=self.cfg.audio_bitrate_bps,
+            frame_ms=self.cfg.audio_frame_ms,
+            rate=AUDIO_PCM_RATE,
+        )
+        self._opus_framer = OpusChromeFramer(
+            self._opus_enc.encode,
+            frame_ms=self.cfg.audio_frame_ms,
+            rate=AUDIO_PCM_RATE,
+            channels=AUDIO_PCM_CHANNELS,
+        )
+        log.info(
+            "Opus 8ch Chrome-mapping encoder ready (bitrate=%s frame=%sms)",
+            self.cfg.audio_bitrate_bps,
+            self.cfg.audio_frame_ms,
+        )
 
     def _capture_cfg(self) -> EncodeConfig:
         if self._use_captions == self.cfg.captions_enable:
@@ -863,6 +899,9 @@ class EncodeRuntime:
         ):
             log.warning("CAPTIONS_ENABLE=true but ccextractor/ccconverter unavailable — captions off")
             self._use_captions = False
+        if self.cfg.enable_audio and Gst.ElementFactory.find("opusparse") is None:
+            log.error("opusparse unavailable — need gstreamer1.0-plugins-base")
+            return 69
         self._loop = GLib.MainLoop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, self._on_signal)
@@ -890,6 +929,12 @@ class EncodeRuntime:
             f", LO to {self.cfg.lo_rtsp_url}" if self.cfg.lo_enable else "",
         )
 
+        if self.cfg.enable_audio:
+            try:
+                self._ensure_opus()
+            except OSError as exc:
+                log.error("Chrome-mapping Opus encoder unavailable: %s", exc)
+                return 69
         if not self._start_publish():
             return 1
         self._start_pumps()
@@ -944,6 +989,8 @@ class EncodeRuntime:
         self._a_waiting_since = 0.0
         self._v_start = time.monotonic()
         self._a_start = self._v_start
+        if self._opus_framer is not None:
+            self._opus_framer.reset()
         return self._start_publish()
 
     def _start_pumps(self) -> None:
@@ -998,6 +1045,8 @@ class EncodeRuntime:
             self._last_audio_mono = 0.0
             self._a_waiting_since = 0.0
             self._audio_overflow_logged = False
+        if self._opus_framer is not None:
+            self._opus_framer.reset()
 
     def _audio_relay_step(self, now: float) -> tuple[Optional[bytes], int]:
         """One drain/silence/wait decision. GI-free for unit tests."""
@@ -1036,8 +1085,17 @@ class EncodeRuntime:
         if payload is None or dur <= 0:
             GLib.timeout_add(max(1, int(AUDIO_LIVE_WAIT_S * 1000)), self._audio_tick)
             return False
-        pts = self._commit_audio_push(dur)
-        self._push_appsrc(self._asrc, payload, pts, dur)
+        if self._opus_framer is None:
+            pts = self._commit_audio_push(dur)
+            self._push_appsrc(self._asrc, payload, pts, dur)
+        else:
+            packets = self._opus_framer.feed(payload)
+            if not packets:
+                GLib.timeout_add(max(1, int(self.cfg.audio_frame_ms / 2 * 1000)), self._audio_tick)
+                return False
+            for pkt, pkt_dur in packets:
+                pts = self._commit_audio_push(pkt_dur)
+                self._push_appsrc(self._asrc, pkt, pts, pkt_dur)
         target = self._a_start + (self._a_pts / 1_000_000_000)
         delay_ms = max(1, int((target - time.monotonic()) * 1000))
         GLib.timeout_add(delay_ms, self._audio_tick)
@@ -1487,6 +1545,13 @@ class EncodeRuntime:
             self._null_pipeline_blocking(self._pub, "publish")
             self._pub = None
         self._stop_captions_proc()
+        if self._opus_enc is not None:
+            try:
+                self._opus_enc.close()
+            except Exception:
+                pass
+            self._opus_enc = None
+            self._opus_framer = None
 
 
 def _configure_appsink(sink, *, max_buffers: int) -> None:

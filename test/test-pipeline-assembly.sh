@@ -44,7 +44,9 @@ grep -q 'location=rtsp://127.0.0.1:8554/ch0lo?jwt=test.jwt.token' <<<"$out_jwt_l
 out_wd=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=false WATCHDOG_MS=3000 run_encode)
 grep -q "watchdog timeout=3000" <<<"$out_wd" || fail "T1 WATCHDOG_MS=3000 must appear on capture"
 grep -q "width=1920,height=1080,framerate=60000/1001" <<<"$out" || fail "T1 normalization caps"
-grep -q "opusenc" <<<"$out" || fail "T1 audio present by default"
+grep -q "audio/x-opus,rate=48000,channels=8,channel-mapping-family=1" <<<"$out" || fail "T1 audio present by default"
+grep -q "opusparse" <<<"$out" || fail "T1 opusparse after Chrome-mapping appsrc"
+grep -q "opusenc" <<<"$out" && fail "T1 stock opusenc must not appear (wrong 8ch map)"
 grep -q "audiorate" <<<"$out" || fail "T1 audiorate present (gapless timestamp fix)"
 grep -q "tee" <<<"$out" && fail "T1 no tee when LO disabled"
 
@@ -59,6 +61,7 @@ grep -q "tee name=at" <<<"$out" || fail "T2 audio tee"
 # T3: silent channel drops audio entirely
 out=$(DEVICE_NUMBER=1 CHANNEL_PATH=ch1 ENABLE_AUDIO=false run_encode)
 grep -q "opusenc" <<<"$out" && fail "T3 audio should be absent"
+grep -q "audio/x-opus" <<<"$out" && fail "T3 opus caps should be absent"
 grep -q "decklinkaudiosrc" <<<"$out" && fail "T3 audiosrc should be absent"
 
 # T4: top-field mode sets 29.97p normalization
@@ -159,8 +162,10 @@ DEVICE_NUMBER=0 CHANNEL_PATH=ch0 CAPTIONS_ENABLE=bogus expect_usage_64 "T19 acce
 # regardless of AUDIO_LAYOUT (layout is player metadata only). Default bitrate 384k.
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 run_encode)
 grep -q "decklinkaudiosrc device-number=0 channels=8" <<<"$out" || fail "T20 default opens 8ch DeckLink"
-grep -q "audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f" <<<"$out" || fail "T20 default Opus is 8ch positioned"
-grep -q "opusenc bitrate=384000" <<<"$out" || fail "T20 default AUDIO_BITRATE_BPS=384000"
+grep -q "audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f" <<<"$out" || fail "T20 capture PCM is 8ch positioned"
+grep -q "audio/x-opus,rate=48000,channels=8,channel-mapping-family=1" <<<"$out" || fail "T20 publish is 8ch Chrome-mapping Opus"
+grep -q "stream-count=5,coupled-count=4" <<<"$out" || fail "T20 Chrome 8ch stream layout"
+grep -q "opusenc" <<<"$out" && fail "T20 stock opusenc must not appear"
 grep -q "adl.src_7" <<<"$out" || fail "T20 default must pull embed 8"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=stereo run_encode)
 grep -q "decklinkaudiosrc device-number=0 channels=8" <<<"$out" || fail "T20 stereo role still opens 8ch DeckLink"
@@ -170,7 +175,7 @@ grep -q "adl.src_7" <<<"$out" || fail "T20 51 role still encodes embeds 7–8"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=stereo_sap run_encode)
 grep -q "channels=8,channel-mask=(bitmask)0xc3f" <<<"$out" || fail "T20 stereo_sap role still encodes 8ch"
 out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_BITRATE_BPS=256000 run_encode)
-grep -q "opusenc bitrate=256000" <<<"$out" || fail "T20 custom AUDIO_BITRATE_BPS"
+grep -q "stream-count=5,coupled-count=4" <<<"$out" || fail "T20 custom AUDIO_BITRATE_BPS still Chrome-maps (bitrate is Python-side)"
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 AUDIO_LAYOUT=bogus expect_usage_64 "T20 accepted bogus AUDIO_LAYOUT"
 
 # T21: family-255 regression guard — always 8 positioned mono branches.

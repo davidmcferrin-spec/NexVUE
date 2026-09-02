@@ -20,7 +20,7 @@ exposure (Phase 3) are built.
 SDI 1080i59.94 (4 or 8) --> [DeckLink card]
                         |  per channel (systemd template unit):
                         |  decklinkvideosrc -> deinterlace -> vah264enc (QSV)
-                        |  decklinkaudiosrc -> opusenc
+                        |  decklinkaudiosrc -> 8ch Chrome-mapping Opus
                         v
                      RTSP publish (loopback only)
                         v
@@ -1126,10 +1126,12 @@ expired; JWT auth is the lasting gate.
   The enlarged panel is page-fixed above the Session metrics drawer and can
   be dragged; the last position is remembered (`nexvue-scopes-pos`).
   Player **RTA** (`nexvue-spectrum.js`) is a stereo spectrum (64 log bars
-  L + 64 R, 10 Hz–22 kHz, −60…0 dBFS with FS / −6 / −12 / −20 hairlines) on
-  the current Main/SAP pair; off by default (`nexvue-spectrum-on`). Click
-  to pop a ~2× panel (`nexvue-spectrum-pop`; Esc or click docks; drag
-  remembers `nexvue-spectrum-pos`). VU tracks use the same FS marks.
+  L + 64 R, 10 Hz–22 kHz, −60…0 dBFS). A cyan dashed line at **−20 dBFS**
+  is SMPTE 0 VU / dialog-align (not a loudness LKFS line); FS is a label
+  only. Off by default (`nexvue-spectrum-on`). Click to pop a ~2× panel
+  (`nexvue-spectrum-pop`; Esc or click docks; drag remembers
+  `nexvue-spectrum-pos`). VU uses the same −20 align mark and a haloed
+  transparent dBFS scale.
   Multiview has no RTA. Multiview Safe is per-pane; Scope runs on the
   focused pane only.
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
@@ -1142,8 +1144,11 @@ expired; JWT auth is the lasting gate.
   (default `AUDIO_BITRATE_BPS=384000`) to HI and LO (one Opus encode, tee'd).
   Per-branch mono `channel-mask` through deinterleave/interleave is required:
   decklinkaudiosrc emits `channel-mask=0`, and unpositioned multichannel
-  makes opusenc emit mapping family 255 — which has **no RTP payloader**.
-  Positioned input encodes family 1 / MULTIOPUS. `AUDIO_LAYOUT`
+  makes family 255 — which has **no RTP payloader**. Positioned PCM is
+  encoded in-process (`nexvue_opus_ms.py` / libopus) with Chrome/MediaMTX's
+  8ch table (`coupled_streams=4`, mapping `0,6,1,4,5,2,3,7`) so WHEP L/R
+  stay a real pair. Stock `opusenc` family-1 surround (3 coupled, Vorbis
+  map) made Chrome decode L/R as mid-side. `AUDIO_LAYOUT`
   (`stereo`|`51`|`stereo_sap`|`51_sap`) is a **player role preset only**
   (Main/SAP/5.1 UI). `AUDIO_EMBEDS` (Settings checkboxes, e.g. `1,2,7,8`)
   chooses which embeds the browser VU offers — metadata only; encode still

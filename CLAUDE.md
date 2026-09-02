@@ -151,9 +151,10 @@ this box can't get additional ports opened.
   PTS as a running sum. Dead/stale capture gets fresh silence (never a
   replayed waveform); a live-but-late underrun waits a few ms then inserts
   one silence (`AUDIO_UNDERRUN_SLACK_S`) so appsrc does not starve. Capture
-  teardown clears the queue. `AUDIO_FRAME_MS` still only sizes `opusenc`'s
-  `frame-size` (10 ms default = lower packetization delay; 20 ms is more
-  robust on WAN) — it does not pace the relay. The 2.4.0–2.5.3 bug wired
+  teardown clears the queue. `AUDIO_FRAME_MS` sizes the in-process
+  Chrome-mapping Opus framer (`nexvue_opus_ms.py`; 10 ms default = lower
+  packetization delay; 20 ms is more robust on WAN) — it does not pace
+  the relay. The 2.4.0–2.5.3 bug wired
   the pump period to `AUDIO_FRAME_MS` (10 ms ticks of ~33 ms PCM); 2.5.4
   set `_a_dur = _v_dur` but still replayed `_last_audio`. Both sounded
   sluggish vs the pre-split gst-launch path (v1.12 / 2.2.3) with zero
@@ -392,19 +393,23 @@ this box can't get additional ports opened.
   Metrics Viewer sessions show a Report column (View snapshots/events).
   Player **RTA** (`nexvue-spectrum.js`, `nexvue-spectrum-on`) is a stereo
   spectrum on the listen L/R pair (64 log bars each, 10 Hz–22 kHz,
-  −60…0 dBFS with FS / −6 / −12 / −20 hairlines). Click the strip to pop
-  a ~2× page-level panel (`nexvue-spectrum-pop`; Esc or click docks; drag
-  is `nexvue-spectrum-pos`). VU tracks share the same FS marks. Multiview
-  has no RTA. Overlays are browser-local and off by default.
+  −60…0 dBFS). Cyan dashed −20 dBFS is SMPTE 0 VU / dialog-align; FS is a
+  label only (no red banner). Click the strip to pop a ~2× page-level
+  panel (`nexvue-spectrum-pop`; Esc or click docks; drag is
+  `nexvue-spectrum-pos`). VU tracks share the −20 align mark; the optional
+  dBFS scale is transparent with a text-shadow halo. Multiview has no RTA.
+  Overlays are browser-local and off by default.
   First-visit audio defaults: volume 20%, muted. Encode always opens DeckLink
   8ch and publishes 8ch positioned Opus
   (default `AUDIO_BITRATE_BPS=384000`) tee'd to HI+LO. No 16ch path.
   `AUDIO_LAYOUT` is a player role preset only; `AUDIO_EMBEDS` (Settings
   checkboxes) gates which embeds the browser VU offers — metadata only.
   Positioned channels are mandatory: decklinkaudiosrc emits channel-mask=0,
-  unpositioned multichannel encodes Opus family 255 (no RTP payloader).
-  Fix is per-branch mono channel-masks on deinterleave/interleave → family 1
-  / MULTIOPUS. Player / Multiview WHEP offers are SDP-munged (`nexvue-vu.js`
+  unpositioned multichannel is family 255 (no RTP payloader). Remix is
+  per-branch mono channel-masks; encode is libopus with Chrome/MediaMTX's
+  8ch table (`nexvue_opus_ms.py`) so WHEP L/R match. Stock opusenc
+  family-1 surround made Chrome decode L/R as mid-side. Player / Multiview
+  WHEP offers are SDP-munged (`nexvue-vu.js`
   `mungeWhepOfferSdp`) for multiopus 3–8. Settings **Detect audio…**
   (`audio_probe` → `decklink-audio-probe`) suggests role + embeds for
   operator confirm. Per-browser Main↔SAP and 5.1 fold (`localStorage`) —

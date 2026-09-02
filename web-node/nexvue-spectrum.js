@@ -24,6 +24,7 @@
   const DB_MAX = 0;
   const FREQ_MARKS = [10, 100, 1000, 10000, 22000];
   const DB_MARKS = [0, -6, -12, -20, -30, -40, -60];
+  const ALIGN_DB = -20;
   const DRAG_THRESHOLD = 6;
   const POS_PAD = 8;
 
@@ -261,13 +262,16 @@
     }
 
     function dbMarkStyle(db) {
+      if (db === ALIGN_DB) {
+        return { stroke: "rgba(86,196,245,.95)", fill: "rgba(86,196,245,.95)", width: 1, dash: [4, 3] };
+      }
       if (db === 0) {
-        return { stroke: "rgba(229,72,77,.85)", fill: "rgba(229,72,77,.95)", width: 1.5 };
+        return { stroke: null, fill: "rgba(229,72,77,.85)", width: 0 };
       }
-      if (db === -6 || db === -12 || db === -20) {
-        return { stroke: "rgba(214,221,230,.4)", fill: "rgba(176,187,200,.85)", width: 1 };
+      if (db === -6 || db === -12) {
+        return { stroke: "rgba(214,221,230,.32)", fill: "rgba(232,238,244,.85)", width: 1 };
       }
-      return { stroke: "rgba(214,221,230,.22)", fill: "rgba(176,187,200,.65)", width: 1 };
+      return { stroke: "rgba(214,221,230,.16)", fill: "rgba(232,238,244,.7)", width: 1 };
     }
 
     function dockHost() {
@@ -325,12 +329,16 @@
         const t = heightFromDb(db) / 100;
         const y = plotT + L.plotH - t * L.plotH;
         const st = dbMarkStyle(db);
-        ctx2d.strokeStyle = st.stroke;
-        ctx2d.lineWidth = st.width;
-        ctx2d.beginPath();
-        ctx2d.moveTo(L.plotL, y);
-        ctx2d.lineTo(L.w - L.plotR, y);
-        ctx2d.stroke();
+        if (st.stroke) {
+          ctx2d.strokeStyle = st.stroke;
+          ctx2d.lineWidth = st.width;
+          ctx2d.setLineDash(st.dash || []);
+          ctx2d.beginPath();
+          ctx2d.moveTo(L.plotL, y);
+          ctx2d.lineTo(L.w - L.plotR, y);
+          ctx2d.stroke();
+          ctx2d.setLineDash([]);
+        }
         ctx2d.fillStyle = st.fill;
         ctx2d.fillText(dbScaleLabel(db), 2, y);
       });
@@ -553,6 +561,7 @@
     DB_MIN,
     DB_MAX,
     DB_MARKS,
+    ALIGN_DB,
     DRAG_THRESHOLD,
     POS_PAD,
     layoutFor,

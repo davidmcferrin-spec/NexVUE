@@ -527,7 +527,7 @@ fi
 # ---- Required repo files (verify before touching the system) ---------------------
 REQUIRED_FILES=(
   mediamtx.yml mediamtx.service
-  nexvue-encode.sh nexvue-encode.py nexvue-supervisor.py nexvue-encode@.service
+  nexvue-encode.sh nexvue-encode.py nexvue_opus_ms.py nexvue-supervisor.py nexvue-encode@.service
   nexvue-encode-auto-park.sh
   nexvue-encode-auto-unpark.service nexvue-encode-auto-unpark.timer
   nexvue-decklink-configure.service
@@ -600,6 +600,7 @@ apt-get install -y -qq \
   apache2 libapache2-mod-php php-cli php-sqlite3 \
   openssh-server ufw \
   python3-gi python3-gst-1.0 gir1.2-glib-2.0 gir1.2-gstreamer-1.0 \
+  libopus0 \
   gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
   gstreamer1.0-nice
 ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for nexvue-encode.py + Stream WHIP — never pip; Apache + php-cli/sqlite3 for login/auth + metrics.php)"
@@ -769,6 +770,7 @@ fi
 
 install -m 755 "${REPO_DIR}/nexvue-encode.sh" /usr/local/bin/nexvue-encode.sh
 install -m 755 "${REPO_DIR}/nexvue-encode.py" /usr/local/bin/nexvue-encode.py
+install -m 644 "${REPO_DIR}/nexvue_opus_ms.py" /usr/local/bin/nexvue_opus_ms.py
 install -m 755 "${REPO_DIR}/nexvue-encode-auto-park.sh" /usr/local/bin/nexvue-encode-auto-park.sh
 install -m 755 "${REPO_DIR}/nexvue-supervisor.py" /usr/local/bin/nexvue-supervisor.py
 install -m 755 "${REPO_DIR}/nexvue-status-server.py" /usr/local/bin/nexvue-status-server.py
@@ -1512,7 +1514,7 @@ fi
 
 # GStreamer elements (encode path + Phase 1.5 slate supervisor)
 for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc \
-          rtspclientsink ccextractor ccconverter webrtcbin \
+          opusparse rtspclientsink ccextractor ccconverter webrtcbin \
           input-selector videotestsrc audiotestsrc textoverlay valve identity; do
   if gst-inspect-1.0 "$el" >/dev/null 2>&1; then
     ok "gstreamer element: $el"
@@ -1520,6 +1522,7 @@ for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc \
     case "$el" in
       decklinkvideosrc) warn "missing $el — install Blackmagic Desktop Video (deb) and reboot" ;;
       vah264enc)        warn "missing $el — VA driver issue (see vainfo above); x264enc fallback works for 1-2 channels only" ;;
+      opusparse)        warn "missing $el — Chrome-mapping Opus publish needs gstreamer1.0-plugins-base" ;;
       rtspclientsink)   warn "missing $el — install gstreamer1.0-rtsp (setup apt step); encode publish will fail" ;;
       webrtcbin)        warn "missing $el — install gstreamer1.0-plugins-bad + gstreamer1.0-nice; Stream WHIP publisher will idle" ;;
       ccextractor|ccconverter) warn "missing $el — caption side channel needs gstreamer1.0-plugins-bad" ;;
@@ -1539,6 +1542,9 @@ done
 [ -x /usr/local/bin/nexvue-encode.py ] \
   && ok "nexvue-encode.py present (persistent publish + disposable capture)" \
   || warn "nexvue-encode.py missing — nexvue-encode@N will not start"
+[ -f /usr/local/bin/nexvue_opus_ms.py ] \
+  && ok "nexvue_opus_ms.py present (Chrome-mapping 8ch Opus)" \
+  || warn "nexvue_opus_ms.py missing — encode will not start (L/R multiopus map)"
 [ -x /usr/local/bin/nexvue-sfu-publish.py ] \
   && ok "nexvue-sfu-publish.py present (Cloudflare Stream WHIP)" \
   || warn "nexvue-sfu-publish.py missing — Stream hybrid/sfu egress will not publish"
