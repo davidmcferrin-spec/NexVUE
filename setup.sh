@@ -15,6 +15,9 @@
 #                              the flag is a legacy alias and also works with
 #                              --check if you only want the firewall step.
 #
+# Host timezone is forced to America/New_York (journals + PHP date.timezone);
+# NTP is turned on. --portal does the same. --check verifies only.
+#
 # Python policy: NexVUE uses stdlib only — no pip, ever. Any future Python
 # dependency must come from apt (python3-<package>).
 #
@@ -248,6 +251,112 @@ ensure_sshd() {
   return 0
 }
 
+# Host clock + logs: journals, Apache, Python naive local time, and PHP
+# date() all follow America/New_York (EST/EDT). Metrics already defaults
+# to the same zone. SQLite samples stay UTC epoch. --check verifies only.
+ensure_timezone_eastern() {
+  local check_only=false
+  [ "${1:-}" = "--check" ] && check_only=true
+  local want="America/New_York"
+  step "Timezone — ${want} + NTP"
+
+  local tz="" ntp="" ntp_sync=""
+  if command -v timedatectl >/dev/null 2>&1; then
+    tz="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
+    ntp="$(timedatectl show -p NTP --value 2>/dev/null || true)"
+    ntp_sync="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+  elif [ -f /etc/timezone ]; then
+    tz="$(tr -d '[:space:]' < /etc/timezone)"
+  fi
+
+  if $check_only; then
+    if [ "${tz}" = "${want}" ]; then
+      ok "timezone is ${want}"
+    else
+      warn "timezone is ${tz:-unknown} (want ${want}) — re-run sudo ./setup.sh"
+    fi
+    if command -v timedatectl >/dev/null 2>&1; then
+      if [ "${ntp}" = "yes" ]; then
+        ok "NTP is on"
+      else
+        warn "NTP is off — re-run sudo ./setup.sh"
+      fi
+      if [ "${ntp_sync}" = "yes" ]; then
+        ok "clock is NTP-synchronized"
+      else
+        warn "clock not NTP-synchronized yet (NTP may still be catching up)"
+      fi
+    fi
+    local php_ini_ok=false
+    local d
+    for d in /etc/php/*/apache2/conf.d/99-nexvue-timezone.ini \
+             /etc/php/*/cli/conf.d/99-nexvue-timezone.ini; do
+      [ -f "${d}" ] || continue
+      if grep -qE '^[[:space:]]*date\.timezone[[:space:]]*=[[:space:]]*America/New_York' "${d}"; then
+        php_ini_ok=true
+        break
+      fi
+    done
+    if $php_ini_ok; then
+      ok "PHP date.timezone is ${want}"
+    elif compgen -G "/etc/php/*/apache2/conf.d" >/dev/null 2>&1 \
+        || compgen -G "/etc/php/*/cli/conf.d" >/dev/null 2>&1; then
+      warn "PHP date.timezone drop-in missing — re-run sudo ./setup.sh"
+    fi
+    return 0
+  fi
+
+  if [ ! -e "/usr/share/zoneinfo/${want}" ]; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y -qq tzdata \
+      || warn "apt-get install tzdata failed — timezone may stay unset"
+  fi
+
+  if command -v timedatectl >/dev/null 2>&1; then
+    if timedatectl set-timezone "${want}" >/dev/null 2>&1; then
+      ok "timezone set to ${want}"
+    else
+      warn "timedatectl set-timezone ${want} failed"
+    fi
+    if timedatectl set-ntp true >/dev/null 2>&1; then
+      ok "NTP enabled"
+    else
+      warn "timedatectl set-ntp true failed"
+    fi
+    # set-ntp is policy; make sure a client is actually running.
+    systemctl enable --now systemd-timesyncd >/dev/null 2>&1 \
+      || systemctl enable --now chrony >/dev/null 2>&1 \
+      || true
+    ntp_sync="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+    if [ "${ntp_sync}" = "yes" ]; then
+      ok "clock is NTP-synchronized"
+    else
+      warn "clock not NTP-synchronized yet (NTP may still be catching up)"
+    fi
+  elif [ -e "/usr/share/zoneinfo/${want}" ]; then
+    ln -sfn "/usr/share/zoneinfo/${want}" /etc/localtime
+    printf '%s\n' "${want}" > /etc/timezone
+    ok "timezone set to ${want} via /etc/localtime (timedatectl missing)"
+    warn "timedatectl missing — enable NTP (systemd-timesyncd or chrony) by hand"
+  else
+    warn "zoneinfo ${want} missing — install tzdata"
+  fi
+
+  # PHP date()/error_log follow php.ini, not the host zone, unless set.
+  local php_ini="date.timezone = ${want}"
+  local written=false
+  for d in /etc/php/*/apache2/conf.d /etc/php/*/cli/conf.d; do
+    [ -d "${d}" ] || continue
+    if printf '%s\n' "${php_ini}" > "${d}/99-nexvue-timezone.ini"; then
+      chmod 644 "${d}/99-nexvue-timezone.ini" 2>/dev/null || true
+      written=true
+    fi
+  done
+  if $written; then
+    ok "PHP date.timezone = ${want}"
+  fi
+}
+
 # SSH first, then HTTPS/WHEP, then HTTP (redirect-to-HTTPS only — see
 # nexvue_web_https_redirect_target() in nexvue-web-router.php; closing :80
 # outright used to strand anyone who reached the UI via a stale http://
@@ -349,6 +458,7 @@ install_portal() {
     fi
     [ -f /etc/nexvue-portal/tls/fullchain.pem ] && ok "portal TLS cert present" || warn "portal TLS cert missing"
     [ -f /var/lib/nexvue-portal/portal.db ] && ok "portal.db present" || warn "portal.db missing — run bootstrap"
+    ensure_timezone_eastern --check
     if command -v curl >/dev/null 2>&1 && systemctl is-active --quiet apache2 2>/dev/null; then
       _portal_http_loc="$(curl -fsS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 2 "http://127.0.0.1/login" 2>/dev/null || true)"
       case "${_portal_http_loc}" in
@@ -362,9 +472,10 @@ install_portal() {
   step "Cloud portal — packages (Apache + PHP only; no DeckLink/GStreamer/MediaMTX)"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq || warn "apt-get update failed — continuing with cached package lists"
-  apt-get install -y -qq apache2 libapache2-mod-php php-cli php-sqlite3 ufw \
+  apt-get install -y -qq apache2 libapache2-mod-php php-cli php-sqlite3 ufw tzdata \
     || fail "apt-get install (apache2/php/ufw) failed"
-  ok "apache2 + php-cli + php-sqlite3 + ufw installed"
+  ok "apache2 + php-cli + php-sqlite3 + ufw + tzdata installed"
+  ensure_timezone_eastern
 
   step "Cloud portal — web app"
   install -d -m 755 "${public}" "${pages}" "${assets}"
@@ -598,12 +709,13 @@ apt-get install -y -qq \
   intel-media-va-driver-non-free vainfo intel-gpu-tools \
   build-essential curl ca-certificates jq openssl ssl-cert \
   apache2 libapache2-mod-php php-cli php-sqlite3 \
-  openssh-server ufw \
+  openssh-server ufw tzdata \
   python3-gi python3-gst-1.0 gir1.2-glib-2.0 gir1.2-gstreamer-1.0 \
   libopus0 \
   gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
   gstreamer1.0-nice
-ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for nexvue-encode.py + Stream WHIP — never pip; Apache + php-cli/sqlite3 for login/auth + metrics.php)"
+ok "apt packages installed (python: stdlib + apt-only python3-gi/python3-gst-1.0 for nexvue-encode.py + Stream WHIP — never pip; Apache + php-cli/sqlite3 for login/auth + metrics.php; tzdata for America/New_York)"
+ensure_timezone_eastern
 
 # PHP under Apache (login / ops / metrics). Idempotent: enable whatever
 # versioned mod_php apt just installed, then reload if Apache is running.
@@ -742,6 +854,11 @@ if [ -f /etc/nexvue/nexvue.env ]; then
     printf '\n# Added by setup.sh (was unset; Quad 2 default is 8)\nMAX_CHANNELS=%s\n' "${_fill}" \
       >> /etc/nexvue/nexvue.env
     ok "appended MAX_CHANNELS=${_fill} to /etc/nexvue/nexvue.env"
+  fi
+  if [ -z "$(nexvue_env_get NEXVUE_METRICS_TZ "")" ]; then
+    printf '\n# Added by setup.sh (Metrics heatmap / chart labels)\nNEXVUE_METRICS_TZ=America/New_York\n' \
+      >> /etc/nexvue/nexvue.env
+    ok "appended NEXVUE_METRICS_TZ=America/New_York to /etc/nexvue/nexvue.env"
   fi
 fi
 
@@ -1595,6 +1712,9 @@ if systemctl is-enabled --quiet ssh 2>/dev/null || systemctl is-enabled --quiet 
 else
   warn "sshd not enabled on boot — sudo systemctl enable ssh"
 fi
+if $CHECK_ONLY; then
+  ensure_timezone_eastern --check
+fi
 if [ -f /etc/apache2/ports.conf ]; then
   if python3 "${REPO_DIR}/nexvue-apache-http-on.py" /etc/apache2/ports.conf --check \
       >/dev/null 2>&1; then
@@ -1852,6 +1972,7 @@ Next steps:
      UI is HTTPS-only. Use https://<edge-ip>/login — plain http:// will not connect.
   6. Firewall: setup allows OpenSSH + 443/8889/8189 and enables ufw (HTTP :80
      is not allowed). Re-apply with sudo ./setup.sh --firewall if needed.
+     Timezone is America/New_York (journals + PHP date.timezone); NTP is on.
   7. Remove any Apache Basic Auth / .htaccess AuthType — app login replaces it.
      Confirm JWKS (MediaMTX): curl -fsS http://127.0.0.1:9080/nexvue-jwks.php | head
   8. Login:  https://<edge-ip>/login

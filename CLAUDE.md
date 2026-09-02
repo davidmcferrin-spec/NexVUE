@@ -93,6 +93,9 @@ this box can't get additional ports opened.
   portal health via outbound heartbeats.
   Metrics reporting timezone defaults to America/New_York (heatmap buckets,
   chart labels, custom From/To); override with `NEXVUE_METRICS_TZ` only if needed.
+  `setup.sh` (edge and `--portal`) forces host `America/New_York` + NTP and a
+  PHP `date.timezone` drop-in so journals and PHP local time match; `--check`
+  verifies. SQLite samples stay UTC epoch.
   Metrics Kick writes a short-lived registry via `nexvue-ops.php`
   (`kick_viewer` + `kick_check`); Player / Multiview read the WHEP
   `ID` header (API session UUID, not Location secret), suppress self-healing,
@@ -347,6 +350,8 @@ this box can't get additional ports opened.
 - `setup.sh` is the canonical installer — keep it in sync with any new
   package, file, or unit added to the project. It also brings the station
   up: shared units + encode slots for `MAX_CHANNELS` (see Known open items).
+  Host timezone is `America/New_York` + NTP (`ensure_timezone_eastern`;
+  edge and `--portal`).
 - Dark monospace UI aesthetic (see `index.html` palette) — consistent
   across the tool family (player, multiviewer, metrics, services, channels).
   Light theme via `html[data-theme]` + `localStorage.nexvue-theme` (default

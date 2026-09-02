@@ -77,6 +77,10 @@ when lock returns. When
 redirect-only front door (`Listen` + `000-default` ensured, real content
 stays HTTPS-only), allows OpenSSH / 80 / 443 / 8889 / 8189 in ufw, and
 enables ufw. `--firewall` is a legacy alias for that ufw step.
+It forces the host timezone to `America/New_York` (journals, Apache, PHP
+`date.timezone`), turns NTP on (`timedatectl set-ntp true`), and writes
+`NEXVUE_METRICS_TZ=America/New_York` when that key is missing. `--portal`
+does the same on the catalog box. `--check` verifies timezone + NTP only.
 
 Manual steps below match what `setup.sh` does if you prefer to run them by hand.
 
@@ -997,7 +1001,7 @@ sudo systemctl restart nexvue-metrics
 | Variable | Default | Purpose |
 |---|---|---|
 | `NEXVUE_METRICS_DB` | `/var/lib/nexvue/metrics.db` | Must match the collector's DB path |
-| `NEXVUE_METRICS_TZ` | `America/New_York` | Timezone for heatmap bucketing and (via API) dashboard clock labels / custom From–To. Override only if this edge should report in another zone. |
+| `NEXVUE_METRICS_TZ` | `America/New_York` | Timezone for heatmap bucketing and (via API) dashboard clock labels / custom From–To. `setup.sh` also sets the host zone + PHP `date.timezone` to Eastern and enables NTP. Override this env only if Metrics should label in another zone than the host. |
 
 ### Viewer drill-down: how it works
 
