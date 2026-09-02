@@ -475,7 +475,15 @@ this box can't get additional ports opened.
  (640 www-data); failed Update JSON includes `setup_tail`; **Setup log**
  (`update_setup_log`) shows the last run in the journal pane. Semver lives
  in repo `VERSION`; top-nav badge via `nexvue-version.php` +
- `/var/lib/nexvue/version.json`.
+ `/var/lib/nexvue/version.json`. **Reboot server…** (`reboot_host`) is
+ admin-only on Services (same gate as Update). Two-step confirm
+ (`confirm()` then type `REBOOT`), then `nexvue-ops-reboot.sh` →
+ `systemctl reboot` (clean systemd shutdown, not `reboot -f`). `setup.sh`
+ rewrites `/etc/sudoers.d/nexvue-ops` from the repo every run and fails
+ if the reboot allowlist is missing. Sudoers line has no trailing `*` —
+ extra args are rejected. JSON `ok` is
+ best-effort; the HTTP connection usually dies when the kernel goes down.
+ Encoders and auto-unpark start with boot.
  Settings Channel list shows LO yes/no and
  **Restart all encoders** (`restart_encoders`: systemd-enabled encode slots
  only); Services has the same bulk restart. Channel editor **Factory

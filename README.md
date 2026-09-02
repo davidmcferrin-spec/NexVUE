@@ -441,6 +441,14 @@ Then from a LAN machine:
   encoders. Top-nav shows **vX.Y.Z** from the `VERSION` file
   (`nexvue-version.php`). Services page and `update_status` / `update_repo`
   / `update_setup_log` are admin-only.
+  **Reboot server…** (`reboot_host`, admin only) is a two-step confirm
+  (`confirm()` then type `REBOOT`) that runs `nexvue-ops-reboot.sh` →
+  `systemctl reboot`. `setup.sh` rewrites `/etc/sudoers.d/nexvue-ops` from
+  the repo every run (and refuses to finish if the reboot line is missing).
+  Sudoers omit a trailing `*` so the helper takes no arguments. Every WHEP session drops; the UI and SSH are gone for about
+  1–2 minutes; encoders and auto-unpark come back with boot. The JSON
+  `ok` is best-effort — the HTTP connection usually dies when the kernel
+  goes down.
 - **Settings:** top nav → Settings — optional station **logo** (Branding
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
   shown in the top nav next to **NexVUE** when present); admin-only **Card /

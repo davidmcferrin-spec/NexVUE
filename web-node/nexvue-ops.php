@@ -3,7 +3,7 @@
  * nexvue-ops.php — JSON API for NexVUE Services + Channels ops UI.
  *
  * Phase 2 local auth: session cookie required. Roles:
- *   admin — Services + Settings + kick + branding + support/update + card/slots + public reachability + certificates + Cloudflare TURN
+ *   admin — Services + Settings + kick + branding + support/update + host reboot + card/slots + public reachability + certificates + Cloudflare TURN
  *   operator — Settings + kick + branding (not public hostname/IP, not certificates, not Cloudflare TURN)
  *   any auth (user or share) — aliases, kick_check (Player/Multiview)
  *
@@ -14,7 +14,7 @@
  *   services | journal | journal_clear | audio_probe | channels_list | channel_get | channel_put
  *   | channels_bulk | restart | restart_encoders | set_enabled | set_running | aliases
  *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete | support_bundle
- *   | update_status | update_repo | update_setup_log | network_get | network_put | network_test
+ *   | update_status | update_repo | update_setup_log | reboot_host | network_get | network_put | network_test
  *   | hardware_get | hardware_put
  *   | tls_status | tls_issue | tls_upload
  *   | turn_get | turn_put | turn_test
@@ -53,6 +53,12 @@
  * update_status / update_repo call nexvue-ops-update.sh (git fetch + hard-reset
  * to origin/NEXVUE_UPDATE_BRANCH + setup.sh). Admin-only — same gate as
  * Services (operators cannot poll status or apply).
+ *
+ * reboot_host calls nexvue-ops-reboot.sh → systemctl reboot (clean systemd
+ * shutdown, not reboot -f). Admin-only. The helper takes no arguments;
+ * sudoers omit a trailing * so extra argv cannot sneak through. JSON
+ * {"ok":true} is best-effort — the HTTP connection usually dies when the
+ * kernel goes down.
  *
  * journal_clear records a per-unit watermark via nexvue-ops-journal.sh clear
  * so the Services journal view hides prior lines for that unit only (systemd
@@ -1352,6 +1358,7 @@ function ops_require_auth(string $action): void {
     $adminOnly = [
         'services', 'journal', 'journal_clear', 'set_enabled', 'set_running',
         'support_bundle', 'update_status', 'update_repo', 'update_setup_log',
+        'reboot_host',
         'network_get', 'network_put', 'network_test',
         'hardware_get', 'hardware_put',
         'tls_status', 'tls_issue', 'tls_upload',
@@ -1604,6 +1611,40 @@ if ($action === 'update_setup_log') {
         'truncated' => $blob['truncated'],
         'log' => $blob['log'],
     ], JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+if ($action === 'reboot_host') {
+    $helper = '/usr/local/bin/nexvue-ops-reboot.sh';
+    if (!is_file($helper)) {
+        fail(
+            500,
+            'nexvue-ops-reboot.sh not installed — on the edge host: '
+            . 'cd "$(cat /etc/nexvue/repo.path 2>/dev/null || echo /path/to/NexVUE)" && sudo ./setup.sh'
+        );
+    }
+    if (!is_executable($helper)) {
+        fail(500, 'nexvue-ops-reboot.sh is not executable — re-run sudo ./setup.sh');
+    }
+    $r = sudo_run([$helper]);
+    if ($r['code'] !== 0) {
+        $err = trim($r['stderr']);
+        if (stripos($err, 'not allowed') !== false
+            || stripos($err, 'password') !== false) {
+            fail(
+                500,
+                'sudo denied for nexvue-ops-reboot.sh — install sudoers: '
+                . 'sudo install -m 440 nexvue-ops.sudoers /etc/sudoers.d/nexvue-ops '
+                . '&& sudo visudo -cf /etc/sudoers.d/nexvue-ops'
+            );
+        }
+        fail(500, $err !== '' ? $err : 'reboot failed');
+    }
+    if (!headers_sent()) {
+        header('Content-Type: application/json');
+        header('Cache-Control: no-store');
+    }
+    echo json_encode(['ok' => true, 'rebooting' => true], JSON_UNESCAPED_SLASHES);
     exit;
 }
 

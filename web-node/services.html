@@ -129,6 +129,8 @@
     background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600;
   }
   button.primary:hover { filter: brightness(1.05); }
+  button.danger { color: var(--bad); border-color: var(--bad); }
+  button.danger:hover { background: var(--bad); color: #fff; }
   button:disabled { opacity: .55; cursor: not-allowed; }
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
@@ -182,6 +184,7 @@
     <span class="update-meta" id="update-meta" data-auth-role="admin" title="Git update status">—</span>
     <button type="button" id="btn-update-repo" data-auth-role="admin" title="Fetch origin, hard-reset the clone, and re-run setup.sh">Update from repo…</button>
     <button type="button" id="btn-setup-log" data-auth-role="admin" title="Last setup.sh run (Update from repo or sudo ./setup.sh)">Setup log</button>
+    <button type="button" class="danger" id="btn-reboot-host" data-auth-role="admin" title="Reboot this Linux box after confirmation">Reboot server…</button>
   </div>
 </div>
 
@@ -558,12 +561,14 @@
 
   const updateBtn = document.getElementById("btn-update-repo");
   const setupLogBtn = document.getElementById("btn-setup-log");
+  const rebootBtn = document.getElementById("btn-reboot-host");
   const updateMeta = document.getElementById("update-meta");
   let lastUpdateStatus = null;
 
   if (!isAdmin) {
     if (updateBtn) updateBtn.hidden = true;
     if (setupLogBtn) setupLogBtn.hidden = true;
+    if (rebootBtn) rebootBtn.hidden = true;
     if (updateMeta) updateMeta.hidden = true;
   }
 
@@ -699,6 +704,38 @@
       } finally {
         updateBtn.disabled = false;
         refreshUpdateStatus();
+      }
+    });
+  }
+
+  if (isAdmin && rebootBtn) {
+    rebootBtn.addEventListener("click", async () => {
+      if (!confirm(
+        "Reboot this Linux box now?\n\n" +
+        "Every WHEP session will drop. The UI and SSH will be unreachable " +
+        "for about 1–2 minutes while the station comes back. Encoders and " +
+        "auto-unpark start with boot."
+      )) return;
+      const typed = prompt("Type REBOOT to confirm:");
+      if (typed === null) return;
+      if (String(typed).trim() !== "REBOOT") {
+        alert("Reboot cancelled — confirmation did not match REBOOT.");
+        return;
+      }
+      rebootBtn.disabled = true;
+      statusEl.textContent = "rebooting — this page will disconnect…";
+      try {
+        await api("reboot_host", {});
+        statusEl.textContent = "reboot requested — waiting for the box to come back…";
+      } catch (err) {
+        const msg = String(err.message || err);
+        if (/failed to fetch|networkerror|load failed|http 5/i.test(msg)) {
+          statusEl.textContent = "reboot underway — reload when the box is back";
+          return;
+        }
+        rebootBtn.disabled = false;
+        statusEl.textContent = "reboot failed";
+        alert(msg);
       }
     });
   }

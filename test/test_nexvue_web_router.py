@@ -78,6 +78,16 @@ class TestWebRouterFiles(unittest.TestCase):
         self.assertIn("if (isAdmin && updateBtn)", services)
         self.assertIn("if (!isAdmin || !updateMeta)", services)
 
+    def test_reboot_host_is_admin_only(self) -> None:
+        ops = (ROOT / "web-node" / "nexvue-ops.php").read_text(encoding="utf-8")
+        start = ops.index("$adminOnly = [")
+        block = ops[start : ops.index("];", start)]
+        self.assertIn("'reboot_host'", block)
+        services = (ROOT / "web-node" / "services.html").read_text(encoding="utf-8")
+        self.assertRegex(services, r'id="btn-reboot-host"[^>]*data-auth-role="admin"')
+        self.assertIn('api("reboot_host"', services)
+        self.assertIn('Type REBOOT to confirm', services)
+
     def test_login_page_has_non_blocking_portal_nudge(self) -> None:
         # Phase 4 — local sign-in must never be hidden/blocked by the nudge;
         # it only becomes visible via JS after a successful portal_status

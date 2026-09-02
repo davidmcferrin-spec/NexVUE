@@ -562,7 +562,7 @@ REQUIRED_FILES=(
   nexvue-ops-env-read.sh nexvue-ops-env-write.sh nexvue-ops-restart.sh
   nexvue-ops-enable.sh nexvue-ops-audio-probe.sh
   nexvue-ops-support-bundle.sh nexvue-support-bundle.py
-  nexvue-ops-update.sh
+  nexvue-ops-update.sh nexvue-ops-reboot.sh
   web-node/nexvue-version.php
   VERSION
   channels-example.env
@@ -790,6 +790,7 @@ install -m 755 "${REPO_DIR}/nexvue-ops-audio-probe.sh" /usr/local/bin/nexvue-ops
 install -m 755 "${REPO_DIR}/nexvue-ops-support-bundle.sh" /usr/local/bin/nexvue-ops-support-bundle.sh
 install -m 755 "${REPO_DIR}/nexvue-support-bundle.py" /usr/local/bin/nexvue-support-bundle.py
 install -m 755 "${REPO_DIR}/nexvue-ops-update.sh" /usr/local/bin/nexvue-ops-update.sh
+install -m 755 "${REPO_DIR}/nexvue-ops-reboot.sh" /usr/local/bin/nexvue-ops-reboot.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-portal-write.py" /usr/local/bin/nexvue-ops-portal-write.py
 install -m 755 "${REPO_DIR}/nexvue-ops-portal-write.sh" /usr/local/bin/nexvue-ops-portal-write.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-network-write.py" /usr/local/bin/nexvue-ops-network-write.py
@@ -946,20 +947,34 @@ for id in $(seq "$MAX_CH" 7); do
   fi
 done
 
-# Ops UI sudoers — validate before installing (a bad drop-in breaks sudo).
+# Ops UI sudoers — rewrite /etc/sudoers.d/nexvue-ops from the repo every
+# run (visudo -cf first; a bad drop-in would break sudo). This is how new
+# helpers get allowlisted (reboot, update, TLS, …). Do not hand-edit the
+# live drop-in. Reboot has no trailing * — extra args stay rejected.
+if ! grep -qF 'NOPASSWD: /usr/local/bin/nexvue-ops-reboot.sh' \
+     "${REPO_DIR}/nexvue-ops.sudoers"; then
+  fail "nexvue-ops.sudoers missing reboot allowlist — Services Reboot would be denied"
+fi
+if grep -qF 'nexvue-ops-reboot.sh *' "${REPO_DIR}/nexvue-ops.sudoers"; then
+  fail "nexvue-ops.sudoers must not allow arguments on nexvue-ops-reboot.sh"
+fi
 if command -v visudo >/dev/null; then
   TMP_SUDOERS="$(mktemp)"
   # visudo -cf needs the final path form; stage then install.
   install -m 440 "${REPO_DIR}/nexvue-ops.sudoers" "${TMP_SUDOERS}"
   if visudo -cf "${TMP_SUDOERS}" >/dev/null 2>&1; then
     install -m 440 "${REPO_DIR}/nexvue-ops.sudoers" /etc/sudoers.d/nexvue-ops
-    ok "sudoers drop-in installed: /etc/sudoers.d/nexvue-ops"
+    ok "sudoers drop-in installed: /etc/sudoers.d/nexvue-ops (includes reboot)"
   else
     warn "nexvue-ops.sudoers failed visudo -cf — NOT installed; Services/Settings pages will not work until fixed"
   fi
   rm -f "${TMP_SUDOERS}"
 else
   warn "visudo not found — copy nexvue-ops.sudoers to /etc/sudoers.d/nexvue-ops manually (mode 0440)"
+fi
+if [ ! -f /etc/sudoers.d/nexvue-ops ] \
+   || ! grep -qF 'NOPASSWD: /usr/local/bin/nexvue-ops-reboot.sh' /etc/sudoers.d/nexvue-ops; then
+  fail "sudoers drop-in missing nexvue-ops-reboot.sh — fix visudo / nexvue-ops.sudoers and re-run setup.sh"
 fi
 
 # Station branding logo storage (www-data writes via nexvue-ops.php logo_*).
@@ -1717,7 +1732,7 @@ fi
 for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
          nexvue-ops-env-write.sh nexvue-ops-restart.sh nexvue-ops-enable.sh \
          nexvue-ops-audio-probe.sh nexvue-ops-support-bundle.sh \
-         nexvue-support-bundle.py nexvue-ops-update.sh \
+         nexvue-support-bundle.py nexvue-ops-update.sh nexvue-ops-reboot.sh \
          nexvue-ops-env-update.py nexvue-phase1-closeout.sh \
          nexvue-phase1-deploy-verify.sh nexvue-encode-storm-diagnose.sh \
          nexvue-encode-auto-park.sh          nexvue-ops-network-write.sh \
@@ -1748,6 +1763,11 @@ if [ -f /etc/sudoers.d/nexvue-ops ]; then
     ok "sudoers allows nexvue-ops-update.sh"
   else
     warn "sudoers missing nexvue-ops-update.sh — Services Update will fail until sudoers is refreshed from repo"
+  fi
+  if grep -q 'nexvue-ops-reboot\.sh' /etc/sudoers.d/nexvue-ops; then
+    ok "sudoers allows nexvue-ops-reboot.sh"
+  else
+    warn "sudoers missing nexvue-ops-reboot.sh — Services Reboot server will fail until sudoers is refreshed from repo"
   fi
   if grep -q 'nexvue-ops-network-write\.sh' /etc/sudoers.d/nexvue-ops; then
     ok "sudoers allows nexvue-ops-network-write.sh"
