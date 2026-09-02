@@ -247,7 +247,10 @@
       checked[c.value] = c.checked;
     });
     grid.innerHTML = "";
-    for (let i = 0; i < 8; i++) {
+    const slotCount = (window.NexVueUI && NexVueUI.maxChannels)
+      ? NexVueUI.maxChannels()
+      : 8;
+    for (let i = 0; i < slotCount; i++) {
       const path = "ch" + i;
       const lab = document.createElement("label");
       const text = (window.NexVueUI && NexVueUI.channelLabel)

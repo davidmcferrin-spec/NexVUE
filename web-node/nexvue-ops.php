@@ -3,7 +3,7 @@
  * nexvue-ops.php — JSON API for NexVUE Services + Channels ops UI.
  *
  * Phase 2 local auth: session cookie required. Roles:
- *   admin — Services + Settings + kick + branding + support/update + public reachability + certificates + Cloudflare TURN
+ *   admin — Services + Settings + kick + branding + support/update + card/slots + public reachability + certificates + Cloudflare TURN
  *   operator — Settings + kick + branding (not public hostname/IP, not certificates, not Cloudflare TURN)
  *   any auth (user or share) — aliases, kick_check (Player/Multiview)
  *
@@ -15,6 +15,7 @@
  *   | channels_bulk | restart | restart_encoders | set_enabled | set_running | aliases
  *   | kick_viewer | kick_check | logo_get | logo_put | logo_delete | support_bundle
  *   | update_status | update_repo | update_setup_log | network_get | network_put | network_test
+ *   | hardware_get | hardware_put
  *   | tls_status | tls_issue | tls_upload
  *   | turn_get | turn_put | turn_test
  *   | sfu_get | sfu_put | sfu_test
@@ -38,6 +39,11 @@
  * (never nexvue.env). Admin-only, same gate as Public reachability. Turn on
  * mints short-lived iceServers for Player / Multiview via whep_jwt; MediaMTX
  * is not restarted.
+ *
+ * hardware_get / hardware_put persist MAX_DEVICES + MAX_CHANNELS (same
+ * value) in nexvue.env, seed missing channel .env files, and enable/disable
+ * nexvue-encode@N. Admin-only, same gate as Public reachability. Detect
+ * reports how many DeckLink sub-devices the status daemon currently sees.
  *
  * sfu_get / sfu_put / sfu_test persist Cloudflare Stream (WHIP/WHEP) in
  * auth.db. Admin-only. Mode off | hybrid (share + portal only) | sfu (all
@@ -77,7 +83,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/nexvue-auth-lib.php';
 
 const CHANNELS_DIR = '/etc/nexvue/channels';
-/** Encoder slots 0..MAX_CHANNEL_ID (MAX_CHANNELS=8). Matches Quad 2 DeckLink range. */
+/** Hard ceiling for encode@N allowlists (Quad 2). Live count is auth_max_channel_id(). */
 const MAX_CHANNEL_ID = 7;
 const SUDO = '/usr/bin/sudo';
 /** Kick registry TTL — long enough for the 5s player reconnect window + retries. */
@@ -398,8 +404,108 @@ function unit_enable_allowed(string $unit): bool {
     return (bool)preg_match('/^nexvue-encode@[0-7]$/', $unit);
 }
 
+function ops_max_channels(): int {
+    return auth_max_channels();
+}
+
+function ops_max_channel_id(): int {
+    return auth_max_channel_id();
+}
+
 function channel_id_ok($id): bool {
-    return is_numeric($id) && (int)$id >= 0 && (int)$id <= MAX_CHANNEL_ID;
+    return is_numeric($id) && (int)$id >= 0 && (int)$id <= ops_max_channel_id();
+}
+
+/**
+ * Live DeckLink sub-device count from the status daemon (same loopback
+ * :9998 the player uses). Null count when the daemon is down or stale.
+ *
+ * @return array{count: ?int, names: list<string>, stale: bool}
+ */
+function hardware_detect_devices(): array {
+    $empty = ['count' => null, 'names' => [], 'stale' => false];
+    $env = getenv('NEXVUE_STATUS_URL');
+    $urls = (is_string($env) && $env !== '')
+        ? [rtrim($env, '/') . '/status']
+        : ['http://127.0.0.1:9998/status', 'https://127.0.0.1:9998/status'];
+    foreach ($urls as $url) {
+        $body = hardware_fetch_status($url);
+        if ($body === null) {
+            continue;
+        }
+        $data = json_decode($body, true);
+        if (!is_array($data) || !isset($data['devices']) || !is_array($data['devices'])) {
+            continue;
+        }
+        $names = [];
+        foreach ($data['devices'] as $d) {
+            if (is_array($d) && isset($d['name']) && is_string($d['name'])) {
+                $names[] = $d['name'];
+            } elseif (is_array($d) && isset($d['index'])) {
+                $names[] = 'SDI ' . (string)$d['index'];
+            }
+        }
+        $stale = !empty($data['stale']);
+        return [
+            'count' => $stale ? null : count($data['devices']),
+            'names' => $names,
+            'stale' => $stale,
+        ];
+    }
+    return $empty;
+}
+
+function hardware_fetch_status(string $url): ?string {
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return null;
+        }
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 1,
+            CURLOPT_TIMEOUT => 3,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_HTTPHEADER => ['Accept: application/json'],
+        ]);
+        $body = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($body === false || $body === '' || $code < 200 || $code >= 300) {
+            return null;
+        }
+        return $body;
+    }
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'timeout' => 3.0,
+            'ignore_errors' => true,
+            'header' => "Accept: application/json\r\n",
+        ],
+        'ssl' => [
+            'verify_peer' => false,
+            'verify_peer_name' => false,
+        ],
+    ]);
+    $body = @file_get_contents($url, false, $ctx);
+    return is_string($body) && $body !== '' ? $body : null;
+}
+
+function hardware_read_settings(): array {
+    $slots = ops_max_channels();
+    $detected = hardware_detect_devices();
+    return [
+        'slots' => $slots,
+        'max_devices' => $slots,
+        'max_channels' => $slots,
+        'max_channel_id' => $slots - 1,
+        'presets' => [2, 4, 8],
+        'detected_devices' => $detected['count'],
+        'detected_names' => $detected['names'],
+        'detected_stale' => $detected['stale'],
+    ];
 }
 
 /**
@@ -1209,7 +1315,8 @@ function unit_allowed(string $unit): bool {
 
 function list_channel_ids(): array {
     $ids = [];
-    for ($i = 0; $i <= MAX_CHANNEL_ID; $i++) {
+    $max = ops_max_channel_id();
+    for ($i = 0; $i <= $max; $i++) {
         if (is_readable(CHANNELS_DIR . "/{$i}.env")) {
             $ids[] = $i;
         }
@@ -1246,6 +1353,7 @@ function ops_require_auth(string $action): void {
         'services', 'journal', 'journal_clear', 'set_enabled', 'set_running',
         'support_bundle', 'update_status', 'update_repo', 'update_setup_log',
         'network_get', 'network_put', 'network_test',
+        'hardware_get', 'hardware_put',
         'tls_status', 'tls_issue', 'tls_upload',
         'turn_get', 'turn_put', 'turn_test',
         'sfu_get', 'sfu_put', 'sfu_test',
@@ -1582,7 +1690,7 @@ if ($action === 'journal_clear') {
 if ($action === 'audio_probe') {
     $id = $body['id'] ?? ($_GET['id'] ?? null);
     if (!channel_id_ok($id)) {
-        fail(400, 'id must be 0-' . MAX_CHANNEL_ID);
+        fail(400, 'id must be 0-' . ops_max_channel_id());
     }
     $id = (int)$id;
     $durationMs = (int)($body['duration_ms'] ?? ($_GET['duration_ms'] ?? 1000));
@@ -1747,6 +1855,8 @@ if ($action === 'aliases') {
         'audio_channels' => $audioChannels,
         'audio_layouts' => $audioLayouts,
         'audio_embeds' => $audioEmbeds,
+        'max_channels' => ops_max_channels(),
+        'max_channel_id' => ops_max_channel_id(),
     ]);
     exit;
 }
@@ -1791,7 +1901,8 @@ if ($action === 'channels_list') {
         'ok' => true,
         'channels' => $channels,
         'editable_keys' => EDITABLE_KEYS,
-        'max_channel_id' => MAX_CHANNEL_ID,
+        'max_channel_id' => ops_max_channel_id(),
+        'max_channels' => ops_max_channels(),
     ]);
     exit;
 }
@@ -1801,7 +1912,7 @@ if ($action === 'channels_list') {
 if ($action === 'channel_get') {
     $id = $body['id'] ?? ($_GET['id'] ?? null);
     if (!channel_id_ok($id)) {
-        fail(400, 'id must be 0-' . MAX_CHANNEL_ID);
+        fail(400, 'id must be 0-' . ops_max_channel_id());
     }
     $id = (int)$id;
     $r = sudo_run(['/usr/local/bin/nexvue-ops-env-read.sh', (string)$id]);
@@ -1829,7 +1940,7 @@ if ($action === 'channel_put') {
     $id = $body['id'] ?? null;
     $patch = $body['patch'] ?? null;
     if (!channel_id_ok($id)) {
-        fail(400, 'id must be 0-' . MAX_CHANNEL_ID);
+        fail(400, 'id must be 0-' . ops_max_channel_id());
     }
     if (!is_array($patch)) {
         fail(400, 'patch object required');
@@ -1890,7 +2001,7 @@ if ($action === 'channels_bulk') {
     $bulkIds = [];
     foreach ($ids as $rawId) {
         if (!channel_id_ok($rawId)) {
-            fail(400, 'each id must be 0-' . MAX_CHANNEL_ID);
+            fail(400, 'each id must be 0-' . ops_max_channel_id());
         }
         $bulkIds[] = (int)$rawId;
     }
@@ -2171,6 +2282,62 @@ if ($action === 'network_test') {
         exit;
     }
     echo json_encode(array_merge(['ok' => true], network_probe($hostname, $ip)));
+    exit;
+}
+
+// ---- hardware_get / hardware_put (admin-only card / encode slots) -------------
+
+if ($action === 'hardware_get') {
+    echo json_encode(['ok' => true] + hardware_read_settings());
+    exit;
+}
+
+if ($action === 'hardware_put') {
+    $raw = $body['slots'] ?? ($body['max_channels'] ?? null);
+    if (!is_numeric($raw)) {
+        fail(400, 'Encode slots must be 1–8 (Duo=2, Duo 2=4, Quad 2=8)');
+    }
+    $slots = (int)$raw;
+    if ($slots < 1 || $slots > 8) {
+        fail(400, 'Encode slots must be 1–8 (Duo=2, Duo 2=4, Quad 2=8)');
+    }
+    $helper = '/usr/local/bin/nexvue-ops-hardware-write.sh';
+    if (!is_file($helper)) {
+        fail(500, 'hardware helper not installed — re-run sudo ./setup.sh');
+    }
+    $payload = json_encode(['slots' => $slots], JSON_UNESCAPED_SLASHES);
+    if (!is_string($payload)) {
+        fail(500, 'failed to encode hardware settings');
+    }
+    $wr = sudo_run([$helper], $payload);
+    $decoded = json_decode($wr['stdout'], true);
+    if ($wr['code'] !== 0) {
+        $err = trim($wr['stderr']);
+        $parsed = json_decode($err, true);
+        if (is_array($parsed) && isset($parsed['error']) && is_string($parsed['error'])) {
+            $err = $parsed['error'];
+        }
+        if ($err === '' && is_array($decoded) && isset($decoded['error'])) {
+            $err = (string)$decoded['error'];
+        }
+        if ($err === '') {
+            $err = 'failed to save card / encode slots';
+        }
+        $status = str_contains($err, 'must be') ? 400 : 500;
+        fail($status, $err);
+    }
+    if (!is_array($decoded) || empty($decoded['ok'])) {
+        fail(500, 'bad helper output');
+    }
+    $out = hardware_read_settings();
+    $out['ok'] = true;
+    $out['seeded'] = $decoded['seeded'] ?? [];
+    $out['stripped'] = $decoded['stripped'] ?? 0;
+    $out['enabled'] = $decoded['enabled'] ?? [];
+    $out['disabled'] = $decoded['disabled'] ?? [];
+    $out['units_skipped'] = !empty($decoded['units_skipped']);
+    $out['unit_errors'] = $decoded['unit_errors'] ?? [];
+    echo json_encode($out);
     exit;
 }
 

@@ -538,16 +538,18 @@ REQUIRED_FILES=(
   web-node/nexvue-metrics.php web-node/nexvue-status.php web-node/nexvue-mediamtx-api.php
   web-node/nexvue-captions.php web-node/nexvue-captions.js
   web-node/nexvue-qr.js web-node/nexvue-ui.js web-node/nexvue-vu.js
-  web-node/nexvue-safe.js web-node/nexvue-scopes.js
+  web-node/nexvue-safe.js web-node/nexvue-scopes.js web-node/nexvue-spectrum.js
   web-node/nexvue-logo.php web-node/chart.umd.min.js
   web-node/metrics.html web-node/index.html web-node/multiview.html
   web-node/nexvue-ops.php web-node/services.html web-node/channels.html
   web-node/nexvue-auth-lib.php web-node/nexvue-auth.php web-node/nexvue-jwks.php nexvue-auth-bootstrap.php
   web-node/nexvue-auth-gate.js web-node/nexvue-share-ui.js
+  web-node/nexvue-client-report.js web-node/nexvue-client-events.php
   web-node/nexvue-web-router.php nexvue-web-apache.conf nexvue-ssl-apache.conf
   web-node/public/index.php
   nexvue-mediamtx-jwt-patch.py nexvue-mediamtx-tls-patch.py
   nexvue-mediamtx-ice-patch.py nexvue-ops-network-write.sh nexvue-ops-network-write.py
+  nexvue-ops-hardware-write.sh nexvue-ops-hardware-write.py
   nexvue-apache-http-on.py
   nexvue-jwks-loopback.conf
   web-node/login.html web-node/forgot.html web-node/reset.html web-node/users.html
@@ -792,6 +794,8 @@ install -m 755 "${REPO_DIR}/nexvue-ops-portal-write.py" /usr/local/bin/nexvue-op
 install -m 755 "${REPO_DIR}/nexvue-ops-portal-write.sh" /usr/local/bin/nexvue-ops-portal-write.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-network-write.py" /usr/local/bin/nexvue-ops-network-write.py
 install -m 755 "${REPO_DIR}/nexvue-ops-network-write.sh" /usr/local/bin/nexvue-ops-network-write.sh
+install -m 755 "${REPO_DIR}/nexvue-ops-hardware-write.py" /usr/local/bin/nexvue-ops-hardware-write.py
+install -m 755 "${REPO_DIR}/nexvue-ops-hardware-write.sh" /usr/local/bin/nexvue-ops-hardware-write.sh
 install -m 755 "${REPO_DIR}/nexvue-mediamtx-ice-patch.py" /usr/local/bin/nexvue-mediamtx-ice-patch.py
 install -m 755 "${REPO_DIR}/nexvue-tls.py" /usr/local/bin/nexvue-tls.py
 install -m 755 "${REPO_DIR}/nexvue-ops-tls.sh" /usr/local/bin/nexvue-ops-tls.sh
@@ -810,6 +814,7 @@ ok "repo.path → ${REPO_DIR}"
 # Version stamp (nav badge + support).
 install -d -m 755 /usr/local/share/nexvue
 install -m 644 "${REPO_DIR}/VERSION" /usr/local/share/nexvue/VERSION
+install -m 644 "${REPO_DIR}/channels-example.env" /usr/local/share/nexvue/channels-example.env
 VER_STR="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION" 2>/dev/null || echo 0.0.0)"
 GIT_SHA=""
 GIT_FULL=""
@@ -965,6 +970,15 @@ if id www-data >/dev/null 2>&1; then
   chmod 750 /var/lib/nexvue/branding 2>/dev/null || true
 fi
 
+# Opt-in Player/Multiview session reports (www-data writes; not metrics.db).
+install -d -m 750 -o www-data -g www-data /var/lib/nexvue/client-events 2>/dev/null \
+  || install -d -m 750 /var/lib/nexvue/client-events
+if id www-data >/dev/null 2>&1; then
+  chown www-data:www-data /var/lib/nexvue/client-events 2>/dev/null || true
+  chmod 750 /var/lib/nexvue/client-events 2>/dev/null || true
+fi
+ok "client-events dir: /var/lib/nexvue/client-events"
+
 # Local auth store (www-data RW) + keypair / JWKS / bootstrap admin + publish JWT.
 # DB path is /var/lib/nexvue/auth/auth.db (inside the www-data dir) so Apache can
 # create SQLite WAL sidecars. Legacy /var/lib/nexvue/auth.db is migrated here.
@@ -1074,8 +1088,10 @@ if [ -d "${WEBROOT}" ] || mkdir -p "${WEBROOT}" 2>/dev/null; then
                  "${REPO_DIR}/web-node/nexvue-vu.js" \
                  "${REPO_DIR}/web-node/nexvue-safe.js" \
                  "${REPO_DIR}/web-node/nexvue-scopes.js" \
+                 "${REPO_DIR}/web-node/nexvue-spectrum.js" \
                  "${REPO_DIR}/web-node/nexvue-auth-gate.js" \
                  "${REPO_DIR}/web-node/nexvue-share-ui.js" \
+                 "${REPO_DIR}/web-node/nexvue-client-report.js" \
                  "${REPO_DIR}/web-node/chart.umd.min.js" \
                  "${ASSETS}/"
   # PHP APIs + lib (served only via /api/* front door; JWKS vhost can reach them)
@@ -1089,14 +1105,15 @@ if [ -d "${WEBROOT}" ] || mkdir -p "${WEBROOT}" 2>/dev/null; then
                  "${REPO_DIR}/web-node/nexvue-auth-lib.php" \
                  "${REPO_DIR}/web-node/nexvue-auth.php" \
                  "${REPO_DIR}/web-node/nexvue-jwks.php" \
+                 "${REPO_DIR}/web-node/nexvue-client-events.php" \
                  "${REPO_DIR}/VERSION" \
                  "${WEBROOT}/"
   # Remove legacy flat copies left from pre-2.0 installs (safe allowlist only).
   for legacy in index.html multiview.html metrics.html services.html channels.html \
       login.html forgot.html reset.html users.html \
       nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js \
-      nexvue-safe.js nexvue-scopes.js \
-      nexvue-auth-gate.js nexvue-share-ui.js chart.umd.min.js; do
+      nexvue-safe.js nexvue-scopes.js nexvue-spectrum.js \
+      nexvue-auth-gate.js nexvue-share-ui.js nexvue-client-report.js chart.umd.min.js; do
     rm -f "${WEBROOT}/${legacy}"
   done
   ok "web UI installed under ${WEBROOT} (public/ front door + pages/ + /api handlers)"
@@ -1602,7 +1619,8 @@ if [ -d "${WEBROOT}" ]; then
       pages/index.html pages/multiview.html pages/metrics.html pages/services.html \
       pages/channels.html pages/login.html pages/users.html \
       public/assets/nexvue-ui.js public/assets/nexvue-auth-gate.js \
-      nexvue-auth.php nexvue-ops.php nexvue-jwks.php nexvue-metrics.php VERSION; do
+      nexvue-auth.php nexvue-ops.php nexvue-jwks.php nexvue-metrics.php \
+      nexvue-client-events.php VERSION; do
     [ -f "${WEBROOT}/$f" ] && ok "web UI: ${WEBROOT}/$f" || warn "web UI missing: ${WEBROOT}/$f"
   done
   if [ -f /etc/apache2/conf-enabled/nexvue-web.conf ] || [ -L /etc/apache2/conf-enabled/nexvue-web.conf ]; then
@@ -1629,6 +1647,11 @@ if [ -d "${WEBROOT}" ]; then
     ok "branding dir: /var/lib/nexvue/branding"
   else
     warn "branding dir missing — Settings logo upload needs /var/lib/nexvue/branding (www-data writable)"
+  fi
+  if [ -d /var/lib/nexvue/client-events ]; then
+    ok "client-events dir: /var/lib/nexvue/client-events"
+  else
+    warn "client-events dir missing — Report session needs /var/lib/nexvue/client-events (www-data writable)"
   fi
   if [ -d /var/lib/nexvue/auth ] && { [ -f /var/lib/nexvue/auth/auth.db ] || [ -f /var/lib/nexvue/auth.db ]; }; then
     if [ -f /var/lib/nexvue/auth/auth.db ]; then
@@ -1697,8 +1720,9 @@ for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
          nexvue-support-bundle.py nexvue-ops-update.sh \
          nexvue-ops-env-update.py nexvue-phase1-closeout.sh \
          nexvue-phase1-deploy-verify.sh nexvue-encode-storm-diagnose.sh \
-         nexvue-encode-auto-park.sh nexvue-ops-network-write.sh \
-         nexvue-ops-network-write.py nexvue-mediamtx-ice-patch.py \
+         nexvue-encode-auto-park.sh          nexvue-ops-network-write.sh \
+         nexvue-ops-network-write.py nexvue-ops-hardware-write.sh \
+         nexvue-ops-hardware-write.py nexvue-mediamtx-ice-patch.py \
          nexvue-tls.py nexvue-ops-tls.sh nexvue-tls-deploy.sh; do
   [ -x "/usr/local/bin/$w" ] || [ -f "/usr/local/bin/$w" ] \
     && ok "ops helper: $w" || warn "ops helper missing: /usr/local/bin/$w"
@@ -1729,6 +1753,11 @@ if [ -f /etc/sudoers.d/nexvue-ops ]; then
     ok "sudoers allows nexvue-ops-network-write.sh"
   else
     warn "sudoers missing nexvue-ops-network-write.sh — Settings Public reachability will fail until sudoers is refreshed from repo"
+  fi
+  if grep -q 'nexvue-ops-hardware-write\.sh' /etc/sudoers.d/nexvue-ops; then
+    ok "sudoers allows nexvue-ops-hardware-write.sh"
+  else
+    warn "sudoers missing nexvue-ops-hardware-write.sh — Settings Card / encode slots will fail until sudoers is refreshed from repo"
   fi
   if grep -q 'nexvue-ops-tls\.sh' /etc/sudoers.d/nexvue-ops; then
     ok "sudoers allows nexvue-ops-tls.sh"

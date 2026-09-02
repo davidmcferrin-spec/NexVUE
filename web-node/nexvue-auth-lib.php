@@ -26,7 +26,7 @@ const NEXVUE_AUTH_ROLES = ['admin', 'operator', 'sharer', 'viewer'];
 const NEXVUE_AUTH_JWT_TTL_S = 90;
 const NEXVUE_AUTH_PUBLISH_TTL_S = 315360000; // ~10 years
 const NEXVUE_AUTH_RESET_TTL_S = 3600;
-const NEXVUE_AUTH_MAX_CHANNELS = 8; // ch0..ch7 (+ lo)
+const NEXVUE_AUTH_MAX_CHANNELS = 8; // Quad 2 ceiling (ch0..ch7 + lo)
 /** Keep expired share rows this long after expires_at, then hard-delete. */
 const NEXVUE_AUTH_SHARE_PURGE_GRACE_S = 604800; // 7 days
 const NEXVUE_AUTH_SCHEMA_VERSION = 5;
@@ -72,6 +72,33 @@ function auth_station_env_path(): string {
         return $o;
     }
     return '/etc/nexvue/nexvue.env';
+}
+
+/**
+ * Live encode-slot count from station env (MAX_CHANNELS, else MAX_DEVICES).
+ * Clamped to 1–NEXVUE_AUTH_MAX_CHANNELS. Default 8 (Quad 2).
+ */
+function auth_max_channels(): int {
+    $raw = auth_read_env_key('MAX_CHANNELS');
+    if ($raw === '') {
+        $raw = auth_read_env_key('MAX_DEVICES');
+    }
+    if ($raw === '' || !preg_match('/^[1-8]$/', $raw)) {
+        return NEXVUE_AUTH_MAX_CHANNELS;
+    }
+    $n = (int)$raw;
+    if ($n < 1) {
+        return 1;
+    }
+    if ($n > NEXVUE_AUTH_MAX_CHANNELS) {
+        return NEXVUE_AUTH_MAX_CHANNELS;
+    }
+    return $n;
+}
+
+/** Highest channel id (max_channels - 1). */
+function auth_max_channel_id(): int {
+    return auth_max_channels() - 1;
 }
 
 function auth_b64url_encode(string $bin): string {
@@ -561,7 +588,8 @@ function auth_expand_channel_paths(array $channels): array {
 
 function auth_all_channel_paths(): array {
     $out = [];
-    for ($i = 0; $i < NEXVUE_AUTH_MAX_CHANNELS; $i++) {
+    $n = auth_max_channels();
+    for ($i = 0; $i < $n; $i++) {
         $out[] = 'ch' . $i;
         $out[] = 'ch' . $i . 'lo';
     }
@@ -831,10 +859,11 @@ function auth_normalize_share_channels(array $channels, string $page = 'player')
     return $list;
 }
 
-/** Base channel paths ch0..ch7 (no lo). */
+/** Base channel paths ch0..chN-1 (no lo). Live slot count from station env. */
 function auth_all_channel_bases(): array {
     $out = [];
-    for ($i = 0; $i < NEXVUE_AUTH_MAX_CHANNELS; $i++) {
+    $n = auth_max_channels();
+    for ($i = 0; $i < $n; $i++) {
         $out[] = 'ch' . $i;
     }
     return $out;
@@ -2397,7 +2426,8 @@ function auth_sfu_mode(): string {
 /** @return list<string> */
 function auth_sfu_all_paths(): array {
     $out = [];
-    for ($i = 0; $i < NEXVUE_AUTH_MAX_CHANNELS; $i++) {
+    $n = auth_max_channels();
+    for ($i = 0; $i < $n; $i++) {
         $out[] = 'ch' . $i;
         $out[] = 'ch' . $i . 'lo';
     }

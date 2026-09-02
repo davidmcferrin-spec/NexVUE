@@ -137,6 +137,13 @@ class TestPortalHeartbeat(unittest.TestCase):
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["channel_base"], "ch3")
 
+    def test_collect_channels_respects_max_channels(self) -> None:
+        self.env_file.write_text("MAX_CHANNELS=2\nMAX_DEVICES=2\n", encoding="utf-8")
+        self._write_channel(0)
+        self._write_channel(3)
+        data = self._php_include_only("echo json_encode(heartbeat_collect_channels());")
+        self.assertEqual([c["channel_base"] for c in data], ["ch0"])
+
     def test_noop_when_unadopted(self) -> None:
         self.env_file.write_text("# not adopted\n", encoding="utf-8")
         r = self._run()

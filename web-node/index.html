@@ -303,6 +303,20 @@
     box-shadow: var(--shadow); pointer-events: none;
   }
   #stat-tip.visible { display: block; }
+  .stats-report {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 10px; max-width: 1280px; margin: 12px auto 0;
+  }
+  .stats-report button {
+    background: var(--bg); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 6px 12px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .stats-report button:hover:not(:disabled) { border-color: var(--acc); color: var(--acc); }
+  .stats-report button.active { background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600; }
+  .stats-report button:disabled { opacity: .4; cursor: not-allowed; }
+  .report-state { color: var(--dim); font-size: 12px; }
+  .report-state.ok { color: var(--ok); }
+  .report-state.bad { color: var(--bad); }
   .qr-modal {
     display: none; position: fixed; inset: 0; z-index: 1000;
     background: var(--backdrop); align-items: center; justify-content: center; padding: 16px;
@@ -367,6 +381,7 @@
     <button type="button" id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
     <button type="button" id="safe" class="tgl" title="Title / action safe + center target (this browser only)">Safe</button>
     <button type="button" id="scope" class="tgl" title="Waveform + vectorscope (decoded video, this browser only). Click the scopes to enlarge.">Scope</button>
+    <button type="button" id="rta" class="tgl" title="Spectrum analyzer — L/R, 10 Hz–22 kHz, −60…0 dBFS (this browser only)">RTA</button>
   </div>
   <div class="bar-cluster orient-wrap" id="orient-wrap">
     <button type="button" id="orient" class="tgl" title="Mirror, flip, rotate (confidence monitor)" aria-expanded="false" aria-haspopup="true" aria-controls="orient-pop" aria-pressed="false">Orient ▾</button>
@@ -425,6 +440,10 @@
       <div class="stat" tabindex="0" data-tip="Genlock reference status on the capture card — locked to house sync, or free-running."><div class="k">Reference</div><div class="v" id="s-ref">—</div></div>
       <div class="stat" tabindex="0" data-tip="Whether the browser holds a screen wake lock so the display won't sleep during playback."><div class="k">Screen awake</div><div class="v" id="s-wake">—</div></div>
     </div>
+    <div class="stats-report">
+      <button type="button" id="report-session" disabled title="Upload this browser's session stats to Metrics for debugging. Nothing is sent until you click.">Report session</button>
+      <span id="report-session-state" class="report-state"></span>
+    </div>
   </div>
 </div>
 <div id="stat-tip" role="tooltip" aria-hidden="true"></div>
@@ -446,8 +465,10 @@
 <script src="/assets/nexvue-vu.js"></script>
 <script src="/assets/nexvue-safe.js"></script>
 <script src="/assets/nexvue-scopes.js"></script>
+<script src="/assets/nexvue-spectrum.js"></script>
 <script src="/assets/nexvue-auth-gate.js"></script>
 <script src="/assets/nexvue-share-ui.js"></script>
+<script src="/assets/nexvue-client-report.js"></script>
 <script>
 "use strict";
 (async () => {
@@ -474,6 +495,8 @@
   let currentBase = null;       // e.g. "ch3" (channel identity)
   let currentPath = null;       // e.g. "ch3" or "ch3lo" (stream being watched)
   let currentSessionId = null;  // MediaMTX WebRTC UUID from WHEP ID header
+  let lastRtcSnapshot = {};
+  let clientReport = null;
   let qualityMode = "auto";     // "auto" | "manual"
   let rendition = "hi";         // "hi" | "lo" (current or desired)
   let loAvailable = false;      // does currentBase publish a lo path?
@@ -534,18 +557,25 @@
 
   const safeBtn = $("safe");
   const scopeBtn = $("scope");
+  const rtaBtn = $("rta");
   const safe = window.NexVueSafe
     ? NexVueSafe.attach({ container: videoWrap, video })
     : null;
   const scopes = window.NexVueScopes
     ? NexVueScopes.attach({ container: videoWrap, video })
     : null;
+  const spectrum = window.NexVueSpectrum
+    ? NexVueSpectrum.attach({ container: videoWrap, vu })
+    : null;
   let safeOn = window.NexVueSafe ? NexVueSafe.getOnPref() : false;
   let scopeOn = window.NexVueScopes ? NexVueScopes.getOnPref() : false;
+  let rtaOn = window.NexVueSpectrum ? NexVueSpectrum.getOnPref() : false;
   safeBtn.classList.toggle("active", safeOn);
   scopeBtn.classList.toggle("active", scopeOn);
+  rtaBtn.classList.toggle("active", rtaOn);
   if (safe) safe.setVisible(safeOn);
   if (scopes) scopes.setVisible(scopeOn);
+  if (spectrum) spectrum.setVisible(rtaOn);
 
   // Auto-switch policy constants (mirror these in the Phase 2 portal player)
   const DOWN_LOSS = 0.03, DOWN_AFTER_S = 3;
@@ -675,6 +705,7 @@
   }
 
   function applyKicked(reason) {
+    if (clientReport) clientReport.notify("kicked", reason || "");
     intentionalDisconnect = true;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     closeSession();
@@ -788,6 +819,7 @@
       if (gen !== sessionGen) return;
       const raw = err && err.message ? err.message : String(err);
       const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
+      if (clientReport) clientReport.notify("whep_error", msg);
       setState(`error: ${msg}`, "bad");
       if (!intentionalDisconnect && currentBase) {
         maybeReconnect(currentBase, rendition, `error: ${msg}`);
@@ -823,11 +855,13 @@
       if (thisPc.connectionState === "connected") {
         setState(`connected ${path}`, "ok");
         reconnectAttempt = 0;
+        if (clientReport) clientReport.noteSession(currentSessionId, currentBase);
         acquireWakeLock();
         restoreFullscreenIfNeeded();
         restorePipIfNeeded();
       } else if (["failed", "disconnected", "closed"].includes(thisPc.connectionState)) {
         setState(thisPc.connectionState, "bad");
+        if (clientReport) clientReport.notify("ice_failed", thisPc.connectionState);
         // Only auto-recover from an UNEXPECTED drop — not a user-initiated
         // disconnect/channel-switch/quality-switch, which already have their
         // own deliberate teardown+reopen paths. Admin kicks are detected via
@@ -871,6 +905,7 @@
         );
       }
       currentSessionId = exchanged.res ? parseWhepSessionId(exchanged.res) : null;
+      if (clientReport) clientReport.noteSession(currentSessionId, currentBase);
       await thisPc.setRemoteDescription({ type: "answer", sdp: exchanged.sdp });
       if (gen !== sessionGen || pc !== thisPc) {
         try { thisPc.close(); } catch (e) { /* ignore */ }
@@ -887,6 +922,7 @@
       }
       const raw = err && err.message ? err.message : String(err);
       const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
+      if (clientReport) clientReport.notify("whep_error", msg);
       const sid = currentSessionId;
       setState(`error: ${msg}`, "bad");
       closeSession();
@@ -905,6 +941,9 @@
   }
 
   async function connectChannel(base, btn) {
+    if (clientReport && clientReport.isArmed() && currentBase && currentBase !== base) {
+      clientReport.notify("channel", `${currentBase} → ${base}`);
+    }
     teardown();
     currentBase = base;
     const activeBtn = btn || document.querySelector(`button.ch[data-path="${base}"]`);
@@ -941,9 +980,11 @@
 
   function switchRendition(newRend, reason) {
     if (!currentBase || newRend === rendition) return;
+    const prevRend = rendition;
     rendition = newRend;
     lastSwitchMs = performance.now();
     console.info(`[player] switching to ${newRend.toUpperCase()} (${reason})`);
+    if (clientReport) clientReport.notify("rendition", `${prevRend} → ${newRend} (${reason})`);
     openSession(pathFor(newRend));
   }
 
@@ -952,15 +993,20 @@
     if (!pc) return;
     const report = await pc.getStats();
     let lossRate = null;
+    const snap = Object.assign({}, lastRtcSnapshot);
 
     report.forEach(s => {
       if (s.type === "inbound-rtp" && s.kind === "video") {
         $("s-res").textContent =
           (s.frameWidth ? `${s.frameWidth}x${s.frameHeight}` : "—") +
           (s.framesPerSecond ? ` @ ${s.framesPerSecond}` : "");
+        if (s.frameWidth) snap.width = s.frameWidth;
+        if (s.frameHeight) snap.height = s.frameHeight;
+        if (s.framesPerSecond) snap.fps = s.framesPerSecond;
         if (prevTs && s.timestamp > prevTs) {
           const mbps = (s.bytesReceived - prevBytes) * 8 / (s.timestamp - prevTs) / 1000;
           $("s-vbr").textContent = `${mbps.toFixed(2)} Mbps`;
+          snap.inbound_bps = mbps * 1e6;
         }
         prevBytes = s.bytesReceived; prevTs = s.timestamp;
 
@@ -973,20 +1019,25 @@
           const total = dLost + dRecv;
           lossRate = total > 0 ? dLost / total : 0;
           $("s-loss").textContent = `${(lossRate * 100).toFixed(1)} %`;
+          snap.loss_pct = lossRate * 100;
         }
         prevLost = lost; prevRecv = recv; haveLossBaseline = true;
 
         $("s-drop").textContent = s.framesDropped ?? "—";
+        if (s.framesDropped != null) snap.frames_dropped = s.framesDropped;
         if (s.jitterBufferDelay && s.jitterBufferEmittedCount) {
           const ms = s.jitterBufferDelay / s.jitterBufferEmittedCount * 1000;
           $("s-jb").textContent = `${ms.toFixed(0)} ms`;
+          snap.jb_ms = ms;
         }
       }
       if (s.type === "candidate-pair" && s.state === "succeeded" && s.nominated &&
           s.currentRoundTripTime !== undefined) {
         $("s-rtt").textContent = `${(s.currentRoundTripTime * 1000).toFixed(1)} ms`;
+        snap.rtt_ms = s.currentRoundTripTime * 1000;
       }
     });
+    lastRtcSnapshot = snap;
 
     // ---- Auto-switch state machine ----
     if (qualityMode !== "auto" || lossRate === null) return;
@@ -1269,6 +1320,13 @@
     if (scopes) scopes.setVisible(scopeOn);
   });
 
+  rtaBtn.addEventListener("click", () => {
+    rtaOn = !rtaOn;
+    if (window.NexVueSpectrum) NexVueSpectrum.setOnPref(rtaOn);
+    rtaBtn.classList.toggle("active", rtaOn);
+    if (spectrum) spectrum.setVisible(rtaOn);
+  });
+
   muteBtn.addEventListener("click", () => {
     if (!vu) return;
     vu.setListen(!vu.isListening());
@@ -1370,7 +1428,10 @@
     const host = $("channels");
     if (!host) return;
     host.innerHTML = "";
-    for (let i = 0; i < 8; i++) {
+    const slotCount = (window.NexVueUI && NexVueUI.maxChannels)
+      ? NexVueUI.maxChannels()
+      : 8;
+    for (let i = 0; i < slotCount; i++) {
       const path = `ch${i}`;
       if (!NexVueAuth.channelAllowed(path, authUser)) continue;
       const label = (window.NexVueUI && NexVueUI.channelLabel)
@@ -1404,7 +1465,9 @@
       const data = await res.json();
       if (data && data.ok && data.aliases) {
         aliases = data.aliases;
-        if (window.NexVueUI && NexVueUI.setChannelAliases) {
+        if (window.NexVueUI && NexVueUI.applyAliasPayload) {
+          NexVueUI.applyAliasPayload(data);
+        } else if (window.NexVueUI && NexVueUI.setChannelAliases) {
           NexVueUI.setChannelAliases(aliases);
         }
       }
@@ -1498,6 +1561,21 @@
   });
   window.addEventListener("scroll", () => { if (tipEl.classList.contains("visible")) hideStatTip(); }, true);
   window.addEventListener("resize", hideStatTip);
+
+  if (window.NexVueClientReport) {
+    clientReport = NexVueClientReport.attach({
+      button: $("report-session"),
+      statusEl: $("report-session-state"),
+      getContext: () => ({
+        sessionId: currentSessionId,
+        channel: currentBase,
+        rendition,
+        page: "player",
+        connected: !!(pc && currentBase),
+        stats: lastRtcSnapshot,
+      }),
+    });
+  }
 
   const drawer = $("stats-drawer");
   const toggle = $("stats-toggle");

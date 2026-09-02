@@ -110,6 +110,18 @@
   #state.ok { color: var(--ok); }
   #state.warn { color: var(--warn); }
   #state.bad { color: var(--bad); }
+  .report-yes { color: var(--ok); font-weight: 600; }
+  button.report-view {
+    padding: 4px 10px; font-size: 12px;
+  }
+  tr.report-detail td {
+    background: var(--bg); color: var(--dim); font-size: 12px;
+    padding: 10px 12px; white-space: normal;
+  }
+  tr.report-detail pre {
+    margin: 6px 0 0; white-space: pre-wrap; color: var(--text); font: inherit;
+  }
+  #client-unmatched { color: var(--dim); font-size: 12px; margin: 10px 0 0; }
   label.autoload {
     display: inline-flex; align-items: center; gap: 6px;
     color: var(--dim); font-size: 12px; cursor: pointer; user-select: none;
@@ -298,7 +310,7 @@
       <tr>
         <th>Status</th><th>IP address</th><th>Channel</th><th>User</th>
         <th>First seen</th><th>Last seen</th><th>Duration</th>
-        <th class="num">Data served</th><th>Client</th>
+        <th class="num">Data served</th><th>Client</th><th>Report</th>
         <th class="nosort">Actions</th>
       </tr>
       <tr class="viewer-filters">
@@ -311,6 +323,7 @@
         <th><input type="search" data-filter="duration" placeholder="&gt;=10m" aria-label="Filter duration" autocomplete="off" spellcheck="false"></th>
         <th><input type="search" data-filter="data" placeholder="&gt;500MB" aria-label="Filter data served" autocomplete="off" spellcheck="false"></th>
         <th><input type="search" data-filter="client" placeholder="Chrome /regex/" aria-label="Filter client" autocomplete="off" spellcheck="false"></th>
+        <th></th>
         <th></th>
       </tr>
     </thead>
@@ -332,6 +345,7 @@
     <span id="viewer-page-info" style="color:var(--dim)"></span>
     <button type="button" id="viewer-page-next" title="Next page">Next &raquo;</button>
   </div>
+  <div id="client-unmatched" hidden></div>
 </div>
 
 <footer id="host-uptime" class="uptime-bar" hidden>Host uptime: —</footer>
@@ -717,10 +731,11 @@
     if (!silent) setState("loading…");
     try {
       await ensureChart();
-      const [totals, channels, inputs, viewers, weekday, host] = await Promise.all([
+      const [totals, channels, inputs, viewers, weekday, host, clientReps] = await Promise.all([
         fetchView("totals"), fetchView("channels"), fetchView("inputs"),
         fetchView("viewers", viewersQueryExtra()),
         fetchView("weekday_hours"), fetchView("host"),
+        fetchClientReports(),
       ]);
       if (gen !== loadGen) return;
       const meta = totals || weekday || host || {};
@@ -730,6 +745,7 @@
       const axisFrom = meta.requested_from ?? inputs.from;
       const axisTo = meta.requested_to ?? inputs.to;
       renderInputs(inputs.inputs, axisFrom, axisTo);
+      applyClientReports(clientReps);
       applyViewersResponse(viewers);
       renderHeatmap(weekday.weekday_hours || [], weekday.timezone || reportTz);
       renderHost(host.host || []);
@@ -1074,6 +1090,10 @@
   let lastViewerRows = [];
   let lastViewerTotal = 0;
   let lastViewerCount = 0;
+  let lastClientReports = [];
+  let reportedIds = new Set();
+  let openReportSid = null;
+  const reportDetailCache = {};
   let viewerPage = 1;              // 1-based
   let viewerPageSize = 50;         // number, or Infinity for "all"
   let viewerFilterTimer = null;
@@ -1142,7 +1162,9 @@
 
   function applyViewersResponse(viewers) {
     clearViewerFilterBad();
-    lastViewerRows = viewers.sessions || [];
+    lastViewerRows = (viewers.sessions || []).map(r => Object.assign({}, r, {
+      reported: reportedIds.has(r.session_id) ? 1 : 0,
+    }));
     lastViewerTotal = viewers.session_total != null ? viewers.session_total : lastViewerRows.length;
     lastViewerCount = viewers.session_count != null ? viewers.session_count : lastViewerRows.length;
     const filtersActive = Object.keys(viewers.filters || {}).length > 0 || Object.keys(readViewerFilters()).length > 0;
@@ -1151,6 +1173,7 @@
     } else {
       setViewerFilterMeta(lastViewerTotal ? `${lastViewerTotal} session${lastViewerTotal === 1 ? "" : "s"}` : "");
     }
+    renderUnmatchedReports();
     drawViewerTable();
   }
 
@@ -1188,9 +1211,115 @@
     next.disabled = viewerPage >= pages;
   }
 
+  async function fetchClientReports() {
+    const params = new URLSearchParams({ action: "list" });
+    if (customFrom != null && customTo != null) {
+      params.set("from", String(customFrom));
+      params.set("to", String(customTo));
+    } else {
+      params.set("range", range);
+    }
+    const res = await fetch(`/api/client-events?${params}`);
+    if (!res.ok) return { reports: [] };
+    return res.json().catch(() => ({ reports: [] }));
+  }
+
+  function applyClientReports(data) {
+    lastClientReports = (data && data.reports) || [];
+    reportedIds = new Set(lastClientReports.map(r => r.session_id));
+    renderUnmatchedReports();
+  }
+
+  function renderUnmatchedReports() {
+    const el = document.getElementById("client-unmatched");
+    if (!el) return;
+    const known = new Set(lastViewerRows.map(r => r.session_id));
+    const extra = lastClientReports.filter(r => r.session_id && !known.has(r.session_id));
+    if (!extra.length) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    el.hidden = false;
+    el.innerHTML = "Client reports with no matching MediaMTX session (Stream/SFU or expired): "
+      + extra.map(r => {
+        const sid = escAttr(r.session_id);
+        const label = escHtml(r.channel || r.page || r.session_id);
+        return `<button type="button" class="report-view" data-sid="${sid}">${label}</button>`;
+      }).join(" ");
+    el.querySelectorAll("button.report-view").forEach(btn => {
+      btn.addEventListener("click", () => toggleReportDetail(btn.dataset.sid));
+    });
+  }
+
+  async function fetchClientReportDetail(sid) {
+    if (reportDetailCache[sid]) return reportDetailCache[sid];
+    const res = await fetch(`/api/client-events?action=get&session_id=${encodeURIComponent(sid)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    reportDetailCache[sid] = data;
+    return data;
+  }
+
+  function fmtReportDetail(data) {
+    const ev = (data.events || []).map(e => {
+      const t = fmtTime((e.ts || 0) * 1000);
+      return `${t}  ${e.kind}${e.detail ? " — " + e.detail : ""}`;
+    });
+    const sn = (data.snapshots || []).map(s => {
+      const t = fmtTime((s.ts || 0) * 1000);
+      const mbps = s.inbound_bps != null ? `${(s.inbound_bps / 1e6).toFixed(2)} Mbps` : "—";
+      const loss = s.loss_pct != null ? `${Number(s.loss_pct).toFixed(1)}% loss` : "";
+      const rtt = s.rtt_ms != null ? `${Number(s.rtt_ms).toFixed(0)} ms RTT` : "";
+      const res = (s.width && s.height) ? `${s.width}x${s.height}` : "";
+      const fps = s.fps != null ? `@${Number(s.fps).toFixed(0)}` : "";
+      return [t, s.rendition, s.channel, mbps, loss, rtt, res, fps].filter(Boolean).join(" · ");
+    });
+    const bits = [];
+    if (data.report) {
+      const r = data.report;
+      bits.push(`page ${r.page || "—"} · ${r.client_label || "—"} · ${r.username || "—"}`);
+    }
+    if (ev.length) bits.push("Events:\n" + ev.join("\n"));
+    if (sn.length) bits.push("Snapshots:\n" + sn.join("\n"));
+    return bits.join("\n\n") || "No client events yet.";
+  }
+
+  async function toggleReportDetail(sid) {
+    openReportSid = openReportSid === sid ? null : sid;
+    drawViewerTable();
+    if (!openReportSid) return;
+    try {
+      const data = await fetchClientReportDetail(sid);
+      if (openReportSid !== sid) return;
+      const text = fmtReportDetail(data);
+      const pre = document.querySelector("tr.report-detail pre");
+      if (pre) {
+        pre.textContent = text;
+        return;
+      }
+      const el = document.getElementById("client-unmatched");
+      if (el && !el.hidden) {
+        let box = el.querySelector("pre");
+        if (!box) {
+          box = document.createElement("pre");
+          el.appendChild(box);
+        }
+        box.textContent = text;
+      }
+    } catch (err) {
+      const pre = document.querySelector("tr.report-detail pre");
+      if (pre) pre.textContent = `failed to load report: ${err.message || err}`;
+    }
+  }
+
   async function loadViewersOnly() {
     try {
-      const viewers = await fetchView("viewers", viewersQueryExtra());
+      const [viewers, clientReps] = await Promise.all([
+        fetchView("viewers", viewersQueryExtra()),
+        fetchClientReports(),
+      ]);
+      applyClientReports(clientReps);
       applyViewersResponse(viewers);
     } catch (err) {
       markViewerFilterBad(String(err.message || err));
@@ -1275,6 +1404,13 @@
       const actions = r.active
         ? `<button type="button" class="kick" data-sid="${escAttr(r.session_id)}" data-ip="${escAttr(ip)}" data-ch="${escAttr(r.channel)}">Kick</button>`
         : "—";
+      const reported = !!r.reported;
+      const reportCell = reported
+        ? `<button type="button" class="report-view" data-sid="${escAttr(r.session_id)}">${openReportSid === r.session_id ? "Hide" : "View"}</button>`
+        : "—";
+      const detail = (reported && openReportSid === r.session_id)
+        ? `<tr class="report-detail" data-sid="${escAttr(r.session_id)}"><td colspan="11"><pre>loading…</pre></td></tr>`
+        : "";
       return `<tr>
         <td><span class="dot ${dotClass}"></span>${r.active ? "live" : "ended"}</td>
         <td>${ip}</td>
@@ -1285,8 +1421,9 @@
         <td>${fmtDuration(r.duration_s)}</td>
         <td class="num">${mb} MB</td>
         <td class="ua" title="${escAttr(r.user_agent || "")}">${r.user_agent || ""}</td>
+        <td class="${reported ? "report-yes" : ""}">${reported ? "yes" : "—"} ${reportCell}</td>
         <td>${actions}</td>
-      </tr>`;
+      </tr>${detail}`;
     }).join("");
 
     tbody.querySelectorAll("button.kick").forEach(btn => {
@@ -1294,10 +1431,31 @@
         kickViewer(btn.dataset.sid, btn.dataset.ip, btn.dataset.ch);
       });
     });
+    tbody.querySelectorAll("button.report-view").forEach(btn => {
+      btn.addEventListener("click", () => toggleReportDetail(btn.dataset.sid));
+    });
+    if (openReportSid) {
+      const sid = openReportSid;
+      const pre = tbody.querySelector("tr.report-detail pre");
+      if (pre) {
+        if (reportDetailCache[sid]) {
+          pre.textContent = fmtReportDetail(reportDetailCache[sid]);
+        } else {
+          fetchClientReportDetail(sid).then(data => {
+            if (openReportSid !== sid) return;
+            const el = document.querySelector("tr.report-detail pre");
+            if (el) el.textContent = fmtReportDetail(data);
+          }).catch(err => {
+            const el = document.querySelector("tr.report-detail pre");
+            if (el) el.textContent = `failed to load report: ${err.message || err}`;
+          });
+        }
+      }
+    }
   }
 
   document.querySelectorAll("#viewer-table thead tr:first-child th").forEach((th, i) => {
-    const cols = ["active", "remote_addr", "channel", "user", "first_seen", "last_seen", "duration_s", "bytes_sent", "user_agent", null];
+    const cols = ["active", "remote_addr", "channel", "user", "first_seen", "last_seen", "duration_s", "bytes_sent", "user_agent", "reported", null];
     th.addEventListener("click", () => {
       const col = cols[i];
       if (!col) return;

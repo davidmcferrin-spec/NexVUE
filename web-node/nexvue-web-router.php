@@ -9,7 +9,7 @@
  *   / /player /multiview /metrics /settings /services /users
  *   /login /forgot /reset
  *   /s/{token}[/multiview]  — share redeem then player/multiview
- *   /api/{auth|ops|metrics|status|mediamtx|captions|logo|version|jwks}
+ *   /api/{auth|ops|metrics|status|mediamtx|captions|logo|version|jwks|client-events}
  * Legacy *.html and nexvue-*.php paths → 301/internal to the new routes.
  */
 
@@ -94,6 +94,7 @@ function nexvue_web_apis(): array {
         '/api/logo' => 'nexvue-logo.php',
         '/api/version' => 'nexvue-version.php',
         '/api/jwks' => 'nexvue-jwks.php',
+        '/api/client-events' => 'nexvue-client-events.php',
     ];
 }
 
@@ -124,6 +125,7 @@ function nexvue_web_legacy_api_path(string $path): ?string {
         '/nexvue-logo.php' => '/api/logo',
         '/nexvue-version.php' => '/api/version',
         '/nexvue-jwks.php' => '/api/jwks',
+        '/nexvue-client-events.php' => '/api/client-events',
     ];
     return $map[$path] ?? null;
 }

@@ -286,7 +286,8 @@
     var allowed = getAllowedChannels();
     if (!Array.isArray(allowed) || allowed.length === 0) {
       allowed = [];
-      for (var i = 0; i < 8; i++) allowed.push("ch" + i);
+      var n = (global.NexVueUI && NexVueUI.maxChannels) ? NexVueUI.maxChannels() : 8;
+      for (var i = 0; i < n; i++) allowed.push("ch" + i);
     }
     allowed = allowed
       .map(basePath)

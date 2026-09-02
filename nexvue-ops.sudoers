@@ -22,3 +22,4 @@ www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-update.sh *
 www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-portal-write.sh
 www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-tls.sh *
 www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-network-write.sh
+www-data ALL=(root) NOPASSWD: /usr/local/bin/nexvue-ops-hardware-write.sh

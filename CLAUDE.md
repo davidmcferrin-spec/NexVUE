@@ -47,7 +47,8 @@ this box can't get additional ports opened.
   `LO_PRESET=360p` (per-channel override still supported). True simulcast/SFU
   (Ant Media, Janus) is the deliberate back-pocket option, not the plan.
 - Channel slots `MAX_CHANNELS` (default 8, ids 0–7) match Quad 2 DeckLink
-  `MAX_DEVICES`. Duo 2 uses `MAX_DEVICES=4` and parks unused `@N`. SRT can
+  `MAX_DEVICES`. Settings → Card / encode slots (admin) is the writer;
+  Duo 2 uses 4 and parks unused `@N`. SRT can
   still be hand-configured on any slot via `INPUT_TYPE=srt` in the channel
   `.env` (Settings UI is DeckLink-oriented today).
 - Latency target ~200ms glass-to-glass on LAN; ~120ms is the physics floor
@@ -85,6 +86,8 @@ this box can't get additional ports opened.
   with 95 °C limit lines) + iGPU Video engine % (Render % collected but
   not charted) + Linux box uptime footer (/proc/uptime), Auto-load data
   checkbox (60s in-place refresh, localStorage.nexvue-metrics-autoload),
+  opt-in Player/Multiview **Report session** (client snapshots/events in
+  client-events.db, Metrics Report column — not collected from every viewer),
   `nexvue-metrics` + `nexvue-metrics.php`) landed
   ahead of schedule — separate from and not a substitute for Phase 4
   portal health via outbound heartbeats.
@@ -127,7 +130,8 @@ this box can't get additional ports opened.
   Remaining before Phase 1 soak is formally "done" (hardware/operator on
   `dcwasof2nexvue01`): re-deploy (`setup.sh` + `nexvue-phase1-deploy-verify.sh`
   for Temperature schema/API/chart), then a clean 72h closeout window.
-  Station-wide `MAX_DEVICES` / `MAX_CHANNELS` live in `/etc/nexvue/nexvue.env`.
+  Station-wide `MAX_DEVICES` / `MAX_CHANNELS` live in `/etc/nexvue/nexvue.env`
+  and are written by Settings → Card / encode slots (admin).
   Glass-to-glass latency photos remain deferred until on-site/bench access.
 - **Phase 1.5: rolled back (slate/selector)** — production ExecStart is
   `nexvue-encode.sh` → `nexvue-encode.py`: persistent MediaMTX publish
@@ -359,7 +363,7 @@ this box can't get additional ports opened.
   logged-in Player prompts Select a channel; Multiview shares ≤4 channels, auto-tune
   panes; Fill window + Fullscreen near-frameless; Player PiP; admin edit name/channels/expiry; delete
   after revoke/expiry; purge 7d post-expiry). Roles: admin
-  (Users+Services+Settings including Public reachability + Certificates + Cloudflare TURN + Cloudflare Stream + Metrics+all shares), operator (Settings+Metrics; no Public reachability, Certificates, Cloudflare TURN, or Cloudflare Stream),
+  (Users+Services+Settings including Card / encode slots + Public reachability + Certificates + Cloudflare TURN + Cloudflare Stream + Metrics+all shares), operator (Settings+Metrics; no Card / encode slots, Public reachability, Certificates, Cloudflare TURN, or Cloudflare Stream),
   sharer / UI **Viewer+Share** (watch + own share links via Player/Multiview
   Share), viewer (watch). Per-user channel ACL on Users (`users.channels`;
   null = all). UIs show `CHANNEL_ALIAS` everywhere except Settings channel
@@ -382,7 +386,14 @@ this box can't get additional ports opened.
   pane only). Click the strip to pop a ~2× page-level panel
   (`nexvue-scopes-pop`; Esc or click docks). The popped panel floats above
   the Session metrics drawer and can be dragged (`nexvue-scopes-pos`).
-  Both are browser-local and off by default.
+  Player/Multiview Session metrics **Report session** is opt-in only
+  (`nexvue-client-report.js` → `POST /api/client-events`); www-data writes
+  `/var/lib/nexvue/client-events/client-events.db` (not metrics.db).
+  Metrics Viewer sessions show a Report column (View snapshots/events).
+  Player **RTA** (`nexvue-spectrum.js`, `nexvue-spectrum-on`) is a stereo
+  spectrum on the listen L/R pair (64 log bars each, 10 Hz–22 kHz,
+  −60…0 dBFS); Multiview has no RTA. Overlays are browser-local and off
+  by default.
   First-visit audio defaults: volume 20%, muted. Encode always opens DeckLink
   8ch and publishes 8ch positioned Opus
   (default `AUDIO_BITRATE_BPS=384000`) tee'd to HI+LO. No 16ch path.
@@ -404,7 +415,15 @@ this box can't get additional ports opened.
  to `DEINT_FIELDS` for 1080i→p quality. Field labels show a ~2s hover/focus tip
  (`#field-tip`) with purpose, recommended range, and blank semantics —
   same delay pattern as Player `#stat-tip`. Requires admin/operator session
-  (not share links). Services is admin-only. Settings **Public reachability**
+  (not share links). Services is admin-only. Settings **Card / encode slots**
+  (admin only — hidden from operators) writes `MAX_DEVICES` and
+  `MAX_CHANNELS` (same value) in `/etc/nexvue/nexvue.env`, seeds missing
+  `channels/N.env`, strips leftover per-channel `MAX_DEVICES`, and
+  enable/disable `nexvue-encode@N` via `nexvue-ops-hardware-write.sh`.
+  Presets: Quad 2 = 8, Duo 2 = 4, Duo = 2. **Detect** (`hardware_get`)
+  reports the status-daemon DeckLink iterator count so a parked
+  full-duplex pair is visible. Player / Multiview / Users / ACL “all”
+  follow the live slot count. Settings **Public reachability**
   (admin only — hidden from operators) writes `NEXVUE_PUBLIC_HOSTNAME` /
   `NEXVUE_PUBLIC_IP` in `/etc/nexvue/nexvue.env` and patches MediaMTX
   `webrtcAdditionalHosts` (drops deprecated `webrtcICEHostNAT1To1IPs`) via

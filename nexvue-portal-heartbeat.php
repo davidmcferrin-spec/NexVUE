@@ -33,8 +33,6 @@ if (!is_file($lib)) {
 }
 require_once $lib;
 
-const NEXVUE_PORTAL_HEARTBEAT_MAX_CHANNEL_ID = 7;
-
 function heartbeat_channels_dir(): string {
     $o = getenv('NEXVUE_CHANNELS_DIR');
     return (is_string($o) && $o !== '') ? rtrim($o, '/\\') : '/etc/nexvue/channels';
@@ -58,7 +56,7 @@ function heartbeat_write_status(bool $ok): void {
 /** @return list<array{channel_base:string, alias:string, lo_enabled:bool, active:bool}> */
 function heartbeat_collect_channels(): array {
     $out = [];
-    for ($i = 0; $i <= NEXVUE_PORTAL_HEARTBEAT_MAX_CHANNEL_ID; $i++) {
+    for ($i = 0; $i <= auth_max_channel_id(); $i++) {
         $path = heartbeat_channels_dir() . "/{$i}.env";
         if (!is_readable($path)) {
             continue;

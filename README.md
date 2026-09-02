@@ -5,7 +5,8 @@ gateway (sibling of NexAlert). One edge node per station:
 DeckLink capture card (4 or 8x 3G-SDI in) -> GStreamer (deinterlace +
 Quick Sync H.264 + Opus) -> MediaMTX -> WHEP (WebRTC) to any browser.
 
-Supported capture cards (channel count set by station-wide `MAX_DEVICES` in
+Supported capture cards (channel count set from Settings → **Card / encode
+slots**, stored as station-wide `MAX_DEVICES` / `MAX_CHANNELS` in
 `/etc/nexvue/nexvue.env`):
 DeckLink Quad 2 (8 ch), Duo 2 / Duo 2 Mini (4 ch), original Duo (2 ch). The
 code is card-agnostic — you enable one `nexvue-encode@N` service per input and
@@ -33,9 +34,9 @@ SDI 1080i59.94 (4 or 8) --> [DeckLink card]
 - **Second 16GB DIMM** — the stock 1x16GB is single-channel; the iGPU media
   engine shares that bandwidth with 8-channel deinterlace. Cheap insurance.
 - Blackmagic DeckLink Quad 2 in the PCIe 4.0 x16 slot (card is Gen2 x8).
-  **Duo 2 (4 ch)** works identically — set `MAX_DEVICES=4` in
-  `/etc/nexvue/nexvue.env` — `setup.sh` then enables only `@0..3` and disables
-  `@4..7`. The Duo 2 Mini
+  **Duo 2 (4 ch)** works identically — Settings → Card / encode slots →
+  Duo 2 (or `MAX_DEVICES=4` / `MAX_CHANNELS=4` in `nexvue.env` before the
+  first `setup.sh`) enables only `@0..3` and disables `@4..7`. The Duo 2 Mini
   (low-profile) is the pick if the chassis only takes half-height cards
   (e.g. an SFF box).
 - DIN 1.0/2.3-to-BNC breakout cables, one per channel (8 for Quad 2, 4 for
@@ -48,8 +49,8 @@ Capacity guidance: 8x 1080p59.94 HI encodes (plus optional LO tees on any
 channel) is near the practical ceiling for
 the Arrow Lake media engine. SRT channels add decode load on the same
 Video engine — prefer HI-only for add-on SRT slots. Channel slots default
-to `MAX_CHANNELS=8` (0–7), matching Quad 2 `MAX_DEVICES`. Duo 2 stations
-still use `MAX_DEVICES=4` and enable only `@0..3`.
+to 8 (0–7) for Quad 2. Duo 2 stations use Settings → Card / encode slots
+(or `MAX_CHANNELS=4` before first setup) and enable only `@0..3`.
 Run motion-critical channels (program, director) at 59.94p (`DEINT_FIELDS=all`)
 and monitoring channels (multiview, prompter) at 29.97p (`DEINT_FIELDS=top`) to
 cut encode load and stay comfortably inside the media-engine budget.
@@ -67,8 +68,8 @@ MediaMTX WHEP/API share the same PEMs), installs pinned `lego` for Settings →
 Certificates (TLS-ALPN-01 on `:443`), and `enable --now`s `mediamtx`,
 `nexvue-status`, `nexvue-metrics`, `nexvue-sfu-publish` (idle until
 Settings → Cloudflare Stream is on), `nexvue-decklink-configure`, and
-`nexvue-encode@0..(MAX_CHANNELS-1)` (default 8 → `@0`–`@7`; Duo: set
-`MAX_CHANNELS=4` in `nexvue.env`). Empty SDI ports auto-park and auto-unpark
+`nexvue-encode@0..(MAX_CHANNELS-1)` (default 8 → `@0`–`@7`; Duo: Settings →
+Card / encode slots, or `MAX_CHANNELS=4` in `nexvue.env` before setup). Empty SDI ports auto-park and auto-unpark
 when lock returns. When
 `/var/www/html` exists, it also installs the Apache path UI (`/login`,
 `/player`, …). Use `sudo ./setup.sh --check` after a reboot.
@@ -197,7 +198,7 @@ sudo cp index.html multiview.html metrics.html login.html users.html \
         nexvue-captions.php \
         nexvue-auth.php nexvue-auth-lib.php nexvue-jwks.php nexvue-auth-gate.js \
         nexvue-captions.js nexvue-qr.js nexvue-ui.js nexvue-vu.js \
-        nexvue-safe.js nexvue-scopes.js \
+        nexvue-safe.js nexvue-scopes.js nexvue-spectrum.js \
         nexvue-logo.php chart.umd.min.js \
         services.html channels.html nexvue-ops.php /var/www/html/
 sudo systemctl restart apache2
@@ -226,7 +227,8 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   (`nexvue-web-router.php`); pages live under `pages/` (not web-enumerable).
   Path UI: `/player`, `/multiview`, `/metrics`, `/settings`, `/services`,
   `/users`, `/login`. APIs: `/api/auth`, `/api/ops`, `/api/metrics`,
-  `/api/status`, `/api/mediamtx`, `/api/captions`, `/api/logo`, `/api/version`.
+  `/api/status`, `/api/mediamtx`, `/api/captions`, `/api/logo`, `/api/version`,
+  `/api/client-events`.
   Legacy `*.html` / `nexvue-*.php` URLs 301/307 to the new paths.
   `nexvue-auth-gate.js` remains for role chrome + WHEP JWT. WHEP JWTs still
   enforce media access. Share links use `/player?t=` / `/multiview?t=` (or
@@ -260,9 +262,9 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   Email uses `share_email` / `mail()` when an MTA is available
   (`NEXVUE_MAIL_FROM`), else falls back to `mailto:`.
 - **Player audio defaults (first visit):** volume 20%, muted, VU meters off
-  (`nexvue-vu.js` localStorage). Safe overlay and Scope are also off
-  (`nexvue-safe-on` / `nexvue-scopes-on`; enlarge is `nexvue-scopes-pop`,
-  drag position is `nexvue-scopes-pos`).
+  (`nexvue-vu.js` localStorage). Safe overlay, Scope, and Player RTA are also
+  off (`nexvue-safe-on` / `nexvue-scopes-on` / `nexvue-spectrum-on`; enlarge
+  is `nexvue-scopes-pop`, drag position is `nexvue-scopes-pos`).
   Existing prefs unchanged.
 - **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`
   (existing station `.env` files unchanged until rewritten).
@@ -383,7 +385,10 @@ Then from a LAN machine:
   a `?t=` share link auto-plays the first shared channel). Session tiles
   (resolution/fps, bitrate, RTT, loss, SDI
   input, …) live in a bottom drawer — click **Session metrics** to expand
-  (collapsed by default). Hover a tile title for ~2s for a short explainer.
+  (collapsed by default). **Report session** (in that drawer) is opt-in:
+  nothing is uploaded until the viewer clicks; while reporting, the
+  browser posts snapshots and events to `/api/client-events` (WHEP session
+  UUID). Hover a tile title for ~2s for a short explainer.
   Click the **NexVUE** brand for a QR code of the page URL (phone scan).
   **CC** toggles a selectable closed-caption overlay (CEA-608/CC1 side
   channel — not burned into video; preference in `localStorage`).
@@ -412,7 +417,9 @@ Then from a LAN machine:
 - **Usage metrics:** top nav → Metrics (`/metrics` + `/api/metrics`
   in Apache docroot — no separate port). Long ranges clamp to stored
   samples (status line notes truncation), **Auto-load data** refreshes
-  every 60s in place, and the footer shows Linux box uptime.
+  every 60s in place, and the footer shows Linux box uptime. Viewer
+  rows show **Report** when that session clicked **Report session**
+  (opt-in client snapshots/events — not collected from every viewer).
 - **Services:** top nav → Services — unit status + poll-based journal viewer
   (Follow / Clear view) plus **Clear journal…** for the selected unit
   (`journal_clear` watermark via `nexvue-ops-journal.sh` — hides prior lines
@@ -436,7 +443,11 @@ Then from a LAN machine:
   / `update_setup_log` are admin-only.
 - **Settings:** top nav → Settings — optional station **logo** (Branding
   panel: upload/delete PNG/WebP/JPEG, stored under `/var/lib/nexvue/branding`,
-  shown in the top nav next to **NexVUE** when present); admin-only **Public
+  shown in the top nav next to **NexVUE** when present); admin-only **Card /
+  encode slots** (Quad 2 = 8, Duo 2 = 4, Duo = 2 — writes `MAX_DEVICES` and
+  `MAX_CHANNELS` in `nexvue.env`, seeds missing `channels/N.env`, and
+  enable/disable `nexvue-encode@N`; **Detect** reports how many DeckLink
+  sub-devices `nexvue-status` currently sees); admin-only **Public
   reachability** (public DNS hostname + NAT/public IPv4 — writes
   `NEXVUE_PUBLIC_HOSTNAME` / `NEXVUE_PUBLIC_IP` and MediaMTX
   `webrtcAdditionalHosts`, then restarts `mediamtx` so off-LAN viewers get
@@ -1105,7 +1116,10 @@ expired; JWT auth is the lasting gate.
   scopes to pop a ~2× panel (`nexvue-scopes-pop`; Esc or click again docks).
   The enlarged panel is page-fixed above the Session metrics drawer and can
   be dragged; the last position is remembered (`nexvue-scopes-pos`).
-  Multiview Safe is per-pane; Scope runs on the focused pane only.
+  Player **RTA** (`nexvue-spectrum.js`) is a stereo spectrum (64 log bars
+  L + 64 R, 10 Hz–22 kHz, −60…0 dBFS) on the current Main/SAP pair; off by
+  default (`nexvue-spectrum-on`). Multiview has no RTA. Multiview Safe is
+  per-pane; Scope runs on the focused pane only.
 - **Channel aliases:** optional `CHANNEL_ALIAS=` in each channel `.env` (see
   `channels-example.env`). Every UI except Settings channel setup shows the
   alias when set (Player, Multiview, Users, share dialogs, Metrics, Services,

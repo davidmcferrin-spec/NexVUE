@@ -20,6 +20,7 @@
   var VERSION_URL = "/api/version";
   var ROTATE_KEY = "nexvue-video-rotate";
   var THEATER_KEY = "nexvue-theater";
+  var _maxChannels = 8;
 
   function normalizeRotate(deg) {
     var n = Number(deg);
@@ -523,6 +524,34 @@
     return _aliasCache;
   }
 
+  function clampSlotCount(n) {
+    n = Number(n);
+    if (!Number.isFinite(n)) return 8;
+    n = Math.floor(n);
+    if (n < 1) return 1;
+    if (n > 8) return 8;
+    return n;
+  }
+
+  function setMaxChannels(n) {
+    _maxChannels = clampSlotCount(n);
+    return _maxChannels;
+  }
+
+  function maxChannels() {
+    return _maxChannels;
+  }
+
+  function applyAliasPayload(data) {
+    if (data && data.ok && data.aliases && typeof data.aliases === "object") {
+      _aliasCache = data.aliases;
+    }
+    if (data && data.ok && data.max_channels != null) {
+      setMaxChannels(data.max_channels);
+    }
+    return _aliasCache;
+  }
+
   function loadChannelAliases(force) {
     if (force) _aliasPromise = null;
     if (_aliasPromise) return _aliasPromise;
@@ -538,9 +567,7 @@
         return res.json();
       })
       .then(function (data) {
-        if (data && data.ok && data.aliases && typeof data.aliases === "object") {
-          _aliasCache = data.aliases;
-        }
+        applyAliasPayload(data);
         return _aliasCache;
       })
       .catch(function () {
@@ -594,6 +621,9 @@
     unitLabel: unitLabel,
     getChannelAliases: getChannelAliases,
     setChannelAliases: setChannelAliases,
+    applyAliasPayload: applyAliasPayload,
+    maxChannels: maxChannels,
+    setMaxChannels: setMaxChannels,
     loadChannelAliases: loadChannelAliases,
     STORAGE_KEY: STORAGE_KEY,
     ROTATE_KEY: ROTATE_KEY,

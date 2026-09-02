@@ -125,10 +125,11 @@
   }
   .network-grid label { color: var(--muted); font-size: 12px; }
   .network-grid input { width: 100%; }
-  #network-msg, #turn-msg, #sfu-msg { color: var(--dim); font-size: 12px; }
-  #network-msg.err, #turn-msg.err, #sfu-msg.err { color: var(--bad); }
-  #network-msg.warn { color: var(--warn); }
-  #network-msg.ok, #turn-msg.ok, #sfu-msg.ok { color: var(--ok); }
+  #network-msg, #turn-msg, #sfu-msg, #hardware-msg { color: var(--dim); font-size: 12px; }
+  #network-msg.err, #turn-msg.err, #sfu-msg.err, #hardware-msg.err { color: var(--bad); }
+  #network-msg.warn, #hardware-msg.warn { color: var(--warn); }
+  #network-msg.ok, #turn-msg.ok, #sfu-msg.ok, #hardware-msg.ok { color: var(--ok); }
+  #hardware-detected { color: var(--muted); font-size: 12px; margin: 0 0 8px; max-width: 56em; }
   .network-grid select { width: 100%; }
   #network-test-out {
     color: var(--muted); font-size: 12px; margin: 8px 0 0; max-width: 56em;
@@ -402,7 +403,35 @@
   <button type="button" class="nav-logout" id="nav-logout" hidden>Logout</button>
 </nav>
 
-<p class="warn">Requires admin or operator. Edits <code>/etc/nexvue/channels/*.env</code>. Path stays <code>chN</code> (device slot is fixed); set a display name for Player / Multiview. Encode is always DeckLink SDI → 8ch Opus when audio is on. Restart is optional after save. Click a row to edit; select rows for bulk edit.</p>
+<p class="warn">Requires admin or operator. Edits <code>/etc/nexvue/channels/*.env</code>. Path stays <code>chN</code> (device slot is fixed); set a display name for Player / Multiview. Encode is always DeckLink SDI → 8ch Opus when audio is on. Restart is optional after save. Click a row to edit; select rows for bulk edit. Card / encode slots (admin) writes station <code>nexvue.env</code>.</p>
+
+<div class="panel" id="hardware-panel" hidden>
+  <h2>Card / encode slots</h2>
+  <p class="network-help">
+    How many DeckLink inputs and <code>nexvue-encode@N</code> slots this station
+    runs. Writes <code>MAX_DEVICES</code> and <code>MAX_CHANNELS</code> in
+    <code>/etc/nexvue/nexvue.env</code> (same value). Quad 2 = 8, Duo 2 = 4,
+    original Duo = 2. <strong>Detect</strong> reads the status daemon — if it
+    reports fewer devices than the preset, a connector pair is still full-duplex
+    (parked). Saving seeds missing channel files and enables or disables encode
+    units. Shrinking stops the extra slots but keeps their settings.
+  </p>
+  <div class="network-grid">
+    <label for="hardware-slots" tabindex="0"
+      data-tip="Encode slots 0 .. N-1 and DeckLink DEVICE_NUMBER cap. Quad 2 = 8 independent half-duplex inputs. Duo 2 / Duo 2 Mini = 4. Original Duo = 2. Detect compares this to how many sub-devices the DeckLink iterator currently exposes.">Card</label>
+    <select id="hardware-slots" aria-describedby="hardware-msg">
+      <option value="8">Quad 2 — 8 inputs</option>
+      <option value="4">Duo 2 — 4 inputs</option>
+      <option value="2">Duo — 2 inputs</option>
+    </select>
+  </div>
+  <div id="hardware-detected" aria-live="polite"></div>
+  <div class="bar">
+    <button type="button" class="primary" id="hardware-save">Save</button>
+    <button type="button" id="hardware-detect">Detect</button>
+    <span id="hardware-msg" aria-live="polite"></span>
+  </div>
+</div>
 
 <div class="panel">
   <h2>Channel list</h2>
@@ -1960,6 +1989,142 @@
   const networkTestOut = document.getElementById("network-test-out");
   const me = NexVueAuth.currentUser();
   const isAdmin = !!(me && me.role === "admin");
+
+  // ---- Card / encode slots (admin-only) ----------------------------------------
+
+  const hardwarePanel = document.getElementById("hardware-panel");
+  const hardwareSlots = document.getElementById("hardware-slots");
+  const hardwareSave = document.getElementById("hardware-save");
+  const hardwareDetect = document.getElementById("hardware-detect");
+  const hardwareMsg = document.getElementById("hardware-msg");
+  const hardwareDetected = document.getElementById("hardware-detected");
+  let hardwareSavedSlots = 8;
+
+  function setHardwareMsg(text, cls) {
+    hardwareMsg.textContent = text || "";
+    hardwareMsg.className = cls || "";
+  }
+
+  function ensureHardwareOption(slots) {
+    const n = String(slots);
+    if ([...hardwareSlots.options].some((o) => o.value === n)) return;
+    const opt = document.createElement("option");
+    opt.value = n;
+    opt.textContent = n + " inputs (current)";
+    hardwareSlots.appendChild(opt);
+  }
+
+  function paintHardwareDetected(data) {
+    const n = data.detected_devices;
+    const names = data.detected_names || [];
+    if (data.detected_stale) {
+      hardwareDetected.textContent = "Card status is stale — Detect again in a few seconds.";
+      return;
+    }
+    if (n == null) {
+      hardwareDetected.textContent = "Card not reported yet (status daemon down or no DeckLink).";
+      return;
+    }
+    let line = "Card reports " + n + " sub-device" + (n === 1 ? "" : "s");
+    if (names.length) line += " — " + names.join(", ");
+    const configured = Number(hardwareSlots.value);
+    if (Number.isFinite(configured) && n !== configured) {
+      line += ". Status iterator count does not match the selected preset — check half-duplex on every connector pair.";
+    }
+    hardwareDetected.textContent = line;
+  }
+
+  function applyHardwarePayload(data) {
+    const slots = Number(data.slots || data.max_channels || 8);
+    hardwareSavedSlots = slots;
+    ensureHardwareOption(slots);
+    hardwareSlots.value = String(slots);
+    paintHardwareDetected(data);
+    if (window.NexVueUI && NexVueUI.setMaxChannels) {
+      NexVueUI.setMaxChannels(slots);
+    }
+  }
+
+  async function loadHardware() {
+    try {
+      const data = await api("hardware_get", {});
+      applyHardwarePayload(data);
+    } catch (err) {
+      setHardwareMsg(err.message, "err");
+    }
+  }
+
+  if (isAdmin && hardwarePanel) {
+    hardwarePanel.hidden = false;
+    wireFieldTip(document.querySelector('label[for="hardware-slots"]'));
+    hardwareDetect.addEventListener("click", async () => {
+      hardwareDetect.disabled = true;
+      setHardwareMsg("Detecting…");
+      try {
+        const data = await api("hardware_get", {});
+        applyHardwarePayload(data);
+        const n = data.detected_devices;
+        if (n === 2 || n === 4 || n === 8) {
+          ensureHardwareOption(n);
+          hardwareSlots.value = String(n);
+        }
+        if (n == null) {
+          setHardwareMsg("Could not read the card — is nexvue-status running?", "err");
+        } else if (n !== Number(hardwareSlots.value)) {
+          setHardwareMsg("Detected " + n + " devices — select the matching preset or fix connector mapping.", "warn");
+        } else {
+          setHardwareMsg("Detected " + n + " devices.", "ok");
+        }
+      } catch (err) {
+        setHardwareMsg(err.message, "err");
+      } finally {
+        hardwareDetect.disabled = false;
+      }
+    });
+    hardwareSave.addEventListener("click", async () => {
+      const slots = parseInt(hardwareSlots.value, 10);
+      if (![2, 4, 8].includes(slots) && (slots < 1 || slots > 8)) {
+        setHardwareMsg("Choose Quad 2 (8), Duo 2 (4), or Duo (2).", "err");
+        return;
+      }
+      if (slots < hardwareSavedSlots) {
+        if (!confirm(
+          "This disables encode slots " + slots + "–7 and stops those viewers. Channel settings are kept. Continue?"
+        )) return;
+      } else if (slots > hardwareSavedSlots) {
+        if (!confirm(
+          "This enables encode slots " + hardwareSavedSlots + "–" + (slots - 1) +
+          " (empty ports auto-park if unlocked). Continue?"
+        )) return;
+      } else if (!confirm("Write " + slots + " encode slots to the station config?")) {
+        return;
+      }
+      hardwareSave.disabled = true;
+      setHardwareMsg("Saving…");
+      try {
+        const data = await api("hardware_put", { slots });
+        applyHardwarePayload(data);
+        const extra = [];
+        if (Array.isArray(data.seeded) && data.seeded.length) {
+          extra.push("seeded " + data.seeded.join(", "));
+        }
+        if (Array.isArray(data.unit_errors) && data.unit_errors.length) {
+          setHardwareMsg("Saved env, but some encode units failed: " + data.unit_errors.join("; "), "warn");
+        } else {
+          setHardwareMsg(
+            extra.length ? ("Saved — " + extra.join("; ") + ".") : "Saved.",
+            "ok"
+          );
+        }
+        if (typeof load === "function") load();
+      } catch (err) {
+        setHardwareMsg(err.message, "err");
+      } finally {
+        hardwareSave.disabled = false;
+      }
+    });
+    loadHardware();
+  }
 
   function setNetworkMsg(text, cls) {
     networkMsg.textContent = text || "";

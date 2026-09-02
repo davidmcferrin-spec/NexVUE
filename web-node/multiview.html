@@ -254,6 +254,20 @@
     box-shadow: 0 4px 16px rgba(0,0,0,.35); pointer-events: none;
   }
   #stat-tip.visible { display: block; }
+  .stats-report {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 10px; max-width: 1280px; margin: 12px auto 0;
+  }
+  .stats-report button {
+    background: var(--bg); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 6px 12px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .stats-report button:hover:not(:disabled) { border-color: var(--acc); color: var(--acc); }
+  .stats-report button.active { background: var(--acc); color: var(--on-acc); border-color: var(--acc); font-weight: 600; }
+  .stats-report button:disabled { opacity: .4; cursor: not-allowed; }
+  .report-state { color: var(--dim); font-size: 12px; }
+  .report-state.ok { color: var(--ok); }
+  .report-state.bad { color: var(--bad); }
 
   /* Near-frameless wall mode: hide chrome so dual/quad fill the display.
      Fullscreen is requested on <html> (documentElement), so match html:fullscreen
@@ -416,6 +430,10 @@
       <div class="stat" tabindex="0" data-tip="Genlock reference status on the capture card — locked to house sync, or free-running."><div class="k">Reference</div><div class="v" id="s-ref">—</div></div>
       <div class="stat" tabindex="0" data-tip="Whether the browser holds a screen wake lock so the display won't sleep during playback."><div class="k">Screen awake</div><div class="v" id="s-wake">—</div></div>
     </div>
+    <div class="stats-report">
+      <button type="button" id="report-session" disabled title="Upload the focused pane's session stats to Metrics for debugging. Nothing is sent until you click.">Report session</button>
+      <span id="report-session-state" class="report-state"></span>
+    </div>
   </div>
 </div>
 <div id="stat-tip" role="tooltip" aria-hidden="true"></div>
@@ -439,6 +457,7 @@
 <script src="/assets/nexvue-scopes.js"></script>
 <script src="/assets/nexvue-auth-gate.js"></script>
 <script src="/assets/nexvue-share-ui.js"></script>
+<script src="/assets/nexvue-client-report.js"></script>
 <script>
 "use strict";
 (async () => {
@@ -475,6 +494,8 @@
 
   let layout = "quad";   // "dual" | "quad"
   let rendition = "lo";  // "hi" | "lo" — LO default for multi-session load
+  let lastRtcSnapshot = {};
+  let clientReport = null;
   let audioPane = -1;    // index of listening pane, or -1
   let audioLayoutByPath = {};
   let audioEmbedsByPath = {};
@@ -682,7 +703,10 @@
     const kickedReasonEl = kickedEl.querySelector(".kicked-reason");
 
     // Options filled after aliases load (fillChannelOptions).
-    for (let i = 0; i < 8; i++) {
+    const slotCount = (window.NexVueUI && NexVueUI.maxChannels)
+      ? NexVueUI.maxChannels()
+      : 8;
+    for (let i = 0; i < slotCount; i++) {
       const path = `ch${i}`;
       if (!NexVueAuth.channelAllowed(path, authUser)) continue;
       const opt = document.createElement("option");
@@ -724,6 +748,11 @@
 
     select.addEventListener("change", async () => {
       const val = select.value;
+      const prevBase = pane.base;
+      if (clientReport && clientReport.isArmed() && prevBase && val && prevBase !== val) {
+        const focus = (typeof focusedPane === "function") ? focusedPane() : null;
+        if (focus === pane) clientReport.notify("channel", `${prevBase} → ${val}`);
+      }
       hidePaneKicked(pane);
       if (!val) {
         closePane(pane, true);
@@ -829,6 +858,7 @@
   }
 
   function applyPaneKicked(pane, reason) {
+    if (clientReport && focusedPane() === pane) clientReport.notify("kicked", reason || "");
     pane.intentionalClose = true;
     if (pane.reconnectTimer) {
       clearTimeout(pane.reconnectTimer);
@@ -911,6 +941,7 @@
       if (gen !== pane.openGen) return;
       const raw = err && err.message ? err.message : String(err);
       const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
+      if (clientReport && focusedPane() === pane) clientReport.notify("whep_error", msg);
       setPaneStatus(pane, "error: " + msg, "bad");
       if (!pane.intentionalClose && pane.base) {
         maybeReconnectPane(pane, "error: " + msg);
@@ -944,10 +975,14 @@
       if (pc.connectionState === "connected") {
         setPaneStatus(pane, path, "ok");
         pane.reconnectAttempt = 0;
+        if (clientReport && focusedPane() === pane) {
+          clientReport.noteSession(pane.sessionId, pane.base);
+        }
         restoreFullscreenIfNeeded();
         updateGlobalState();
       } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         setPaneStatus(pane, pc.connectionState, "bad");
+        if (clientReport && focusedPane() === pane) clientReport.notify("ice_failed", pc.connectionState);
         if (!pane.intentionalClose && pane.base) {
           maybeReconnectPane(pane, pc.connectionState);
         }
@@ -988,6 +1023,9 @@
         );
       }
       pane.sessionId = exchanged.res ? parseWhepSessionId(exchanged.res) : null;
+      if (clientReport && focusedPane() === pane) {
+        clientReport.noteSession(pane.sessionId, pane.base);
+      }
       await pc.setRemoteDescription({ type: "answer", sdp: exchanged.sdp });
       if (gen !== pane.openGen || pane.pc !== pc) {
         try { pc.close(); } catch (e) { /* ignore */ }
@@ -999,6 +1037,7 @@
       }
       const raw = err && err.message ? err.message : String(err);
       const msg = raw + (NexVueAuth.whepFetchHint ? NexVueAuth.whepFetchHint(raw) : "");
+      if (clientReport && focusedPane() === pane) clientReport.notify("whep_error", msg);
       setPaneStatus(pane, `error: ${msg}`, "bad");
       const sid = pane.sessionId;
       closePane(pane, false);
@@ -1023,6 +1062,10 @@
     if (index >= 0) NexVueVu.resume();
     resetRtcBaseline();
     updateFocusLabel();
+    if (clientReport) {
+      const p = focusedPane();
+      clientReport.noteSession(p && p.sessionId, p && p.base);
+    }
   }
 
   function focusedPane() {
@@ -1087,14 +1130,19 @@
     } catch {
       return;
     }
+    const snap = Object.assign({}, lastRtcSnapshot);
     report.forEach(s => {
       if (s.type === "inbound-rtp" && s.kind === "video") {
         $("s-res").textContent =
           (s.frameWidth ? `${s.frameWidth}x${s.frameHeight}` : "—") +
           (s.framesPerSecond ? ` @ ${s.framesPerSecond}` : "");
+        if (s.frameWidth) snap.width = s.frameWidth;
+        if (s.frameHeight) snap.height = s.frameHeight;
+        if (s.framesPerSecond) snap.fps = s.framesPerSecond;
         if (prevTs && s.timestamp > prevTs) {
           const mbps = (s.bytesReceived - prevBytes) * 8 / (s.timestamp - prevTs) / 1000;
           $("s-vbr").textContent = `${mbps.toFixed(2)} Mbps`;
+          snap.inbound_bps = mbps * 1e6;
         }
         prevBytes = s.bytesReceived;
         prevTs = s.timestamp;
@@ -1106,22 +1154,27 @@
           const total = dLost + dRecv;
           const lossRate = total > 0 ? dLost / total : 0;
           $("s-loss").textContent = `${(lossRate * 100).toFixed(1)} %`;
+          snap.loss_pct = lossRate * 100;
         }
         prevLost = lost;
         prevRecv = recv;
         haveLossBaseline = true;
 
         $("s-drop").textContent = s.framesDropped ?? "—";
+        if (s.framesDropped != null) snap.frames_dropped = s.framesDropped;
         if (s.jitterBufferDelay && s.jitterBufferEmittedCount) {
           const ms = s.jitterBufferDelay / s.jitterBufferEmittedCount * 1000;
           $("s-jb").textContent = `${ms.toFixed(0)} ms`;
+          snap.jb_ms = ms;
         }
       }
       if (s.type === "candidate-pair" && s.state === "succeeded" && s.nominated &&
           s.currentRoundTripTime !== undefined) {
         $("s-rtt").textContent = `${(s.currentRoundTripTime * 1000).toFixed(1)} ms`;
+        snap.rtt_ms = s.currentRoundTripTime * 1000;
       }
     });
+    lastRtcSnapshot = snap;
   }
 
   async function pollApiStats() {
@@ -1262,7 +1315,9 @@
 
   function setRendition(rend) {
     if (rend === rendition) return;
+    const prevRend = rendition;
     rendition = rend;
+    if (clientReport) clientReport.notify("rendition", `${prevRend} → ${rend}`);
     $("q-hi").classList.toggle("active", rend === "hi");
     $("q-lo").classList.toggle("active", rend === "lo");
     resetRtcBaseline();
@@ -1383,6 +1438,24 @@
   window.addEventListener("scroll", () => { if (tipEl.classList.contains("visible")) hideStatTip(); }, true);
   window.addEventListener("resize", hideStatTip);
 
+  if (window.NexVueClientReport) {
+    clientReport = NexVueClientReport.attach({
+      button: $("report-session"),
+      statusEl: $("report-session-state"),
+      getContext: () => {
+        const p = focusedPane();
+        return {
+          sessionId: p && p.sessionId,
+          channel: p && p.base,
+          rendition,
+          page: "multiview",
+          connected: !!(p && p.pc && p.base),
+          stats: lastRtcSnapshot,
+        };
+      },
+    });
+  }
+
   const drawer = $("stats-drawer");
   const toggle = $("stats-toggle");
   function setDrawerOpen(open) {
@@ -1422,9 +1495,31 @@
       });
       const data = await res.json();
       if (!data || !data.ok || !data.aliases) return;
-      if (window.NexVueUI && NexVueUI.setChannelAliases) {
+      if (window.NexVueUI && NexVueUI.applyAliasPayload) {
+        NexVueUI.applyAliasPayload(data);
+      } else if (window.NexVueUI && NexVueUI.setChannelAliases) {
         NexVueUI.setChannelAliases(data.aliases);
       }
+      const slotCount = (window.NexVueUI && NexVueUI.maxChannels)
+        ? NexVueUI.maxChannels()
+        : 8;
+      panes.forEach((p) => {
+        const prev = p.select.value;
+        const keep = [...p.select.options].filter((o) => !o.value);
+        p.select.innerHTML = "";
+        keep.forEach((o) => p.select.appendChild(o));
+        for (let i = 0; i < slotCount; i++) {
+          const path = `ch${i}`;
+          if (!NexVueAuth.channelAllowed(path, authUser)) continue;
+          const opt = document.createElement("option");
+          opt.value = path;
+          opt.textContent = path;
+          p.select.appendChild(opt);
+        }
+        if (prev && [...p.select.options].some((o) => o.value === prev)) {
+          p.select.value = prev;
+        }
+      });
       if (data.audio_layouts) {
         audioLayoutByPath = data.audio_layouts;
       } else if (data.audio_channels) {

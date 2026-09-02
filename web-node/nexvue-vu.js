@@ -16,6 +16,10 @@
  *   nexvue-audio-program  main | sap
  *   nexvue-audio-playout  stereo | surround   (5.1 → stereo mixdown vs discrete)
  *   nexvue-vu-solo        -1 | channel index  (engineering solo)
+ *
+ * Player RTA (nexvue-spectrum.js) taps dedicated L/R Analysers on the
+ * current listen pair (Main 0/1 or SAP 6/7). Do not open a second
+ * MediaStreamSource — this graph is the only tap.
  */
 (function (global) {
   "use strict";
@@ -32,6 +36,8 @@
   const SCALE_MARKS_DB = [0, -6, -12, -20, -30, -40, -60];
 
   const FFT = 2048;
+  const SPEC_FFT = 8192;
+  const SPEC_SMOOTH = 0.55;
   const SMOOTH = 0.3;
   const ATTACK = 0.35;
   const RELEASE = 0.06;
@@ -417,6 +423,8 @@
     let splitter = null;
     let masterGain = null;
     let analysers = [];
+    let specL = null;
+    let specR = null;
     let chGains = []; // per transport channel → feed mix or surround
     let outNodes = []; // nodes to disconnect on teardown (mergers, gains)
     let fills = [];
@@ -601,13 +609,40 @@
       paintToolbar();
     }
 
+    function listenPair() {
+      if (effectiveProgram() === "sap" && layout.sap && layout.sap.length >= 2) {
+        return [layout.sap[0], layout.sap[1]];
+      }
+      const main = layout.main || [0, 1];
+      return [main[0], main[1]];
+    }
+
+    function wireSpectrum() {
+      specL = null;
+      specR = null;
+      if (!ctx || !splitter) return;
+      specL = ctx.createAnalyser();
+      specR = ctx.createAnalyser();
+      [specL, specR].forEach((a) => {
+        a.fftSize = SPEC_FFT;
+        a.smoothingTimeConstant = SPEC_SMOOTH;
+        a.minDecibels = -60;
+        a.maxDecibels = 0;
+      });
+      const pair = listenPair();
+      splitter.connect(specL, pair[0]);
+      splitter.connect(specR, pair[1]);
+    }
+
     function teardownGraph() {
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
-      const nodes = [source, splitter, masterGain].concat(analysers, chGains, outNodes);
+      const nodes = [source, splitter, masterGain, specL, specR].concat(analysers, chGains, outNodes);
       nodes.forEach((n) => { try { if (n) n.disconnect(); } catch { /* ignore */ } });
       source = null;
       splitter = null;
       masterGain = null;
+      specL = null;
+      specR = null;
       analysers = [];
       chGains = [];
       outNodes = [];
@@ -766,6 +801,7 @@
         masterGain.gain.value = effectiveMasterGain();
 
         source.connect(splitter);
+        wireSpectrum();
 
         const prog = effectiveProgram();
         const play = effectivePlayout();
@@ -917,6 +953,15 @@
       getLayout: () => layout.id,
       getProgram: () => effectiveProgram(),
       getPlayout: () => effectivePlayout(),
+      getSpectrumPair() {
+        if (!ctx || !specL || !specR) return null;
+        return {
+          left: specL,
+          right: specR,
+          sampleRate: ctx.sampleRate,
+          fftSize: specL.fftSize,
+        };
+      },
       // Back-compat for older callers.
       setChannels(n) {
         if (n === 2) this.setLayout("stereo");
@@ -1102,6 +1147,7 @@
 
   global.NexVueVu = {
     MAX_CH,
+    SPEC_FFT,
     LAYOUTS,
     TRANSPORT_LABELS,
     PREF_VISIBLE,
