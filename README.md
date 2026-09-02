@@ -1113,8 +1113,11 @@ expired; JWT auth is the lasting gate.
   session metrics sit in a collapsed bottom drawer (`Session metrics`,
   in-flow so iOS Chrome's toolbar does not detach it);
   Multiview focuses the audio-active pane. Hover a tile ~2s for
-  an explainer. **VU meters** (right edge) follow channel `AUDIO_LAYOUT`
-  (stereo / 5.1 / stereo+SAP / 5.1+SAP). Toolbar: **Main**/**SAP**,
+  an explainer. **VU meters** follow channel `AUDIO_LAYOUT`
+  (stereo / 5.1 / stereo+SAP / 5.1+SAP). On Player they sit as a frost
+  rail beside the picture (not on it); click the rail chrome to float
+  (`nexvue-vu-pop` / `nexvue-vu-pos`). Multiview keeps per-pane overlay.
+  Toolbar: **Main**/**SAP**,
   **St** (5.1→stereo fold) / **5.1** (discrete surround to the PC), plus
   engineering solo — all **this browser only** (`nexvue-vu.js` localStorage).
   Transport is discrete Opus only (no Dolby). **Safe** draws HD title/action
@@ -1147,8 +1150,9 @@ expired; JWT auth is the lasting gate.
   makes family 255 — which has **no RTP payloader**. Positioned PCM is
   encoded in-process (`nexvue_opus_ms.py` / libopus) with Chrome/MediaMTX's
   8ch table (`coupled_streams=4`, mapping `0,6,1,4,5,2,3,7`) so WHEP L/R
-  stay a real pair. Stock `opusenc` family-1 surround (3 coupled, Vorbis
-  map) made Chrome decode L/R as mid-side. `AUDIO_LAYOUT`
+  stay a real pair. If `opus_multistream_encoder_create` fails (libopus
+  `OPUS_BAD_ARG` on some boxes), encode **falls back to stock `opusenc`**
+  and stays on-air (L/R may look Mid/Side again). `AUDIO_LAYOUT`
   (`stereo`|`51`|`stereo_sap`|`51_sap`) is a **player role preset only**
   (Main/SAP/5.1 UI). `AUDIO_EMBEDS` (Settings checkboxes, e.g. `1,2,7,8`)
   chooses which embeds the browser VU offers — metadata only; encode still

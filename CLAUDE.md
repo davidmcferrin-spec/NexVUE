@@ -380,7 +380,10 @@ this box can't get additional ports opened.
   Player/Multiview **CC** uses `nexvue-captions.js` + SSE (not WHEP text
   tracks). Player/Multiview **VU / audio program** use `nexvue-vu.js`
   (Web Audio on the WHEP MediaStream). Top-bar **VU** toggle (like CC)
-  shows/hides the meter overlay (`localStorage.nexvue-vu-on`, default off).
+  shows/hides the meters (`localStorage.nexvue-vu-on`, default off).
+  Player VU is a frost rail beside the picture; click chrome (not a
+  button) to float (`nexvue-vu-pop` / `nexvue-vu-pos`). Multiview stays
+  a per-pane overlay.
   **Safe** (`nexvue-safe.js`, `nexvue-safe-on`) is HD title/action + optional
   center target and 4:3 cut.   **Scope** (`nexvue-scopes.js`, `nexvue-scopes-on`)
   is a decoded-frame waveform (IRE) + Rec.709 vectorscope (Multiview: focused
@@ -407,8 +410,8 @@ this box can't get additional ports opened.
   Positioned channels are mandatory: decklinkaudiosrc emits channel-mask=0,
   unpositioned multichannel is family 255 (no RTP payloader). Remix is
   per-branch mono channel-masks; encode is libopus with Chrome/MediaMTX's
-  8ch table (`nexvue_opus_ms.py`) so WHEP L/R match. Stock opusenc
-  family-1 surround made Chrome decode L/R as mid-side. Player / Multiview
+  8ch table (`nexvue_opus_ms.py`) so WHEP L/R match. If that create fails,
+  encode falls back to stock `opusenc` and stays on-air. Player / Multiview
   WHEP offers are SDP-munged (`nexvue-vu.js`
   `mungeWhepOfferSdp`) for multiopus 3–8. Settings **Detect audio…**
   (`audio_probe` → `decklink-audio-probe`) suggests role + embeds for

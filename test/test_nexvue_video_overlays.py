@@ -96,6 +96,9 @@ class TestOverlayContracts(unittest.TestCase):
         self.assertIn("text-shadow: 0 0 3px #000", js)
         self.assertIn("ALIGN_DB", js)
         self.assertIn("SCALE_MARKS_DB", js)
+        self.assertIn('PREF_POP = "nexvue-vu-pop"', js)
+        self.assertIn("nexvue-vu-rail", js)
+        self.assertIn("z-index: 55", js)
 
     def test_player_has_safe_and_scope_toggles(self) -> None:
         html = PLAYER.read_text(encoding="utf-8")
@@ -108,6 +111,8 @@ class TestOverlayContracts(unittest.TestCase):
         self.assertIn("NexVueSafe.attach", html)
         self.assertIn("NexVueScopes.attach", html)
         self.assertIn("NexVueSpectrum.attach", html)
+        self.assertIn("rail: true", html)
+        self.assertIn("stage-row", html)
 
     def test_multiview_has_safe_and_scope_toggles(self) -> None:
         html = MULTI.read_text(encoding="utf-8")

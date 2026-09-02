@@ -11,6 +11,8 @@
  * Per-browser prefs (localStorage) never change encode or other viewers:
  *   nexvue-vu-on          1 | 0               (default off when unset)
  *   nexvue-vu-scale       1 | 0               (show dBFS scale beside meters)
+ *   nexvue-vu-pop         1 | 0               (Player rail: default docked)
+ *   nexvue-vu-pos         {"left":N,"top":N}  (viewport px; only after a drag)
  *   nexvue-audio-muted    1 | 0               (default muted when unset)
  *   nexvue-audio-volume   0..1               (default 0.2 when unset)
  *   nexvue-audio-program  main | sap
@@ -26,6 +28,10 @@
 
   const PREF_VISIBLE = "nexvue-vu-on";
   const PREF_SCALE = "nexvue-vu-scale";
+  const PREF_POP = "nexvue-vu-pop";
+  const PREF_POS = "nexvue-vu-pos";
+  const DRAG_THRESHOLD = 6;
+  const POS_PAD = 8;
   const PREF_MUTED = "nexvue-audio-muted";
   const PREF_VOLUME = "nexvue-audio-volume";
   const PREF_SOLO = "nexvue-vu-solo";
@@ -141,6 +147,65 @@
       localStorage.setItem(PREF_VISIBLE, on ? "1" : "0");
     } catch { /* private mode */ }
     return !!on;
+  }
+
+  function parsePos(raw) {
+    if (raw == null || raw === "") return null;
+    let o = raw;
+    if (typeof raw === "string") {
+      try { o = JSON.parse(raw); } catch (e) { return null; }
+    }
+    if (!o || typeof o !== "object") return null;
+    const left = Number(o.left);
+    const top = Number(o.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+    return { left: left, top: top };
+  }
+
+  function clampPos(left, top, width, height, vw, vh, pad) {
+    pad = pad == null ? POS_PAD : pad;
+    width = Math.max(0, Number(width) || 0);
+    height = Math.max(0, Number(height) || 0);
+    vw = Math.max(0, Number(vw) || 0);
+    vh = Math.max(0, Number(vh) || 0);
+    const maxL = Math.max(pad, vw - width - pad);
+    const maxT = Math.max(pad, vh - height - pad);
+    return {
+      left: Math.min(maxL, Math.max(pad, left)),
+      top: Math.min(maxT, Math.max(pad, top)),
+    };
+  }
+
+  function getPopPref() {
+    try {
+      return localStorage.getItem(PREF_POP) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function setPopPref(on) {
+    try {
+      localStorage.setItem(PREF_POP, on ? "1" : "0");
+    } catch { /* private mode */ }
+    return !!on;
+  }
+
+  function getPosPref() {
+    try {
+      return parsePos(localStorage.getItem(PREF_POS));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function setPosPref(pos) {
+    const next = parsePos(pos);
+    try {
+      if (!next) localStorage.removeItem(PREF_POS);
+      else localStorage.setItem(PREF_POS, JSON.stringify(next));
+    } catch (e) { /* private mode */ }
+    return next;
   }
 
   /** Default off — scale is optional clutter for confidence monitors. */
@@ -274,6 +339,29 @@
   color: var(--text, #d6dde6);
 }
 .nexvue-vu[hidden] { display: none !important; }
+.nexvue-vu.nexvue-vu-rail {
+  position: relative; top: auto; right: auto; bottom: auto; left: auto;
+  max-width: none; height: auto; align-self: stretch;
+  padding: 6px 7px 8px;
+  background: rgba(8, 12, 16, .78);
+  border: 1px solid rgba(44, 53, 66, .9);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.nexvue-vu.nexvue-vu-rail .nexvue-vu-toolbar,
+.nexvue-vu.nexvue-vu-pop .nexvue-vu-toolbar {
+  flex-direction: column; align-items: stretch; justify-content: flex-start;
+}
+.nexvue-vu.nexvue-vu-pop {
+  position: fixed; left: 12px; top: 12px; right: auto; bottom: auto;
+  z-index: 55; height: min(72vh, 560px); max-width: none;
+  padding: 6px 7px 8px;
+  background: rgba(8, 12, 16, .86);
+  border: 1px solid rgba(44, 53, 66, .9);
+  border-radius: 3px;
+  cursor: grab; touch-action: none;
+}
+.nexvue-vu.nexvue-vu-pop.nexvue-vu-drag { cursor: grabbing; }
 .nexvue-vu-toolbar {
   display: flex; gap: 3px; justify-content: flex-end; flex-wrap: wrap;
 }
@@ -372,6 +460,8 @@
   /**
    * @param {object} opts
    * @param {HTMLElement} opts.container
+   * @param {HTMLElement} [opts.host]  rail parent (Player .stage-row)
+   * @param {boolean} [opts.rail=false]  Player: beside the picture, not on it
    * @param {HTMLVideoElement} opts.video
    * @param {MediaStream|null} [opts.stream]
    * @param {boolean} [opts.listen=false]
@@ -382,6 +472,8 @@
     const container = opts && opts.container;
     const video = opts && opts.video;
     if (!container || !video) return null;
+    const rail = !!(opts && opts.rail);
+    const host = (opts && opts.host) || container;
     const onListenChange = opts && typeof opts.onListenChange === "function"
       ? opts.onListenChange
       : null;
@@ -402,7 +494,7 @@
       '<div class="nexvue-vu-scale" hidden aria-hidden="true"></div>' +
       '<div class="nexvue-vu-bars" role="group" aria-label="Audio level meters"></div>' +
       "</div>";
-    container.appendChild(root);
+    (rail ? host : container).appendChild(root);
 
     const barsEl = root.querySelector(".nexvue-vu-bars");
     const scaleEl = root.querySelector(".nexvue-vu-scale");
@@ -443,6 +535,10 @@
     let peakHold = [];
     let connectedStreamId = null;
     let timeData = null;
+    let popped = rail ? getPopPref() : false;
+    let pos = rail ? getPosPref() : null;
+    let drag = null;
+    let suppressClick = false;
 
     function effectiveProgram() {
       if (program === "sap" && layout.hasSap && layout.sap &&
@@ -459,8 +555,55 @@
       return "stereo";
     }
 
+    function applyPosition() {
+      if (!(rail && popped && visible) || !pos) {
+        if (!(rail && popped && visible)) {
+          root.style.left = "";
+          root.style.top = "";
+          root.style.bottom = "";
+        }
+        return;
+      }
+      const w = root.offsetWidth;
+      const h = root.offsetHeight;
+      const next = clampPos(pos.left, pos.top, w, h, window.innerWidth, window.innerHeight, POS_PAD);
+      if (w > 0 && h > 0 && (next.left !== pos.left || next.top !== pos.top)) {
+        pos = next;
+        setPosPref(pos);
+      }
+      root.style.left = next.left + "px";
+      root.style.top = next.top + "px";
+      root.style.bottom = "auto";
+    }
+
+    function applyHost() {
+      if (!rail) return;
+      const parent = (popped && visible) ? (document.body || host) : host;
+      if (parent && root.parentNode !== parent) parent.appendChild(root);
+      root.classList.toggle("nexvue-vu-rail", !!(visible && !popped));
+      root.classList.toggle("nexvue-vu-pop", !!(visible && popped));
+      root.classList.toggle("nexvue-vu-drag", !!(drag && drag.moved));
+      root.title = popped
+        ? "Drag to move · click empty area to dock · Esc"
+        : "Click empty area to float (buttons still work)";
+      applyPosition();
+    }
+
+    function setPopped(on) {
+      if (!rail) return false;
+      on = !!on;
+      if (popped === on) {
+        applyHost();
+        return popped;
+      }
+      popped = setPopPref(on);
+      applyHost();
+      return popped;
+    }
+
     function updateRootVisibility() {
       root.hidden = !(visible && hasAudio);
+      applyHost();
       if (visible && hasAudio && analysers.length && !raf) {
         raf = requestAnimationFrame(tick);
       } else if (!visible && raf) {
@@ -895,8 +1038,96 @@
     }
     video.addEventListener("volumechange", keepElementMuted);
 
+    function onPointerDown(ev) {
+      if (!rail || !popped || !visible) return;
+      if (ev.target && ev.target.closest && ev.target.closest("button")) return;
+      if (ev.button != null && ev.button !== 0) return;
+      ev.preventDefault();
+      const rect = root.getBoundingClientRect();
+      drag = {
+        pointerId: ev.pointerId,
+        startX: ev.clientX,
+        startY: ev.clientY,
+        origL: rect.left,
+        origT: rect.top,
+        moved: false,
+      };
+      try { root.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+    }
+
+    function onPointerMove(ev) {
+      if (!drag || ev.pointerId !== drag.pointerId) return;
+      const dx = ev.clientX - drag.startX;
+      const dy = ev.clientY - drag.startY;
+      if (!drag.moved && (dx * dx + dy * dy) < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
+      ev.preventDefault();
+      drag.moved = true;
+      pos = clampPos(
+        drag.origL + dx,
+        drag.origT + dy,
+        root.offsetWidth,
+        root.offsetHeight,
+        window.innerWidth,
+        window.innerHeight,
+        POS_PAD
+      );
+      applyHost();
+    }
+
+    function endDrag(ev) {
+      if (!drag || (ev && ev.pointerId != null && ev.pointerId !== drag.pointerId)) return;
+      const moved = drag.moved;
+      const pointerId = drag.pointerId;
+      drag = null;
+      root.classList.remove("nexvue-vu-drag");
+      try { root.releasePointerCapture(pointerId); } catch (e) { /* ignore */ }
+      if (moved) {
+        pos = setPosPref(pos) || pos;
+        suppressClick = true;
+      }
+    }
+
+    function onRootClick(ev) {
+      if (!rail) return;
+      if (ev.target && ev.target.closest && ev.target.closest("button")) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
+      setPopped(!popped);
+    }
+
+    function onResize() {
+      if (!rail || !popped || !visible || !pos) return;
+      applyPosition();
+    }
+
+    function onKey(ev) {
+      if (!rail) return;
+      if (ev.key !== "Escape") return;
+      if (!popped || !visible) return;
+      if (document.querySelector("dialog[open]")) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
+      setPopped(false);
+    }
+
+    if (rail) {
+      root.addEventListener("pointerdown", onPointerDown);
+      root.addEventListener("pointermove", onPointerMove);
+      root.addEventListener("pointerup", endDrag);
+      root.addEventListener("pointercancel", endDrag);
+      root.addEventListener("click", onRootClick);
+      document.addEventListener("keydown", onKey, true);
+      window.addEventListener("resize", onResize);
+    }
+
     rebuildMeterDom();
     paintScale();
+    applyHost();
     if (opts.stream) buildGraph(opts.stream);
 
     return {
@@ -966,6 +1197,8 @@
       },
       setVisible,
       getVisible: () => visible,
+      setPopped,
+      isPopped: () => popped,
       setScale,
       getScale: () => scaleOn,
       setProgram,
@@ -996,6 +1229,15 @@
       detach() {
         teardownGraph();
         video.removeEventListener("volumechange", keepElementMuted);
+        if (rail) {
+          root.removeEventListener("pointerdown", onPointerDown);
+          root.removeEventListener("pointermove", onPointerMove);
+          root.removeEventListener("pointerup", endDrag);
+          root.removeEventListener("pointercancel", endDrag);
+          root.removeEventListener("click", onRootClick);
+          document.removeEventListener("keydown", onKey, true);
+          window.removeEventListener("resize", onResize);
+        }
         if (root.parentNode) root.parentNode.removeChild(root);
       },
     };
@@ -1179,6 +1421,13 @@
     TRANSPORT_LABELS,
     PREF_VISIBLE,
     PREF_SCALE,
+    PREF_POP,
+    PREF_POS,
+    DRAG_THRESHOLD,
+    parsePos,
+    clampPos,
+    getPopPref,
+    setPopPref,
     PREF_MUTED,
     PREF_VOLUME,
     MULTICHANNEL_OPUS_FMTP,

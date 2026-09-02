@@ -709,7 +709,7 @@ def capture_pipeline_desc(cfg: EncodeConfig) -> str:
     return " ".join(parts)
 
 
-def publish_pipeline_desc(cfg: EncodeConfig) -> str:
+def publish_pipeline_desc(cfg: EncodeConfig, *, chrome_opus: bool = True) -> str:
     parts = [
         f"rtspclientsink name=sink location={cfg.rtsp_url} protocols=tcp",
     ]
@@ -740,14 +740,20 @@ def publish_pipeline_desc(cfg: EncodeConfig) -> str:
 
     if cfg.enable_audio:
         q = cfg.audio_queue_buffers
-        # PCM is framed + encoded in Python (Chrome/MediaMTX multiopus
-        # mapping). Stock opusenc writes libopus family-1 surround, which
-        # Chrome decodes as mid-side on L/R. AUDIO_BITRATE_BPS / FRAME_MS
-        # size that encoder — they are not Gst properties anymore.
-        parts.append(
-            "appsrc name=asrc is-live=true format=time do-timestamp=false block=false "
-            f"! {CHROME_8CH_GST_CAPS} ! opusparse"
-        )
+        if chrome_opus:
+            # PCM framed + encoded in Python (Chrome/MediaMTX multiopus map).
+            parts.append(
+                "appsrc name=asrc is-live=true format=time do-timestamp=false block=false "
+                f"! {CHROME_8CH_GST_CAPS} ! opusparse"
+            )
+        else:
+            # libopus rejected the Chrome 8ch create (OPUS_BAD_ARG on some
+            # distros). Stock opusenc keeps the channel on-air.
+            parts.append(
+                "appsrc name=asrc is-live=true format=time do-timestamp=false block=false "
+                "! audio/x-raw,format=S16LE,rate=48000,channels=8,channel-mask=(bitmask)0xc3f "
+                f"! opusenc bitrate={cfg.audio_bitrate_bps} frame-size={cfg.audio_frame_ms}"
+            )
         if cfg.lo_enable:
             parts.append("! tee name=at")
             parts.append(f"at. ! queue max-size-buffers={q} leaky=downstream ! sink.")
@@ -859,21 +865,33 @@ class EncodeRuntime:
         self._got_video_frame = False
         self._opus_enc = None
         self._opus_framer = None
+        self._opus_fallback = False
 
     def _ensure_opus(self) -> None:
-        if self._opus_framer is not None or not self.cfg.enable_audio:
+        if not self.cfg.enable_audio or self._opus_framer is not None or self._opus_fallback:
             return
-        self._opus_enc = ChromeMsEncoder(
-            bitrate_bps=self.cfg.audio_bitrate_bps,
-            frame_ms=self.cfg.audio_frame_ms,
-            rate=AUDIO_PCM_RATE,
-        )
-        self._opus_framer = OpusChromeFramer(
-            self._opus_enc.encode,
-            frame_ms=self.cfg.audio_frame_ms,
-            rate=AUDIO_PCM_RATE,
-            channels=AUDIO_PCM_CHANNELS,
-        )
+        try:
+            self._opus_enc = ChromeMsEncoder(
+                bitrate_bps=self.cfg.audio_bitrate_bps,
+                frame_ms=self.cfg.audio_frame_ms,
+                rate=AUDIO_PCM_RATE,
+            )
+            self._opus_framer = OpusChromeFramer(
+                self._opus_enc.encode,
+                frame_ms=self.cfg.audio_frame_ms,
+                rate=AUDIO_PCM_RATE,
+                channels=AUDIO_PCM_CHANNELS,
+            )
+        except OSError as exc:
+            self._opus_enc = None
+            self._opus_framer = None
+            self._opus_fallback = True
+            log.warning(
+                "Chrome-mapping Opus encoder unavailable (%s) — "
+                "falling back to opusenc",
+                exc,
+            )
+            return
         log.info(
             "Opus 8ch Chrome-mapping encoder ready (bitrate=%s frame=%sms)",
             self.cfg.audio_bitrate_bps,
@@ -899,9 +917,6 @@ class EncodeRuntime:
         ):
             log.warning("CAPTIONS_ENABLE=true but ccextractor/ccconverter unavailable — captions off")
             self._use_captions = False
-        if self.cfg.enable_audio and Gst.ElementFactory.find("opusparse") is None:
-            log.error("opusparse unavailable — need gstreamer1.0-plugins-base")
-            return 69
         self._loop = GLib.MainLoop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, self._on_signal)
@@ -930,10 +945,13 @@ class EncodeRuntime:
         )
 
         if self.cfg.enable_audio:
-            try:
-                self._ensure_opus()
-            except OSError as exc:
-                log.error("Chrome-mapping Opus encoder unavailable: %s", exc)
+            self._ensure_opus()
+            if self._opus_framer is not None:
+                if Gst.ElementFactory.find("opusparse") is None:
+                    log.error("opusparse unavailable — need gstreamer1.0-plugins-base")
+                    return 69
+            elif Gst.ElementFactory.find("opusenc") is None:
+                log.error("opusenc unavailable — cannot fall back (gstreamer1.0-plugins-base)")
                 return 69
         if not self._start_publish():
             return 1
@@ -958,7 +976,9 @@ class EncodeRuntime:
             self._loop.quit()
 
     def _start_publish(self) -> bool:
-        desc = publish_pipeline_desc(self.cfg)
+        desc = publish_pipeline_desc(
+            self.cfg, chrome_opus=self._opus_framer is not None
+        )
         try:
             self._pub = Gst.parse_launch(desc)
         except Exception as exc:  # noqa: BLE001

@@ -163,12 +163,19 @@
     flex: 1; min-height: 0; width: 100%;
     display: flex; justify-content: flex-start; align-items: center;
   }
+  .stage-row {
+    display: flex; flex-direction: row; align-items: stretch;
+    max-width: 100%; max-height: 100%; min-width: 0; min-height: 0;
+  }
   .videowrap {
     position: relative;
     width: 100%;
     max-height: 100%;
     aspect-ratio: 16 / 9;
     overflow: hidden;
+  }
+  .stage-row .videowrap {
+    flex: 1 1 auto; min-width: 0; width: auto;
   }
   video {
     width: 100%; height: 100%; display: block; object-fit: contain;
@@ -235,8 +242,14 @@
     flex: 1; min-height: 0; width: 100%; height: 100%;
     justify-content: center; align-items: center;
   }
+  html.theater .stage-row {
+    width: 100%; height: 100%;
+  }
   html.theater .videowrap {
     width: 100%; height: 100%; max-height: none; aspect-ratio: auto;
+  }
+  html.theater .stage-row .videowrap {
+    width: auto; height: 100%; flex: 1 1 auto; max-height: none; aspect-ratio: auto;
   }
   html.theater .videowrap video { border: none; border-radius: 0; max-height: none; }
   .theater-exit {
@@ -378,7 +391,7 @@
   </div>
   <div class="bar-cluster overlays">
     <button type="button" id="cc" class="tgl" title="Closed captions (CEA-608/CC1 side channel)">CC</button>
-    <button type="button" id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only)">VU</button>
+    <button type="button" id="vu" class="tgl" title="VU meters + Main/SAP / St/5.1 (this browser only). Sits as a rail beside the picture; click the rail (not a button) to float.">VU</button>
     <button type="button" id="safe" class="tgl" title="Title / action safe + center target (this browser only)">Safe</button>
     <button type="button" id="scope" class="tgl" title="Waveform + vectorscope (decoded video, this browser only). Click the scopes to enlarge.">Scope</button>
     <button type="button" id="rta" class="tgl" title="Spectrum analyzer — L/R, 10 Hz–22 kHz, −60…0 dBFS (this browser only). Click the RTA to enlarge.">RTA</button>
@@ -401,6 +414,7 @@
 </div>
 
 <div class="stage">
+  <div class="stage-row">
   <div class="videowrap">
     <video id="video" autoplay playsinline muted></video>
     <!-- muted: autoplay policy + Web Audio owns playout (VU/solo/SAP). No native controls. -->
@@ -414,6 +428,7 @@
       <div class="kicked-reason" id="kicked-reason"></div>
       <div class="kicked-hint">Select a channel to reconnect</div>
     </div>
+  </div>
   </div>
 </div>
 </div>
@@ -488,6 +503,7 @@
   const $ = id => document.getElementById(id);
   const video = $("video"), stateEl = $("state");
   const videoWrap = document.querySelector(".videowrap");
+  const stageRow = document.querySelector(".stage-row");
 
   // ---- Session / quality state -------------------------------------------------
   let pc = null, statsTimer = null, apiTimer = null;
@@ -540,6 +556,8 @@
   }
   const vu = NexVueVu.attach({
     container: videoWrap,
+    host: stageRow || videoWrap,
+    rail: true,
     video,
     listen: false,
     layout: "stereo",

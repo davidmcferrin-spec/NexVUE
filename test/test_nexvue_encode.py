@@ -160,6 +160,36 @@ class TestPipelineAssembly(unittest.TestCase):
         self.assertIn("opusparse", blob)
         self.assertNotIn("opusenc", blob)
 
+    def test_opusenc_fallback_pipeline(self) -> None:
+        blob = mod.publish_pipeline_desc(mod.load_config(env()), chrome_opus=False)
+        self.assertIn("opusenc bitrate=384000", blob)
+        self.assertIn("frame-size=10", blob)
+        self.assertNotIn("opusparse", blob)
+        self.assertIn("channel-mask=(bitmask)0xc3f", blob)
+        custom = mod.publish_pipeline_desc(
+            mod.load_config(env(AUDIO_BITRATE_BPS="256000", AUDIO_FRAME_MS="20")),
+            chrome_opus=False,
+        )
+        self.assertIn("opusenc bitrate=256000", custom)
+        self.assertIn("frame-size=20", custom)
+
+    def test_ensure_opus_falls_back_on_create_fail(self) -> None:
+        rt = mod.EncodeRuntime(mod.load_config(env()))
+
+        def boom(*_a, **_k):
+            raise OSError("opus_multistream_encoder_create failed (-1)")
+
+        orig = mod.ChromeMsEncoder
+        mod.ChromeMsEncoder = boom
+        try:
+            rt._ensure_opus()
+        finally:
+            mod.ChromeMsEncoder = orig
+        self.assertTrue(rt._opus_fallback)
+        self.assertIsNone(rt._opus_framer)
+        blob = mod.publish_pipeline_desc(rt.cfg, chrome_opus=rt._opus_framer is not None)
+        self.assertIn("opusenc", blob)
+
     def test_x264_fallback(self) -> None:
         blob = mod.print_pipelines(mod.load_config(env(VIDEO_ENCODER="x264enc")))
         self.assertIn("x264enc tune=zerolatency", blob)
