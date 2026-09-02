@@ -11,7 +11,7 @@
  * Per-browser prefs (localStorage) never change encode or other viewers:
  *   nexvue-vu-on          1 | 0               (default off when unset)
  *   nexvue-vu-scale       1 | 0               (show dBFS scale beside meters)
- *   nexvue-vu-pop         1 | 0               (Player rail: default docked)
+ *   nexvue-vu-pop         1 | 0               (Player overlay: default docked)
  *   nexvue-vu-pos         {"left":N,"top":N}  (viewport px; only after a drag)
  *   nexvue-audio-muted    1 | 0               (default muted when unset)
  *   nexvue-audio-volume   0..1               (default 0.2 when unset)
@@ -338,17 +338,14 @@
   font: 10px/1.2 ui-monospace, "Cascadia Mono", Consolas, monospace;
   color: var(--text, #d6dde6);
 }
-.nexvue-vu[hidden] { display: none !important; }
-.nexvue-vu.nexvue-vu-rail {
-  position: relative; top: auto; right: auto; bottom: auto; left: auto;
-  max-width: none; height: auto; align-self: stretch;
+.nexvue-vu.nexvue-vu-floatable {
   padding: 6px 8px 8px;
-  background: var(--panel, #1d232b);
-  border: 1px solid var(--edge, #2c3542);
-  border-radius: 4px;
-  box-shadow: var(--shadow, none);
+  background: rgba(8, 12, 16, .78);
+  border: 1px solid rgba(44, 53, 66, .9);
+  border-radius: 3px;
   cursor: pointer;
 }
+.nexvue-vu[hidden] { display: none !important; }
 .nexvue-vu.nexvue-vu-pop {
   position: fixed; left: 12px; top: 12px; right: auto; bottom: auto;
   z-index: 55; height: min(72vh, 560px); max-width: none;
@@ -397,9 +394,7 @@
 }
 .nexvue-vu-scale-mark.fs { color: #e5484d; font-weight: 500; }
 .nexvue-vu-scale-mark.align { color: #56c4f5; font-weight: 600; }
-.nexvue-vu-rail .nexvue-vu-scale,
 .nexvue-vu-pop .nexvue-vu-scale { font-size: 10px; }
-.nexvue-vu-rail .nexvue-vu-scale-mark,
 .nexvue-vu-pop .nexvue-vu-scale-mark { text-shadow: none; }
 .nexvue-vu-bars {
   flex: 0 0 auto; min-height: 0; display: flex; flex-direction: row;
@@ -426,7 +421,6 @@
   background: rgba(0,0,0,.55); border: 1px solid var(--edge, #2c3542);
   border-radius: 2px; overflow: hidden;
 }
-.nexvue-vu-rail .nexvue-vu-track,
 .nexvue-vu-pop .nexvue-vu-track {
   width: 16px;
   background: #05080b;
@@ -444,7 +438,6 @@
     var(--bad, #e5484d) 92%);
   transition: height 50ms linear;
 }
-.nexvue-vu-rail .nexvue-vu-fill,
 .nexvue-vu-pop .nexvue-vu-fill {
   background: linear-gradient(to top,
     #5ee0a0 0%,
@@ -475,8 +468,7 @@
   /**
    * @param {object} opts
    * @param {HTMLElement} opts.container
-   * @param {HTMLElement} [opts.host]  rail parent (Player .stage-row)
-   * @param {boolean} [opts.rail=false]  Player: beside the picture, not on it
+   * @param {boolean} [opts.floatable=false]  Player: click chrome to pop/dock
    * @param {HTMLVideoElement} opts.video
    * @param {MediaStream|null} [opts.stream]
    * @param {boolean} [opts.listen=false]
@@ -487,14 +479,13 @@
     const container = opts && opts.container;
     const video = opts && opts.video;
     if (!container || !video) return null;
-    const rail = !!(opts && opts.rail);
-    const host = (opts && opts.host) || container;
+    const floatable = !!(opts && opts.floatable);
     const onListenChange = opts && typeof opts.onListenChange === "function"
       ? opts.onListenChange
       : null;
 
     const root = document.createElement("div");
-    root.className = "nexvue-vu";
+    root.className = "nexvue-vu" + (floatable ? " nexvue-vu-floatable" : "");
     root.hidden = true;
     root.innerHTML =
       '<div class="nexvue-vu-toolbar">' +
@@ -509,7 +500,7 @@
       '<div class="nexvue-vu-scale" hidden aria-hidden="true"></div>' +
       '<div class="nexvue-vu-bars" role="group" aria-label="Audio level meters"></div>' +
       "</div>";
-    (rail ? host : container).appendChild(root);
+    container.appendChild(root);
 
     const barsEl = root.querySelector(".nexvue-vu-bars");
     const scaleEl = root.querySelector(".nexvue-vu-scale");
@@ -550,8 +541,8 @@
     let peakHold = [];
     let connectedStreamId = null;
     let timeData = null;
-    let popped = rail ? getPopPref() : false;
-    let pos = rail ? getPosPref() : null;
+    let popped = floatable ? getPopPref() : false;
+    let pos = floatable ? getPosPref() : null;
     let drag = null;
     let suppressClick = false;
 
@@ -571,8 +562,8 @@
     }
 
     function applyPosition() {
-      if (!(rail && popped && visible) || !pos) {
-        if (!(rail && popped && visible)) {
+      if (!(floatable && popped && visible) || !pos) {
+        if (!(floatable && popped && visible)) {
           root.style.left = "";
           root.style.top = "";
           root.style.bottom = "";
@@ -592,10 +583,9 @@
     }
 
     function applyHost() {
-      if (!rail) return;
-      const parent = (popped && visible) ? (document.body || host) : host;
+      if (!floatable) return;
+      const parent = (popped && visible) ? (document.body || container) : container;
       if (parent && root.parentNode !== parent) parent.appendChild(root);
-      root.classList.toggle("nexvue-vu-rail", !!(visible && !popped));
       root.classList.toggle("nexvue-vu-pop", !!(visible && popped));
       root.classList.toggle("nexvue-vu-drag", !!(drag && drag.moved));
       root.title = popped
@@ -605,7 +595,7 @@
     }
 
     function setPopped(on) {
-      if (!rail) return false;
+      if (!floatable) return false;
       on = !!on;
       if (popped === on) {
         applyHost();
@@ -1054,7 +1044,7 @@
     video.addEventListener("volumechange", keepElementMuted);
 
     function onPointerDown(ev) {
-      if (!rail || !popped || !visible) return;
+      if (!floatable || !popped || !visible) return;
       if (ev.target && ev.target.closest && ev.target.closest("button")) return;
       if (ev.button != null && ev.button !== 0) return;
       ev.preventDefault();
@@ -1103,7 +1093,7 @@
     }
 
     function onRootClick(ev) {
-      if (!rail) return;
+      if (!floatable) return;
       if (ev.target && ev.target.closest && ev.target.closest("button")) return;
       ev.preventDefault();
       ev.stopPropagation();
@@ -1115,12 +1105,12 @@
     }
 
     function onResize() {
-      if (!rail || !popped || !visible || !pos) return;
+      if (!floatable || !popped || !visible || !pos) return;
       applyPosition();
     }
 
     function onKey(ev) {
-      if (!rail) return;
+      if (!floatable) return;
       if (ev.key !== "Escape") return;
       if (!popped || !visible) return;
       if (document.querySelector("dialog[open]")) return;
@@ -1130,7 +1120,7 @@
       setPopped(false);
     }
 
-    if (rail) {
+    if (floatable) {
       root.addEventListener("pointerdown", onPointerDown);
       root.addEventListener("pointermove", onPointerMove);
       root.addEventListener("pointerup", endDrag);
@@ -1244,7 +1234,7 @@
       detach() {
         teardownGraph();
         video.removeEventListener("volumechange", keepElementMuted);
-        if (rail) {
+        if (floatable) {
           root.removeEventListener("pointerdown", onPointerDown);
           root.removeEventListener("pointermove", onPointerMove);
           root.removeEventListener("pointerup", endDrag);

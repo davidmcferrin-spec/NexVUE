@@ -381,9 +381,9 @@ this box can't get additional ports opened.
   tracks). Player/Multiview **VU / audio program** use `nexvue-vu.js`
   (Web Audio on the WHEP MediaStream). Top-bar **VU** toggle (like CC)
   shows/hides the meters (`localStorage.nexvue-vu-on`, default off).
-  Player VU is a `--panel` rail beside the picture (10px gap, 16px tubes,
-  2px −20 align); click chrome (not a button) to float (`nexvue-vu-pop` /
-  `nexvue-vu-pos`). Multiview stays a per-pane overlay.
+  Player VU overlays the 16:9 picture (Scope/RTA-style pane); click chrome
+  (not a button) to float (`nexvue-vu-pop` / `nexvue-vu-pos`). Multiview
+  stays a per-pane overlay.
   **Safe** (`nexvue-safe.js`, `nexvue-safe-on`) is HD title/action + optional
   center target and 4:3 cut.   **Scope** (`nexvue-scopes.js`, `nexvue-scopes-on`)
   is a decoded-frame waveform (IRE) + Rec.709 vectorscope (Multiview: focused
