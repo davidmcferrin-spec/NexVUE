@@ -77,10 +77,14 @@ this box can't get additional ports opened.
   Usage-metrics dashboard (bandwidth/viewers/streams/input-lock/per-viewer
   IP-channel drill-down with column filters — Status/IP/Channel/Duration/
   Data/Client via plain text, `/regex/`, or `>`/`<` comparisons —
-  custom from/to ranges, Mon–Sun day-and-hour usage heatmap
-  (equal-date averages of observed dates in range; missing telemetry
-  excluded), host CPU/memory + Temperature chart (CPU/GPU °C with 95 °C
-  limit lines) + iGPU Video engine % (Render % collected but not charted),
+  custom from/to ranges (7d/30d bucket totals/host and collapse input
+  lock edges so PHP does not OOM; windows beyond stored samples return
+  what exists with truncated_past/truncated_future), Mon–Sun day-and-hour
+  usage heatmap (equal-date averages of observed dates in range; missing
+  telemetry excluded), host CPU/memory + Temperature chart (CPU/GPU °C
+  with 95 °C limit lines) + iGPU Video engine % (Render % collected but
+  not charted) + Linux box uptime footer (/proc/uptime), Auto-load data
+  checkbox (60s in-place refresh, localStorage.nexvue-metrics-autoload),
   `nexvue-metrics` + `nexvue-metrics.php`) landed
   ahead of schedule — separate from and not a substitute for Phase 4
   portal health via outbound heartbeats.

@@ -410,7 +410,9 @@ Then from a LAN machine:
   and per-pane channel selectors for a frameless wall; the session-metrics
   drawer stays hidden unless it was already open (Esc / button to exit).
 - **Usage metrics:** top nav → Metrics (`/metrics` + `/api/metrics`
-  in Apache docroot — no separate port).
+  in Apache docroot — no separate port). Long ranges clamp to stored
+  samples (status line notes truncation), **Auto-load data** refreshes
+  every 60s in place, and the footer shows Linux box uptime.
 - **Services:** top nav → Services — unit status + poll-based journal viewer
   (Follow / Clear view) plus **Clear journal…** for the selected unit
   (`journal_clear` watermark via `nexvue-ops-journal.sh` — hides prior lines
@@ -885,17 +887,24 @@ Open `https://<edge-ip>/metrics` (top nav → Metrics).
 
 | `view` | Returns |
 |---|---|
-| `totals` | System-wide time series: bandwidth, viewer count, active-stream count — one row per poll cycle. Powers the three top-line charts. |
+| `totals` | System-wide time series: bandwidth, viewer count, active-stream count. Short windows are one row per poll; 7d / 30d are time-bucketed (~1500 points) so PHP stays inside memory limits. Powers the three top-line charts. |
 | `channels` | **Per-channel breakdown**, aggregated over the range: avg/peak bandwidth, avg/peak viewers, % of the window the channel was `ready`. "How much bandwidth did ch0 use in the last hour" as one row. |
 | `viewers` | Per-viewer session drill-down: IP, channel, user (MediaMTX JWT `sub` when present), first/last seen, duration, bytes served, live/ended. Add `&channel=chN` for an exact channel. Optional column filters (`filter_status`, `filter_ip`, `filter_channel`, `filter_duration`, `filter_data`, `filter_client`) — see below. Response includes `session_total` / `session_count` / `filters`. |
-| `inputs` | Per-DeckLink-input lock/format history as a time series. Powers the input-lock chart. |
+| `inputs` | Per-DeckLink-input lock/format history. Same-state runs collapse to first/last/change/gap edges (not every 15s sample) so 7d / 30d do not OOM Apache. Powers the input-lock timeline. |
 | `weekday_hours` | Mon–Sun × hour-of-day analytical heatmap. Each cell is the equal-weight average of observed calendar dates in the range for that weekday/hour (missing telemetry excluded; `date_count` is the denominator, `sample_count` is diagnostic). Also returns peaks. Timezone: `America/New_York` by default (`NEXVUE_METRICS_TZ` override). |
-| `host` | Host CPU %, memory used/total, load1, CPU package °C / iGPU °C (when sysfs exposes them), and (when available) iGPU Video/Render/VideoEnhance busy % + GPU freq — capacity correlation on the Metrics page, **not** uptime/alerting. Engine % requires `intel-gpu-tools` / `intel_gpu_top` + CAP_PERFMON (see setup). The dashboard charts CPU, memory, iGPU Video engine, and a **Temperature** panel (CPU/GPU °C plus a dashed 95 °C sustained-operation limit line — `TEMP_LIMIT_CPU_C` / `TEMP_LIMIT_GPU_C` in `metrics.html`). Render % is still collected/served but not charted. |
+| `host` | Host CPU %, memory used/total, load1, CPU package °C / iGPU °C (when sysfs exposes them), and (when available) iGPU Video/Render/VideoEnhance busy % + GPU freq — capacity correlation on the Metrics page, **not** uptime/alerting. Long windows are bucketed like `totals`. Engine % requires `intel-gpu-tools` / `intel_gpu_top` + CAP_PERFMON (see setup). The dashboard charts CPU, memory, iGPU Video engine, and a **Temperature** panel (CPU/GPU °C plus a dashed 95 °C sustained-operation limit line — `TEMP_LIMIT_CPU_C` / `TEMP_LIMIT_GPU_C` in `metrics.html`). Render % is still collected/served but not charted. Every view also returns live Linux box uptime from `/proc/uptime` (`host_uptime_s`, `host_boot_ts`) for the Metrics footer. |
 
 `range` accepts `15m`, `1h`, `6h`, `24h`, `7d`, `30d` — matching the
 dashboard's preset buttons. For a specific day or window, pass Unix epoch
 seconds as `from` and `to` instead (both required; max span 30 days, matching
 retention). The dashboard exposes datetime-local From/To + Apply/Clear.
+If the requested window extends past stored samples (retention, a young
+station, or a custom **to** after the latest poll), the API still returns
+HTTP 200 with whatever exists and sets `truncated_past` / `truncated_future`
+plus `data_start` / `data_end`. The Metrics status line tells the operator
+where history starts or where the latest sample is. **Auto-load data**
+(checkbox, `localStorage.nexvue-metrics-autoload`) refreshes series and
+tables every 60s in place — not a page reload.
 
 Example: `nexvue-metrics.php?view=channels&range=24h` — bandwidth/viewer
 breakdown per channel over the last day, system-wide (omit `channel=`) or

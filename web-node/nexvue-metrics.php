@@ -48,6 +48,16 @@
  *   nexvue-metrics.php?view=weekday_hours&range=30d
  *   nexvue-metrics.php?view=host&range=24h
  *   nexvue-metrics.php?view=viewers&range=24h&filter_status=live&filter_duration=%3E%3D10m
+ *
+ * Every view also returns window metadata:
+ *   requested_from / requested_to  operator pick (preset or custom)
+ *   from / to                      overlap with stored samples (clamped)
+ *   data_start / data_end          oldest/newest sample across tables
+ *   truncated_past / truncated_future
+ *   host_uptime_s / host_boot_ts   Linux /proc/uptime (null if unavailable)
+ *
+ * Long windows bucket totals/host (~1500 points) and collapse input_status
+ * to lock-state / gap edges so 7d / 30d stay inside PHP memory limits.
  */
 
 declare(strict_types=1);
@@ -91,6 +101,10 @@ const VALID_RANGES = [
 const MAX_WINDOW_S = 30 * 24 * 60 * 60;
 const FILTER_MAX_LEN = 128;
 const VIEWER_ACTIVE_WINDOW_S = 45;
+const MAX_SERIES_POINTS = 1500;
+const COLLECTOR_POLL_S = 15;
+const INPUT_GAP_S = 45;
+const FUTURE_SLACK_S = 120;
 
 function fail(int $status, string $message): never {
     http_response_code($status);
@@ -351,6 +365,118 @@ function metrics_timezone(): DateTimeZone {
     }
 }
 
+function emit_json(array $payload): never {
+    $json = json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE);
+    if ($json === false) {
+        fail(500, 'failed to encode metrics JSON');
+    }
+    echo $json;
+    exit;
+}
+
+/** Linux box uptime from /proc/uptime. Nulls on Windows / missing proc. */
+function metrics_host_uptime(): array {
+    $raw = @file_get_contents('/proc/uptime');
+    if (!is_string($raw) || $raw === '') {
+        return ['host_uptime_s' => null, 'host_boot_ts' => null];
+    }
+    $sec = (float)explode(' ', trim($raw), 2)[0];
+    if (!is_finite($sec) || $sec < 0) {
+        return ['host_uptime_s' => null, 'host_boot_ts' => null];
+    }
+    return [
+        'host_uptime_s' => $sec,
+        'host_boot_ts' => (int)round(time() - $sec),
+    ];
+}
+
+/**
+ * Oldest/newest sample across metrics tables. Missing tables are skipped.
+ * @return array{0: ?int, 1: ?int}
+ */
+function metrics_data_span(SQLite3 $db): array {
+    $min = null;
+    $max = null;
+    foreach (['totals', 'host_samples', 'input_status', 'samples'] as $table) {
+        $stmt = $db->prepare("SELECT MIN(ts) AS mn, MAX(ts) AS mx FROM {$table}");
+        if ($stmt === false) {
+            continue;
+        }
+        $result = $stmt->execute();
+        if ($result === false) {
+            continue;
+        }
+        $row = $result->fetchArray(SQLITE3_ASSOC);
+        if (!is_array($row) || $row['mn'] === null) {
+            continue;
+        }
+        $mn = (int)$row['mn'];
+        $mx = (int)$row['mx'];
+        $min = $min === null ? $mn : min($min, $mn);
+        $max = $max === null ? $mx : max($max, $mx);
+    }
+    return [$min, $max];
+}
+
+/**
+ * Overlap the requested window with stored samples. Presets end at now(),
+ * so a last-poll a few seconds ago is not "truncated future" (FUTURE_SLACK_S).
+ * @return array{
+ *   from: int, to: int,
+ *   data_start: ?int, data_end: ?int,
+ *   truncated_past: bool, truncated_future: bool
+ * }
+ */
+function metrics_clamp_window(SQLite3 $db, int $requestedFrom, int $requestedTo): array {
+    [$dataStart, $dataEnd] = metrics_data_span($db);
+    if ($dataStart === null || $dataEnd === null) {
+        return [
+            'from' => $requestedFrom,
+            'to' => $requestedTo,
+            'data_start' => null,
+            'data_end' => null,
+            'truncated_past' => false,
+            'truncated_future' => false,
+        ];
+    }
+    $overlapFrom = max($requestedFrom, $dataStart);
+    $overlapTo = min($requestedTo, $dataEnd);
+    if ($overlapFrom > $overlapTo) {
+        return [
+            'from' => $requestedFrom,
+            'to' => $requestedTo,
+            'data_start' => $dataStart,
+            'data_end' => $dataEnd,
+            'truncated_past' => $requestedTo < $dataStart,
+            'truncated_future' => $requestedFrom > $dataEnd,
+        ];
+    }
+    return [
+        'from' => $overlapFrom,
+        'to' => $overlapTo,
+        'data_start' => $dataStart,
+        'data_end' => $dataEnd,
+        'truncated_past' => $requestedFrom < $dataStart,
+        'truncated_future' => $requestedTo > ($dataEnd + FUTURE_SLACK_S),
+    ];
+}
+
+/** 0 = return raw samples (window already fits MAX_SERIES_POINTS). */
+function metrics_bucket_stride_s(int $since, int $until): int {
+    $span = max(1, $until - $since);
+    $rawPoints = (int)ceil($span / COLLECTOR_POLL_S);
+    if ($rawPoints <= MAX_SERIES_POINTS) {
+        return 0;
+    }
+    $need = (int)ceil($span / MAX_SERIES_POINTS);
+    foreach ([30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 21600, 43200] as $step) {
+        if ($need <= $step) {
+            return $step;
+        }
+    }
+    return 86400;
+}
+
 // ---- Parse & validate query params ---------------------------------------------
 
 $view = $_GET['view'] ?? '';
@@ -393,12 +519,8 @@ if ($channelFilter !== null && !preg_match('/^[a-zA-Z0-9]+$/', $channelFilter)) 
     fail(400, 'channel must be alphanumeric');
 }
 
-$windowMeta = [
-    'range' => $rangeKey,
-    'from' => $sinceTs,
-    'to' => $untilTs,
-    'timezone' => metrics_timezone()->getName(),
-];
+$requestedFrom = $sinceTs;
+$requestedTo = $untilTs;
 
 // ---- Open the database, READ-ONLY -------------------------------------------------
 
@@ -413,12 +535,35 @@ try {
     fail(503, 'could not open metrics database: ' . $e->getMessage());
 }
 
+$clamped = metrics_clamp_window($db, $requestedFrom, $requestedTo);
+$sinceTs = $clamped['from'];
+$untilTs = $clamped['to'];
+
+$windowMeta = [
+    'range' => $rangeKey,
+    'requested_from' => $requestedFrom,
+    'requested_to' => $requestedTo,
+    'from' => $sinceTs,
+    'to' => $untilTs,
+    'data_start' => $clamped['data_start'],
+    'data_end' => $clamped['data_end'],
+    'truncated_past' => $clamped['truncated_past'],
+    'truncated_future' => $clamped['truncated_future'],
+    'timezone' => metrics_timezone()->getName(),
+] + metrics_host_uptime();
+
 function queryAll(SQLite3 $db, string $sql, array $params = []): array {
     $stmt = $db->prepare($sql);
+    if ($stmt === false) {
+        throw new RuntimeException('metrics query prepare failed: ' . $db->lastErrorMsg());
+    }
     foreach ($params as $key => $value) {
         $stmt->bindValue($key, $value);
     }
     $result = $stmt->execute();
+    if ($result === false) {
+        throw new RuntimeException('metrics query failed: ' . $db->lastErrorMsg());
+    }
     $rows = [];
     while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
         $rows[] = $row;
@@ -426,18 +571,109 @@ function queryAll(SQLite3 $db, string $sql, array $params = []): array {
     return $rows;
 }
 
+/**
+ * Optional time-bucket AVG. $selectList is the raw-column projection
+ * (no FROM/WHERE). Bucket form wraps each ident in AVG().
+ */
+function querySeries(SQLite3 $db, string $table, string $selectList, int $since, int $until): array {
+    $stride = metrics_bucket_stride_s($since, $until);
+    $params = [':since' => $since, ':until' => $until];
+    if ($stride <= 0) {
+        return queryAll($db,
+            "SELECT {$selectList} FROM {$table} WHERE ts >= :since AND ts <= :until ORDER BY ts ASC",
+            $params
+        );
+    }
+    $cols = [];
+    foreach (explode(',', $selectList) as $col) {
+        $col = trim($col);
+        if ($col === 'ts') {
+            $cols[] = '(ts / :stride) * :stride AS ts';
+            continue;
+        }
+        $cols[] = "AVG({$col}) AS {$col}";
+    }
+    $params[':stride'] = $stride;
+    return queryAll($db,
+        'SELECT ' . implode(', ', $cols)
+        . " FROM {$table} WHERE ts >= :since AND ts <= :until"
+        . ' GROUP BY ts / :stride ORDER BY ts ASC',
+        $params
+    );
+}
+
+/** First / last / lock-change / gap edges only — not every 15s sample. */
+function queryInputPoints(SQLite3 $db, int $since, int $until): array {
+    $stmt = $db->prepare(
+        'SELECT ts, device_index, card_name, input_locked, input_mode,
+                reference_locked, reference_mode
+         FROM input_status WHERE ts >= :since AND ts <= :until
+         ORDER BY device_index ASC, ts ASC'
+    );
+    if ($stmt === false) {
+        return [];
+    }
+    $stmt->bindValue(':since', $since);
+    $stmt->bindValue(':until', $until);
+    $result = $stmt->execute();
+    if ($result === false) {
+        throw new RuntimeException('input_status query failed: ' . $db->lastErrorMsg());
+    }
+    $out = [];
+    $curDev = null;
+    $prev = null;
+    $pendingLast = null;
+    $flushPending = static function () use (&$out, &$pendingLast): void {
+        if ($pendingLast !== null) {
+            $out[] = $pendingLast;
+            $pendingLast = null;
+        }
+    };
+    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+        $dev = (int)$row['device_index'];
+        if ($curDev !== $dev) {
+            $flushPending();
+            $curDev = $dev;
+            $prev = null;
+        }
+        if ($prev === null) {
+            $out[] = $row;
+            $prev = $row;
+            continue;
+        }
+        $gap = ((int)$row['ts'] - (int)$prev['ts']) > INPUT_GAP_S;
+        $changed = (int)$row['input_locked'] !== (int)$prev['input_locked'];
+        if ($gap || $changed) {
+            $flushPending();
+            $out[] = $row;
+            $prev = $row;
+            continue;
+        }
+        $pendingLast = $row;
+        $prev = $row;
+    }
+    $flushPending();
+    return $out;
+}
+
 $tsParams = [':since' => $sinceTs, ':until' => $untilTs];
+
+try {
 
 // ---- View: totals ----------------------------------------------------------------
 
 if ($view === 'totals') {
-    $rows = queryAll($db,
-        'SELECT ts, active_streams, total_readers, total_bandwidth_bps
-         FROM totals WHERE ts >= :since AND ts <= :until ORDER BY ts ASC',
-        $tsParams
+    $rows = querySeries(
+        $db,
+        'totals',
+        'ts, active_streams, total_readers, total_bandwidth_bps',
+        $sinceTs,
+        $untilTs
     );
-    echo json_encode($windowMeta + ['totals' => $rows]);
-    exit;
+    emit_json($windowMeta + [
+        'stride_s' => metrics_bucket_stride_s($sinceTs, $untilTs),
+        'totals' => $rows,
+    ]);
 }
 
 // ---- View: channels --------------------------------------------------------------
@@ -457,8 +693,7 @@ if ($view === 'channels') {
          ORDER BY avg_bandwidth_bps DESC',
         $tsParams
     );
-    echo json_encode($windowMeta + ['channels' => $rows]);
-    exit;
+    emit_json($windowMeta + ['channels' => $rows]);
 }
 
 // ---- View: viewers ---------------------------------------------------------------
@@ -493,27 +728,20 @@ if ($view === 'viewers') {
     }
 
     // Cast filters to object so empty encodes as {} not [] in JSON.
-    echo json_encode($windowMeta + [
+    emit_json($windowMeta + [
         'channel_filter' => $channelFilter,
         'filters' => (object)viewer_filters_meta($viewerFilters),
         'session_total' => $sessionTotal,
         'session_count' => count($rows),
         'sessions' => $rows,
     ]);
-    exit;
 }
 
 // ---- View: inputs ----------------------------------------------------------------
 
 if ($view === 'inputs') {
-    $rows = queryAll($db,
-        'SELECT ts, device_index, card_name, input_locked, input_mode,
-                reference_locked, reference_mode
-         FROM input_status WHERE ts >= :since AND ts <= :until ORDER BY ts ASC',
-        $tsParams
-    );
-    echo json_encode($windowMeta + ['inputs' => $rows]);
-    exit;
+    $rows = queryInputPoints($db, $sinceTs, $untilTs);
+    emit_json($windowMeta + ['inputs' => $rows]);
 }
 
 // ---- View: weekday_hours (Mon–Sun × hour analytical heatmap) ---------------------
@@ -539,18 +767,26 @@ if ($view === 'weekday_hours') {
         }
     }
 
-    $rows = queryAll($db,
+    $stmtWh = $db->prepare(
         'SELECT ts, total_readers, total_bandwidth_bps
-         FROM totals WHERE ts >= :since AND ts <= :until',
-        $tsParams
+         FROM totals WHERE ts >= :since AND ts <= :until'
     );
+    if ($stmtWh === false) {
+        throw new RuntimeException('weekday_hours query prepare failed: ' . $db->lastErrorMsg());
+    }
+    $stmtWh->bindValue(':since', $sinceTs);
+    $stmtWh->bindValue(':until', $untilTs);
+    $resultWh = $stmtWh->execute();
+    if ($resultWh === false) {
+        throw new RuntimeException('weekday_hours query failed: ' . $db->lastErrorMsg());
+    }
 
     // Two-stage aggregation in reporting TZ (America/New_York or NEXVUE_METRICS_TZ):
     // 1) average samples within each local calendar date + hour
     // 2) average those per-date means equally into weekday + hour
     // Missing telemetry (no samples that date/hour) is excluded, not zero-filled.
     $byDateHour = [];
-    foreach ($rows as $r) {
+    while ($r = $resultWh->fetchArray(SQLITE3_ASSOC)) {
         $dt = (new DateTimeImmutable('@' . (int)$r['ts']))->setTimezone($tz);
         $dow = (int)$dt->format('N'); // 1=Mon … 7=Sun
         $hour = (int)$dt->format('G');
@@ -619,36 +855,37 @@ if ($view === 'weekday_hours') {
         }
     }
 
-    echo json_encode($windowMeta + [
+    emit_json($windowMeta + [
         'timezone' => $tzName,
         'weekday_hours' => $out,
     ]);
-    exit;
 }
 
 // ---- View: host (CPU / memory / load / temps) ------------------------------------
 
 if ($view === 'host') {
-    $stmt = $db->prepare(
-        'SELECT ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1,
-                gpu_video_pct, gpu_render_pct, gpu_video_enhance_pct, gpu_freq_mhz,
-                cpu_temp_c, gpu_temp_c
-         FROM host_samples WHERE ts >= :since AND ts <= :until ORDER BY ts ASC'
-    );
-    if ($stmt === false) {
-        // Table missing until nexvue-metrics is restarted after upgrade.
-        echo json_encode($windowMeta + ['host' => []]);
-        exit;
+    try {
+        $rows = querySeries(
+            $db,
+            'host_samples',
+            'ts, cpu_pct, mem_used_bytes, mem_total_bytes, load1,
+             gpu_video_pct, gpu_render_pct, gpu_video_enhance_pct, gpu_freq_mhz,
+             cpu_temp_c, gpu_temp_c',
+            $sinceTs,
+            $untilTs
+        );
+    } catch (Throwable $e) {
+        // Table/columns missing until nexvue-metrics is restarted after upgrade.
+        emit_json($windowMeta + ['host' => []]);
     }
-    $stmt->bindValue(':since', $sinceTs);
-    $stmt->bindValue(':until', $untilTs);
-    $result = $stmt->execute();
-    $rows = [];
-    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-        $rows[] = $row;
-    }
-    echo json_encode($windowMeta + ['host' => $rows]);
-    exit;
+    emit_json($windowMeta + [
+        'stride_s' => metrics_bucket_stride_s($sinceTs, $untilTs),
+        'host' => $rows,
+    ]);
+}
+
+} catch (Throwable $e) {
+    fail(500, 'metrics query failed: ' . $e->getMessage());
 }
 
 fail(400, 'unknown view');
