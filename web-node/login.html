@@ -68,8 +68,8 @@
 
   <div class="portal-nudge" id="portal-nudge">
     This station is managed by a NexVUE portal —
-    <a href="#" id="portal-nudge-link">sign in there</a> for the full stream catalog.
-    Local sign-in below still works.
+    <a href="#" id="portal-nudge-link">sign in via NexAPP / portal</a> for the catalog.
+    Local sign-in below still works as a backup.
   </div>
 
   <div id="login-box">
@@ -111,6 +111,20 @@
   }
 
   if (forceChange) showChange();
+
+  var hash = (location.hash || "").replace(/^#/, "");
+  if (hash.indexOf("portal_sso=") === 0) {
+    var ssoJwt = decodeURIComponent(hash.slice("portal_sso=".length));
+    history.replaceState(null, "", location.pathname + location.search);
+    NexVueAuth.api("portal_sso", { jwt: ssoJwt }).then(function (data) {
+      var u = data.user;
+      if (u && u.must_change_password) showChange("Default password must be changed");
+      else location.href = next;
+    }).catch(function (e) {
+      document.getElementById("login-err").textContent = e.message || "portal SSO failed";
+    });
+    return;
+  }
 
   // If already logged in and no forced change, go next.
   NexVueAuth.me().then(function (u) {

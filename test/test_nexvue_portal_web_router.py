@@ -30,7 +30,7 @@ class TestPortalWebRouterFiles(unittest.TestCase):
         self.assertIn("RewriteRule ^ index.php", conf)
 
     def test_pages_directory_has_expected_files(self) -> None:
-        for name in ("login.html", "catalog.html", "watch.html", "stations.html", "users.html"):
+        for name in ("login.html", "catalog.html", "watch.html", "stations.html", "users.html", "access.html"):
             self.assertTrue((ROOT / "web-portal" / name).is_file(), name)
 
 
@@ -51,7 +51,7 @@ echo json_encode(['pages' => array_keys($pages)]);
         if r.returncode != 0:
             self.fail(f"php failed: {r.stderr or r.stdout}")
         data = json.loads((r.stdout or "").strip())
-        for path in ("/", "/login", "/catalog", "/watch", "/stations", "/users"):
+        for path in ("/", "/login", "/catalog", "/watch", "/stations", "/users", "/access"):
             self.assertIn(path, data["pages"])
 
     def test_login_is_public_others_require_role(self) -> None:
@@ -60,6 +60,7 @@ require '{ROUTER.as_posix()}';
 $pages = nexvue_portal_web_pages();
 echo json_encode([
     'login_public' => $pages['/login']['public'],
+    'access_public' => $pages['/access']['public'],
     'catalog_public' => $pages['/catalog']['public'],
     'stations_roles' => $pages['/stations']['roles'],
     'users_roles' => $pages['/users']['roles'],
@@ -75,6 +76,7 @@ echo json_encode([
             self.fail(f"php failed: {r.stderr or r.stdout}")
         data = json.loads((r.stdout or "").strip())
         self.assertTrue(data["login_public"])
+        self.assertTrue(data["access_public"])
         self.assertFalse(data["catalog_public"])
         self.assertEqual(data["stations_roles"], ["org_admin"])
         self.assertEqual(data["users_roles"], ["org_admin"])

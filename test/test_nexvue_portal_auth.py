@@ -24,6 +24,16 @@ LIB = ROOT / "web-portal" / "nexvue-portal-auth-lib.php"
 PHP = shutil.which("php")
 
 
+def _ensure_openssl_conf(env: dict[str, str]) -> None:
+    if env.get("OPENSSL_CONF"):
+        return
+    if not PHP:
+        return
+    cand = Path(PHP).resolve().parent / "extras" / "ssl" / "openssl.cnf"
+    if cand.is_file():
+        env["OPENSSL_CONF"] = str(cand)
+
+
 def _b64url_decode(s: str) -> bytes:
     pad = 4 - (len(s) % 4)
     if pad < 4:
@@ -52,6 +62,8 @@ portal_migrate();
 {body}
 """
         env = os.environ.copy()
+        env["NEXVUE_PORTAL_TEST_AUTH"] = "1"
+        _ensure_openssl_conf(env)
         r = subprocess.run(
             [PHP, "-d", "display_errors=stderr", "-r", code],
             capture_output=True,

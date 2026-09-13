@@ -1491,32 +1491,41 @@ and implemented — see the decisions list above the collapsed spec.
 |---|---|
 | 1 (this) | Single edge, LAN WHEP, no auth. Prove stability + latency. |
 | 1.5 | **Rolled back** (slate/selector). Split-pipeline encode (`nexvue-encode.py`) is the production healer. See "Phase 1.5 supervisor" below. |
-| 2 | **Edge local auth landed** (bcrypt users + roles, share links, MediaMTX JWT/JWKS, sync-shaped export/import). Central PHP portal (catalog + fleet sync client) still future; Entra OIDC remains Phase 3. |
-| 3 | DMZ exposure: TLS on 443, Settings → Certificates (admin) issues Let's Encrypt via lego TLS-ALPN-01 or uploads PEMs, Settings → Public reachability (admin) sets `webrtcAdditionalHosts` to the public FQDN and/or NAT IP, single UDP 8189 rule + ICE-TCP fallback; Settings → Cloudflare TURN (admin, optional) mints client ICE servers from `auth.db` for viewers who cannot reach 8189; Settings → Cloudflare Stream (admin, optional hybrid/sfu) WHIPs each path once so share/portal (or all) viewers WHEP from Stream instead of multiplying the encode NIC; MediaMTX API + status daemon already loopback-bound (`nexvue-mediamtx-api.php` / `nexvue-status.php`). Remaining: Entra ID OIDC at portal, CORS validation portal-origin -> edge. |
-| 4 | **First slice landed.** Cloud portal (`web-portal/`, `sudo ./setup.sh --portal` on a separate box) — multi-tenant catalog + identity front door. Portal becomes the viewer-JWT issuer for an adopted station via a merged JWKS on the edge (`nexvue-jwks.php`), so MediaMTX config never changes and a portal outage never breaks local login/share links/publish. Enrollment + heartbeat are edge-initiated outbound only. See CLAUDE.md's Phase 4 entry for the full design. Remaining: fleet health dashboards, cross-site Multiview, Entra ID OIDC. |
+| 2 | **Edge local auth landed** (bcrypt users + roles, share links, MediaMTX JWT/JWKS, sync-shaped export/import). Local login remains the backup after NexAPP/portal SSO. |
+| 3 | DMZ exposure: TLS on 443, Settings → Certificates (admin) issues Let's Encrypt via lego TLS-ALPN-01 or uploads PEMs, Settings → Public reachability (admin) sets `webrtcAdditionalHosts` to the public FQDN and/or NAT IP, single UDP 8189 rule + ICE-TCP fallback; Settings → Cloudflare TURN (admin, optional) mints client ICE servers from `auth.db` for viewers who cannot reach 8189; Settings → Cloudflare Stream (admin, optional hybrid/sfu) WHIPs each path once so share/portal (or all) viewers WHEP from Stream instead of multiplying the encode NIC; MediaMTX API + status daemon already loopback-bound (`nexvue-mediamtx-api.php` / `nexvue-status.php`). Remaining: CORS validation portal-origin -> edge. Entra ID is at NexAPP, not a portal OIDC client. |
+| 4 | **NexAPP Alias `/nexvue` landed.** Cloud portal (`web-portal/`, `sudo ./setup.sh --portal` on the NexAPP VM or another non-encoder box) — NexAPP catalog User/Admin, group→station mapping, heartbeat ACL + health, portal-minted edge SSO JWT. Portal becomes the viewer-JWT issuer for an adopted station via a merged JWKS on the edge (`nexvue-jwks.php`), so MediaMTX config never changes and a portal outage never breaks local login/share links/publish. Enrollment + heartbeat are edge-initiated outbound only. Local station login stays as backup. See CLAUDE.md's Phase 4 entry for the full design. Remaining: cross-site Multiview, richer fleet dashboards. |
 
 ## Cloud portal (Phase 4)
 
 A NexVUE **portal** is a separate box from any edge node — install it with
 `sudo ./setup.sh --portal` (Apache + PHP + its own SQLite `portal.db`; no
-DeckLink/GStreamer/MediaMTX). Multi-tenant: orgs → portal users
-(`org_admin`/`org_operator`/`org_viewer`) → adopted stations → catalog ACL.
+DeckLink/GStreamer/MediaMTX). On the NexAPP hub it is an Alias at
+**`/nexvue`** (`nexapp.nexstar.tv/nexvue`): add
+`service_docroots['/nexvue']`, Rescan, Enable, and grant groups **User** or
+**Admin**. Production has no portal bcrypt accounts — NexAPP is the only
+human identity. Catalog Admin is the portal configuration ceiling
+(`org_admin`); it never becomes station `admin`. Map NexAPP groups to
+stations/channels on `/nexvue/users`; that ACL rides the node's outbound
+heartbeat. Health is last-heartbeat age (stale after 700s). Edge SSO is a
+short-lived portal JWT (`#portal_sso=` on the station `/login` hash);
+local station login stays as backup. Adopt URL on the edge must include
+`/nexvue` so heartbeat hits `/nexvue/api/portal`.
 
-**Adopt a station**: on the portal, `/stations` (org_admin) generates a
+**Adopt a station**: on the portal, `/nexvue/stations` (org_admin) generates a
 one-time enrollment code. Paste it into the edge's own Settings → Adopt this
 station — the edge calls the portal *outbound* to complete enrollment; the
 portal never calls an edge directly, either then or afterward (the recurring
 heartbeat is edge-initiated too). Once adopted, the edge keeps working
 exactly as before if the portal ever goes down — local admin login, local
 share links, and the encoder's own publish credential are untouched by
-adoption. Portal viewers browse `/catalog` and watch via `/watch`, which
-connects **directly** to the edge's own WHEP endpoint with a portal-minted,
-90-second-TTL JWT — video never transits the portal. When the edge has
-Cloudflare TURN on, the heartbeat caches `ice_servers` on the portal so
-`/watch` can use the same relay without a portal-to-edge call. When Stream
-is Hybrid or All viewers, the heartbeat also caches play URLs (never
-publish URLs); `/watch` POSTs the SDP through the portal (`sfu_whep`) so
-the browser never sees the Stream capability URL.
+adoption. Portal viewers browse `/nexvue/catalog` and watch via
+`/nexvue/watch`, which connects **directly** to the edge's own WHEP endpoint
+with a portal-minted, 90-second-TTL JWT — video never transits the portal.
+When the edge has Cloudflare TURN on, the heartbeat caches `ice_servers` on
+the portal so `/watch` can use the same relay without a portal-to-edge call.
+When Stream is Hybrid or All viewers, the heartbeat also caches play URLs
+(never publish URLs); `/watch` POSTs the SDP through the portal (`sfu_whep`)
+so the browser never sees the Stream capability URL.
 
 The repo is split accordingly: `web-node/` is the edge's own web UI (moved
 from repo root, deployed layout on the box unchanged), `web-portal/` is the

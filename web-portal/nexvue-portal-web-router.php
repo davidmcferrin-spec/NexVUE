@@ -1,13 +1,12 @@
 <?php
 /**
  * nexvue-portal-web-router.php — path front door for the NexVUE cloud
- * portal UI + /api/portal.
+ * portal UI + /api/portal, mounted as NexAPP Alias /nexvue.
  *
  * App root (parent of public/): pages/, nexvue-portal-*.php.
- * DocumentRoot must be {app}/public so those files are not web-enumerable.
  *
- * Routes:
- *   /login /catalog /watch /stations /users
+ * Routes (after stripping /nexvue):
+ *   /login /catalog /watch /stations /users /access
  *   /api/portal
  */
 
@@ -32,11 +31,35 @@ function nexvue_portal_app_root(): string {
     return $root;
 }
 
+function nexvue_portal_web_base(): string {
+    $o = getenv('NEXVUE_PORTAL_BASE');
+    if (is_string($o) && $o !== '') {
+        $o = rtrim($o, '/');
+        return $o === '' ? '' : $o;
+    }
+    return '/nexvue';
+}
+
+function nexvue_portal_web_url(string $path): string {
+    $base = nexvue_portal_web_base();
+    if ($path === '' || $path === '/') {
+        return $base === '' ? '/' : $base . '/';
+    }
+    if (!str_starts_with($path, '/')) {
+        $path = '/' . $path;
+    }
+    return $base . $path;
+}
+
 function nexvue_portal_web_request_path(): string {
     $uri = $_SERVER['REQUEST_URI'] ?? '/';
     $path = parse_url($uri, PHP_URL_PATH);
     if (!is_string($path) || $path === '') {
         $path = '/';
+    }
+    $base = nexvue_portal_web_base();
+    if ($base !== '' && ($path === $base || str_starts_with($path, $base . '/'))) {
+        $path = substr($path, strlen($base)) ?: '/';
     }
     if ($path !== '/' && str_ends_with($path, '/')) {
         $path = rtrim($path, '/');
@@ -48,6 +71,9 @@ function nexvue_portal_web_request_path(): string {
 function nexvue_portal_web_redirect(string $to, int $code = 302): void {
     if (!str_starts_with($to, 'http') && !str_starts_with($to, '/')) {
         $to = '/' . $to;
+    }
+    if (!str_starts_with($to, 'http')) {
+        $to = nexvue_portal_web_url($to);
     }
     header('Location: ' . $to, true, $code);
     exit;
@@ -66,6 +92,7 @@ function nexvue_portal_web_pages(): array {
     return [
         '/' => ['file' => 'catalog.html', 'roles' => null, 'public' => false],
         '/login' => ['file' => 'login.html', 'roles' => null, 'public' => true],
+        '/access' => ['file' => 'access.html', 'roles' => null, 'public' => true],
         '/catalog' => ['file' => 'catalog.html', 'roles' => null, 'public' => false],
         '/watch' => ['file' => 'watch.html', 'roles' => null, 'public' => false],
         '/stations' => ['file' => 'stations.html', 'roles' => ['org_admin'], 'public' => false],
@@ -96,12 +123,6 @@ function nexvue_portal_web_is_https(): bool {
     return false;
 }
 
-/**
- * Absolute https:// URL to bounce a leftover HTTP :80 hit, or null if
- * already TLS. Same rationale as the edge's nexvue_web_https_redirect_target()
- * — Apache keeps :80 open specifically to redirect here rather than close
- * it outright.
- */
 function nexvue_portal_web_https_redirect_target(): ?string {
     if (nexvue_portal_web_is_https()) {
         return null;
@@ -117,6 +138,16 @@ function nexvue_portal_web_https_redirect_target(): ?string {
     return 'https://' . $host . $uri;
 }
 
+function nexvue_portal_web_nexapp_login_redirect(string $nextPath): void {
+    nexvue_portal_web_load_auth();
+    portal_nexapp_lib_load();
+    $next = nexvue_portal_web_url($nextPath);
+    if (function_exists('portal_nexapp_login_url')) {
+        nexvue_portal_web_redirect(portal_nexapp_login_url($next), 302);
+    }
+    nexvue_portal_web_redirect('/login?next=' . rawurlencode($nextPath));
+}
+
 /**
  * @param array{file:string, roles:?list<string>, public:bool} $page
  */
@@ -128,18 +159,22 @@ function nexvue_portal_web_authorize_page(array $page, string $path): void {
     try {
         portal_migrate();
     } catch (Throwable $e) {
-        nexvue_portal_web_redirect('/login?next=' . rawurlencode($path . nexvue_portal_web_query_suffix()));
+        nexvue_portal_web_nexapp_login_redirect($path . nexvue_portal_web_query_suffix());
     }
-    $me = portal_me_payload();
-    if ($me === null) {
-        nexvue_portal_web_redirect('/login?next=' . rawurlencode($path . nexvue_portal_web_query_suffix()));
+    try {
+        $user = portal_require_any();
+    } catch (RuntimeException $e) {
+        if ($e->getMessage() === 'forbidden') {
+            nexvue_portal_web_redirect('/access');
+        }
+        nexvue_portal_web_nexapp_login_redirect($path . nexvue_portal_web_query_suffix());
     }
-    if (!empty($me['must_change_password'])) {
+    if (portal_test_auth_enabled() && !empty($user['must_change_password'])) {
         nexvue_portal_web_redirect('/login?change=1&next=' . rawurlencode($path . nexvue_portal_web_query_suffix()));
     }
     $roles = $page['roles'];
     if (is_array($roles) && $roles !== []) {
-        $role = (string)($me['role'] ?? '');
+        $role = (string)($user['role'] ?? '');
         if (!in_array($role, $roles, true)) {
             nexvue_portal_web_redirect('/catalog');
         }

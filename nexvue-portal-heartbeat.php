@@ -165,6 +165,13 @@ function main(): int {
             // Non-fatal — heartbeat itself succeeded; try again next cycle.
         }
     }
+    if (!empty($data['users_sync']) && isset($data['users']) && is_array($data['users'])) {
+        try {
+            auth_apply_portal_user_sync($data['users']);
+        } catch (Throwable $e) {
+            // Catalog/JWKS already saved; user sync retries next cycle.
+        }
+    }
     heartbeat_write_status(true);
     return 0;
 }

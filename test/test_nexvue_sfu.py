@@ -44,7 +44,7 @@ class TestSfuUiWiring(unittest.TestCase):
         ops = (ROOT / "web-node" / "nexvue-ops.php").read_text(encoding="utf-8")
         self.assertIn("'sfu_get', 'sfu_put', 'sfu_test'", ops)
         lib = LIB.read_text(encoding="utf-8")
-        self.assertIn("NEXVUE_AUTH_SCHEMA_VERSION = 5", lib)
+        self.assertIn("NEXVUE_AUTH_SCHEMA_VERSION = 6", lib)
         self.assertIn("function auth_sfu_put", lib)
         self.assertIn("function auth_sfu_use_for_session", lib)
         self.assertNotIn("NEXVUE_SFU_ENABLE", lib)

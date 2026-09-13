@@ -31,6 +31,16 @@ API_PHP = ROOT / "web-portal" / "nexvue-portal-api.php"
 PHP = shutil.which("php")
 
 
+def _ensure_openssl_conf(env: dict[str, str]) -> None:
+    if env.get("OPENSSL_CONF"):
+        return
+    if not PHP:
+        return
+    cand = Path(PHP).resolve().parent / "extras" / "ssl" / "openssl.cnf"
+    if cand.is_file():
+        env["OPENSSL_CONF"] = str(cand)
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -53,9 +63,11 @@ class TestPortalApiHappyPath(unittest.TestCase):
         )
         env = os.environ.copy()
         env["NEXVUE_PORTAL_HTTP"] = "1"
+        env["NEXVUE_PORTAL_TEST_AUTH"] = "1"
         env["NEXVUE_PORTAL_DB"] = str(self.db)
         env["NEXVUE_PORTAL_DIR"] = str(self.portal_dir)
         env["NEXVUE_PORTAL_SFU_HTTP_STUB"] = str(self.sfu_stub)
+        _ensure_openssl_conf(env)
         self.proc = subprocess.Popen(
             [PHP, "-d", "display_errors=0", "-S", f"127.0.0.1:{self.port}", str(API_PHP)],
             cwd=str(API_PHP.parent),

@@ -28,6 +28,16 @@ LIB = ROOT / "web-node" / "nexvue-auth-lib.php"
 PHP = shutil.which("php")
 
 
+def _ensure_openssl_conf(env: dict[str, str]) -> None:
+    if env.get("OPENSSL_CONF"):
+        return
+    if not PHP:
+        return
+    cand = Path(PHP).resolve().parent / "extras" / "ssl" / "openssl.cnf"
+    if cand.is_file():
+        env["OPENSSL_CONF"] = str(cand)
+
+
 class _StubHandler(http.server.BaseHTTPRequestHandler):
     response_status = 200
     response_body: dict = {"ok": True}
@@ -91,6 +101,7 @@ class TestPortalHeartbeat(unittest.TestCase):
         env["NEXVUE_CHANNELS_DIR"] = str(self.channels_dir)
         if extra_env:
             env.update(extra_env)
+        _ensure_openssl_conf(env)
         return subprocess.run(
             [PHP, "-d", "display_errors=stderr", str(SCRIPT)],
             capture_output=True,
@@ -108,6 +119,7 @@ class TestPortalHeartbeat(unittest.TestCase):
         env["NEXVUE_PORTAL_HEARTBEAT_INCLUDE_ONLY"] = "1"
         if extra_env:
             env.update(extra_env)
+        _ensure_openssl_conf(env)
         code = f"include '{SCRIPT.as_posix()}';\n{body}"
         r = subprocess.run(
             [PHP, "-d", "display_errors=stderr", "-r", code],

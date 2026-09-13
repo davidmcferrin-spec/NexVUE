@@ -1,0 +1,17 @@
+{
+  "service_id": "nexvue",
+  "display_name": "NexVUE",
+  "base_path": "/nexvue",
+  "description": "Station catalog, watch, and fleet sync for NexVUE edge nodes.",
+  "version": "2.30.0",
+  "manifest_version": "1",
+  "icon": "icon.svg",
+  "widgets": [
+    {
+      "id": "health",
+      "title": "NexVUE stations",
+      "endpoint": "/nexvue/widget.php",
+      "default_size": "1x1"
+    }
+  ]
+}

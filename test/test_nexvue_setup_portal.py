@@ -65,7 +65,7 @@ class TestSetupPortalFlag(unittest.TestCase):
             "nexvue-encode@", "nexvue-ops.sudoers", "8889/tcp", "8189",
         ):
             self.assertNotIn(forbidden, body, f"install_portal() must never reference {forbidden}")
-        for required in ("apache2", "php-sqlite3", "portal.db", "nexvue-portal-bootstrap.php"):
+        for required in ("apache2", "php-sqlite3", "portal.db", "nexvue-portal-bootstrap.php", "Alias /nexvue", "nexapp-manifest.json"):
             self.assertIn(required, body)
 
     def test_portal_uses_distinct_tls_and_firewall_scope(self) -> None:

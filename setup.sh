@@ -408,10 +408,18 @@ apply_nexvue_firewall() {
 install_portal() {
   local repo_dir webroot public pages assets
   repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  webroot="${NEXVUE_PORTAL_WEBROOT:-/var/www/html}"
+  webroot="${NEXVUE_PORTAL_WEBROOT:-/var/www/nexvue-portal}"
   public="${webroot}/public"
   pages="${webroot}/pages"
   assets="${public}/assets"
+  local nexapp_root="${NEXAPP_ROOT:-}"
+  if [ -z "${nexapp_root}" ]; then
+    if [ -d /var/www/nexapp ]; then
+      nexapp_root=/var/www/nexapp
+    elif [ -d "${repo_dir}/../NexAPP" ]; then
+      nexapp_root="$(cd "${repo_dir}/../NexAPP" && pwd)"
+    fi
+  fi
   local check_only=false
   for arg in "$@"; do
     [ "$arg" = "--check" ] && check_only=true
@@ -422,16 +430,24 @@ install_portal() {
   step "Cloud portal — required files"
   local portal_files=(
     web-portal/public/index.php
+    web-portal/public/widget.php
     web-portal/nexvue-portal-web-router.php
     web-portal/nexvue-portal-web-apache.conf
+    web-portal/nexvue-portal-apache-alias.conf
     web-portal/nexvue-portal-ssl-apache.conf
     web-portal/nexvue-portal-auth-lib.php
+    web-portal/nexvue-portal-nexapp.php
     web-portal/nexvue-portal-api.php
     web-portal/nexvue-portal-bootstrap.php
     web-portal/nexvue-portal-auth-gate.js
     web-portal/nexvue-portal-whep.js
     web-portal/nexvue-ui.js
+    web-portal/nexvue-portal.css
+    web-portal/nexapp-tokens.css
+    web-portal/nexapp-manifest.json
+    web-portal/icon.svg
     web-portal/login.html
+    web-portal/access.html
     web-portal/catalog.html
     web-portal/watch.html
     web-portal/stations.html
@@ -444,23 +460,24 @@ install_portal() {
   ok "all web-portal/ files present"
   if $check_only; then
     [ -d "${webroot}" ] || fail "portal webroot ${webroot} missing — run sudo ./setup.sh --portal (no --check) first"
-    for f in public/index.php nexvue-portal-web-router.php nexvue-portal-api.php \
-             nexvue-portal-auth-lib.php nexvue-portal-bootstrap.php \
-             pages/login.html pages/catalog.html pages/watch.html pages/stations.html pages/users.html \
-             public/assets/nexvue-ui.js public/assets/nexvue-portal-auth-gate.js public/assets/nexvue-portal-whep.js; do
+    for f in public/index.php public/widget.php public/nexapp-manifest.json public/icon.svg \
+             nexvue-portal-web-router.php nexvue-portal-api.php \
+             nexvue-portal-auth-lib.php nexvue-portal-nexapp.php nexvue-portal-bootstrap.php \
+             pages/login.html pages/catalog.html pages/watch.html pages/stations.html pages/users.html pages/access.html \
+             public/assets/nexvue-ui.js public/assets/nexvue-portal-auth-gate.js public/assets/nexvue-portal-whep.js \
+             public/assets/nexvue-portal.css public/assets/nexapp-tokens.css; do
       [ -f "${webroot}/${f}" ] && ok "portal web UI: ${webroot}/${f}" || warn "portal web UI missing: ${webroot}/${f}"
     done
-    if command -v apache2ctl >/dev/null 2>&1 \
-        && apache2ctl -S 2>/dev/null | grep -q "DocumentRoot: ${public}"; then
-      ok "Apache DocumentRoot is ${public}"
+    if [ -f /etc/apache2/conf-available/nexvue-portal-alias.conf ] || [ -f /etc/apache2/conf-enabled/nexvue-portal-alias.conf ]; then
+      ok "Apache Alias /nexvue conf present"
     else
-      warn "Apache DocumentRoot may not be ${public} — /login, /api/portal will fail until fixed"
+      warn "Apache Alias /nexvue conf missing — a2enconf nexvue-portal-alias"
     fi
-    [ -f /etc/nexvue-portal/tls/fullchain.pem ] && ok "portal TLS cert present" || warn "portal TLS cert missing"
+    [ -f /etc/nexvue-portal/jwt_public.pem ] && ok "NexAPP JWT public key copied" || warn "NexAPP JWT public key missing — copy keys/jwt_public.pem"
     [ -f /var/lib/nexvue-portal/portal.db ] && ok "portal.db present" || warn "portal.db missing — run bootstrap"
     ensure_timezone_eastern --check
     if command -v curl >/dev/null 2>&1 && systemctl is-active --quiet apache2 2>/dev/null; then
-      _portal_http_loc="$(curl -fsS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 2 "http://127.0.0.1/login" 2>/dev/null || true)"
+      _portal_http_loc="$(curl -fsS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 2 "http://127.0.0.1/nexvue/login" 2>/dev/null || true)"
       case "${_portal_http_loc}" in
         30*\ https://*) ok "portal HTTP :80 redirects to HTTPS (${_portal_http_loc})" ;;
         *) warn "portal :80 did not redirect to HTTPS (got: ${_portal_http_loc:-no response}) — check ufw allows 80/tcp and 000-default is enabled" ;;
@@ -482,6 +499,7 @@ install_portal() {
   install -m 644 "${repo_dir}/web-portal/public/index.php" "${public}/index.php"
   install -m 644 "${repo_dir}/web-portal/nexvue-portal-web-router.php" "${webroot}/nexvue-portal-web-router.php"
   install -m 644 "${repo_dir}/web-portal/login.html" \
+                 "${repo_dir}/web-portal/access.html" \
                  "${repo_dir}/web-portal/catalog.html" \
                  "${repo_dir}/web-portal/watch.html" \
                  "${repo_dir}/web-portal/stations.html" \
@@ -490,11 +508,17 @@ install_portal() {
   install -m 644 "${repo_dir}/web-portal/nexvue-ui.js" \
                  "${repo_dir}/web-portal/nexvue-portal-auth-gate.js" \
                  "${repo_dir}/web-portal/nexvue-portal-whep.js" \
+                 "${repo_dir}/web-portal/nexvue-portal.css" \
+                 "${repo_dir}/web-portal/nexapp-tokens.css" \
                  "${assets}/"
   install -m 644 "${repo_dir}/web-portal/nexvue-portal-auth-lib.php" \
+                 "${repo_dir}/web-portal/nexvue-portal-nexapp.php" \
                  "${repo_dir}/web-portal/nexvue-portal-api.php" \
                  "${webroot}/"
-  ok "web-portal/ installed under ${webroot} (public/ front door + pages/ + /api/portal)"
+  install -m 644 "${repo_dir}/web-portal/public/widget.php" "${public}/widget.php"
+  install -m 644 "${repo_dir}/web-portal/nexapp-manifest.json" "${public}/nexapp-manifest.json"
+  install -m 644 "${repo_dir}/web-portal/icon.svg" "${public}/icon.svg"
+  ok "web-portal/ installed under ${webroot} (NexAPP Alias /nexvue + pages/ + /api/portal)"
 
   step "Cloud portal — store (portal.db + RSA signing key)"
   install -d -m 750 -o www-data -g www-data /var/lib/nexvue-portal 2>/dev/null \
@@ -507,7 +531,7 @@ install_portal() {
     /usr/local/bin/nexvue-portal-bootstrap.php
   if command -v php >/dev/null 2>&1; then
     if php /usr/local/bin/nexvue-portal-bootstrap.php; then
-      ok "portal bootstrap (portal.db + RSA key + seed org/admin)"
+      ok "portal bootstrap (portal.db + RSA key; NexAPP issues humans, no seed admin)"
     else
       warn "portal bootstrap failed — run: sudo php /usr/local/bin/nexvue-portal-bootstrap.php"
     fi
@@ -550,41 +574,44 @@ install_portal() {
   chmod 644 "${cert}" 2>/dev/null || true
   chmod 640 "${key}" 2>/dev/null || true
 
-  step "Cloud portal — Apache"
+  step "Cloud portal — NexAPP key + Apache Alias /nexvue"
+  install -d -m 755 /etc/nexvue-portal
+  if [ -n "${nexapp_root}" ] && [ -f "${nexapp_root}/keys/jwt_public.pem" ]; then
+    install -m 644 "${nexapp_root}/keys/jwt_public.pem" /etc/nexvue-portal/jwt_public.pem
+    ok "copied NexAPP jwt_public.pem → /etc/nexvue-portal/jwt_public.pem"
+  else
+    warn "NexAPP jwt_public.pem not found — set NEXAPP_ROOT or copy keys/jwt_public.pem to /etc/nexvue-portal/jwt_public.pem"
+  fi
   if [ -d /etc/apache2/conf-available ] && command -v a2enmod >/dev/null 2>&1; then
     a2enmod rewrite >/dev/null 2>&1 && ok "Apache mod_rewrite enabled" \
-      || warn "a2enmod rewrite failed — /login, /catalog routing will 404 without it"
+      || warn "a2enmod rewrite failed — /nexvue routing will 404 without it"
+    a2enmod alias >/dev/null 2>&1 && ok "Apache mod_alias enabled" || warn "a2enmod alias failed"
     a2enmod ssl >/dev/null 2>&1 && ok "Apache mod_ssl enabled" || warn "a2enmod ssl failed"
+    sed "s|@@APP_ROOT@@|${webroot}|g" "${repo_dir}/web-portal/nexvue-portal-apache-alias.conf" \
+      > /etc/apache2/conf-available/nexvue-portal-alias.conf
+    chmod 644 /etc/apache2/conf-available/nexvue-portal-alias.conf
+    a2enconf nexvue-portal-alias >/dev/null 2>&1 \
+      && ok "Apache conf enabled: nexvue-portal-alias (Alias /nexvue)" || warn "a2enconf nexvue-portal-alias failed"
+    # Keep the older Directory fragment for non-NexAPP lab installs that still
+    # point a vhost DocumentRoot at ${public}.
     sed "s|@@APP_ROOT@@|${webroot}|g" "${repo_dir}/web-portal/nexvue-portal-web-apache.conf" \
       > /etc/apache2/conf-available/nexvue-portal-web.conf
     chmod 644 /etc/apache2/conf-available/nexvue-portal-web.conf
     a2enconf nexvue-portal-web >/dev/null 2>&1 \
       && ok "Apache conf enabled: nexvue-portal-web" || warn "a2enconf nexvue-portal-web failed"
-    install -m 644 "${repo_dir}/web-portal/nexvue-portal-ssl-apache.conf" \
-      /etc/apache2/conf-available/nexvue-portal-ssl-certs.conf
-    a2enconf nexvue-portal-ssl-certs >/dev/null 2>&1 \
-      && ok "Apache conf enabled: nexvue-portal-ssl-certs" || warn "a2enconf nexvue-portal-ssl-certs failed"
-    # Fresh/dedicated box assumption: patch Ubuntu's standard default vhosts
-    # directly rather than the edge installer's fully general regex patcher —
-    # simpler, appropriately scoped for a single-purpose portal box. If your
-    # site layout differs, set DocumentRoot to ${public} manually.
-    local vhost
-    for vhost in /etc/apache2/sites-available/000-default.conf /etc/apache2/sites-available/default-ssl.conf; do
-      [ -f "$vhost" ] || continue
-      if grep -qE '^\s*DocumentRoot\s+/var/www/html\s*$' "$vhost" 2>/dev/null; then
-        sed -i "s|^\(\s*DocumentRoot\s\+\)/var/www/html\s*\$|\1${public}|" "$vhost"
-        ok "patched DocumentRoot -> ${public} in $(basename "$vhost")"
-      fi
-    done
-    if ! apache2ctl -S 2>/dev/null | grep -q "DocumentRoot: ${public}"; then
-      warn "DocumentRoot may not be ${public} — set it manually in your enabled site if routing 404s"
+    if [ -z "${nexapp_root}" ]; then
+      install -m 644 "${repo_dir}/web-portal/nexvue-portal-ssl-apache.conf" \
+        /etc/apache2/conf-available/nexvue-portal-ssl-certs.conf
+      a2enconf nexvue-portal-ssl-certs >/dev/null 2>&1 \
+        && ok "Apache conf enabled: nexvue-portal-ssl-certs" || warn "a2enconf nexvue-portal-ssl-certs failed"
+    else
+      ok "NexAPP vhost owns TLS — skipped nexvue-portal-ssl-certs"
     fi
-    a2ensite default-ssl >/dev/null 2>&1 || true
     systemctl reload apache2 >/dev/null 2>&1 || systemctl restart apache2 >/dev/null 2>&1 \
       || warn "apache2 reload/restart failed — check apache2ctl configtest"
     ok "Apache reloaded"
   else
-    warn "Apache conf-available/a2enmod missing — enable rewrite/ssl and set DocumentRoot manually"
+    warn "Apache conf-available/a2enmod missing — enable rewrite/alias and Alias /nexvue manually"
   fi
   systemctl enable --now apache2 >/dev/null 2>&1 && ok "apache2 enabled --now" \
     || warn "could not enable --now apache2"
@@ -607,8 +634,9 @@ install_portal() {
   fi
 
   echo
-  ok "NexVUE cloud portal installed. Visit https://<this-host>/login (default admin / password — change immediately)."
-  ok "Next: on each edge node, Settings -> Adopt this station, using an enrollment code from /stations here."
+  ok "NexVUE portal installed as NexAPP Alias /nexvue under ${webroot}."
+  ok "NexAPP: add service_docroots['/nexvue'] => ${public}, Rescan, Enable, grant groups User or Admin."
+  ok "Adopt URL on edges is https://nexapp.nexstar.tv/nexvue (include the /nexvue path)."
   return 0
 }
 

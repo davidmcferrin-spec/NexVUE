@@ -21,6 +21,16 @@ LIB = ROOT / "web-node" / "nexvue-auth-lib.php"
 PHP = shutil.which("php")
 
 
+def _ensure_openssl_conf(env: dict[str, str]) -> None:
+    if env.get("OPENSSL_CONF"):
+        return
+    if not PHP:
+        return
+    cand = Path(PHP).resolve().parent / "extras" / "ssl" / "openssl.cnf"
+    if cand.is_file():
+        env["OPENSSL_CONF"] = str(cand)
+
+
 @unittest.skipUnless(PHP and LIB.is_file(), "php CLI or nexvue-auth-lib.php missing")
 class TestNexVueAuth(unittest.TestCase):
     def setUp(self) -> None:
@@ -47,6 +57,7 @@ auth_ensure_keys();
 """
         env = os.environ.copy()
         env.pop("NEXVUE_AUTH_HTTP", None)
+        _ensure_openssl_conf(env)
         r = subprocess.run(
             [PHP, "-d", "display_errors=stderr", "-r", code],
             capture_output=True,

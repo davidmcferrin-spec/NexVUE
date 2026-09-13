@@ -29,7 +29,7 @@ const NEXVUE_AUTH_RESET_TTL_S = 3600;
 const NEXVUE_AUTH_MAX_CHANNELS = 8; // Quad 2 ceiling (ch0..ch7 + lo)
 /** Keep expired share rows this long after expires_at, then hard-delete. */
 const NEXVUE_AUTH_SHARE_PURGE_GRACE_S = 604800; // 7 days
-const NEXVUE_AUTH_SCHEMA_VERSION = 5;
+const NEXVUE_AUTH_SCHEMA_VERSION = 6;
 /** Cloudflare Realtime TURN credential TTL (max 48h; 24h leaves refresh room). */
 const NEXVUE_TURN_TTL_S = 86400;
 /** Remint cached ICE servers when fewer than this many seconds remain. */
@@ -183,7 +183,8 @@ CREATE TABLE IF NOT EXISTS users (
   channels TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  synced_at TEXT
+  synced_at TEXT,
+  identity_key TEXT
 );
 CREATE TABLE IF NOT EXISTS share_links (
   id TEXT PRIMARY KEY,
@@ -260,6 +261,20 @@ SQL);
     if ($ver < 5) {
         auth_sfu_ensure_table();
         $ver = 5;
+    }
+    if ($ver < 6) {
+        $cols = [];
+        $info = $db->query('PRAGMA table_info(users)');
+        if ($info) {
+            while ($c = $info->fetchArray(SQLITE3_ASSOC)) {
+                $cols[(string)$c['name']] = true;
+            }
+        }
+        if (!isset($cols['identity_key'])) {
+            $db->exec('ALTER TABLE users ADD COLUMN identity_key TEXT');
+        }
+        $db->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_identity_key ON users(identity_key)');
+        $ver = 6;
     }
     $db->exec('PRAGMA user_version = ' . (string)NEXVUE_AUTH_SCHEMA_VERSION);
     $done = true;
@@ -561,6 +576,244 @@ function auth_jwt_encode(array $claims, ?int $ttlS = null): string {
         throw new RuntimeException('openssl_sign failed');
     }
     return $data . '.' . auth_b64url_encode($sig);
+}
+
+function auth_portal_jwk_to_pem(string $nB64, string $eB64): ?string {
+    $n = auth_b64url_decode($nB64);
+    $e = auth_b64url_decode($eB64);
+    if ($n === false || $e === false || $n === '' || $e === '') {
+        return null;
+    }
+    $encodeLen = static function (string $bin): string {
+        $len = strlen($bin);
+        if ($len < 128) {
+            return chr($len);
+        }
+        if ($len < 256) {
+            return "\x81" . chr($len);
+        }
+        return "\x82" . chr($len >> 8) . chr($len & 0xff);
+    };
+    $int = static function (string $bin) use ($encodeLen): string {
+        if ($bin !== '' && (ord($bin[0]) & 0x80)) {
+            $bin = "\x00" . $bin;
+        }
+        return "\x02" . $encodeLen($bin) . $bin;
+    };
+    $body = $int($n) . $int($e);
+    $rsa = "\x30" . $encodeLen($body) . $body;
+    $alg = hex2bin('300d06092a864886f70d0101010500');
+    $bit = "\x00" . $rsa;
+    $pk = "\x03" . $encodeLen($bit) . $bit;
+    $seq = $alg . $pk;
+    $der = "\x30" . $encodeLen($seq) . $seq;
+    return "-----BEGIN PUBLIC KEY-----\n" . chunk_split(base64_encode($der), 64, "\n") . "-----END PUBLIC KEY-----\n";
+}
+
+/**
+ * Verify a portal-minted RS256 JWT against the cached portal JWKS.
+ *
+ * @return array<string, mixed>|null
+ */
+function auth_portal_jwt_verify(string $jwt): ?array {
+    $parts = explode('.', $jwt);
+    if (count($parts) !== 3) {
+        return null;
+    }
+    [$h64, $p64, $s64] = $parts;
+    $header = json_decode((string)auth_b64url_decode($h64), true);
+    $payload = json_decode((string)auth_b64url_decode($p64), true);
+    $sig = auth_b64url_decode($s64);
+    if (!is_array($header) || !is_array($payload) || $sig === false || ($header['alg'] ?? '') !== 'RS256') {
+        return null;
+    }
+    if (($payload['iss'] ?? '') !== 'nexvue-portal' || ($payload['typ'] ?? '') !== 'nexvue-portal-sso') {
+        return null;
+    }
+    if (!isset($payload['exp']) || time() >= (int)$payload['exp']) {
+        return null;
+    }
+    $jwks = auth_portal_jwks_cache_read();
+    $keys = is_array($jwks) && isset($jwks['keys']) && is_array($jwks['keys']) ? $jwks['keys'] : [];
+    foreach ($keys as $jwk) {
+        if (!is_array($jwk) || ($jwk['kty'] ?? '') !== 'RSA') {
+            continue;
+        }
+        $pem = auth_portal_jwk_to_pem((string)($jwk['n'] ?? ''), (string)($jwk['e'] ?? ''));
+        if ($pem === null) {
+            continue;
+        }
+        $ok = openssl_verify("$h64.$p64", $sig, $pem, OPENSSL_ALGO_SHA256);
+        if ($ok === 1) {
+            return $payload;
+        }
+    }
+    return null;
+}
+
+function auth_portal_jwks_cache_read(): ?array {
+    $path = auth_portal_jwks_cache_path();
+    if (!is_readable($path)) {
+        return null;
+    }
+    $raw = json_decode((string)file_get_contents($path), true);
+    return is_array($raw) ? $raw : null;
+}
+
+/**
+ * Apply portal heartbeat user bundle. Never overwrites local admin.
+ * Disables previously synced nexapp:* users missing from this list.
+ *
+ * @param list<mixed> $users
+ * @return array{upserted:int, disabled:int, skipped_admin:int}
+ */
+function auth_apply_portal_user_sync(array $users): array {
+    auth_migrate();
+    $keep = [];
+    $upserted = 0;
+    $skipped = 0;
+    foreach ($users as $u) {
+        if (!is_array($u)) {
+            continue;
+        }
+        $identity = trim((string)($u['identity_key'] ?? ''));
+        $email = trim((string)($u['email'] ?? ''));
+        $id = trim((string)($u['id'] ?? ''));
+        if ($identity === '' && $id !== '') {
+            $identity = 'nexapp:' . $id;
+        }
+        if ($identity === '' || !str_starts_with($identity, 'nexapp:')) {
+            continue;
+        }
+        $role = strtolower(trim((string)($u['role'] ?? 'viewer')));
+        if (!in_array($role, ['viewer', 'operator', 'sharer'], true)) {
+            $role = 'viewer';
+        }
+        $existing = auth_user_find_by_identity_key($identity);
+        if ($existing === null && $email !== '') {
+            $existing = auth_user_find_by_email($email);
+        }
+        if ($existing !== null && ($existing['role'] ?? '') === 'admin') {
+            $skipped++;
+            $keep[$existing['id']] = true;
+            if (empty($existing['identity_key'])) {
+                auth_user_update($existing['id'], ['identity_key' => $identity, 'synced_at' => auth_now_iso()]);
+            }
+            continue;
+        }
+        $username = (string)($u['username'] ?? '');
+        if ($username === '') {
+            $username = $email !== '' ? $email : ('nexapp-' . substr(hash('sha256', $identity), 0, 12));
+        }
+        try {
+            $username = auth_normalize_username($username);
+        } catch (InvalidArgumentException $e) {
+            $username = 'nexapp-' . substr(hash('sha256', $identity), 0, 12);
+        }
+        $payload = [
+            'identity_key' => $identity,
+            'email' => $email !== '' ? $email : null,
+            'role' => $role,
+            'channels' => array_key_exists('channels', $u) ? $u['channels'] : null,
+            'disabled_at' => null,
+            'must_change_password' => false,
+            'synced_at' => auth_now_iso(),
+        ];
+        if ($existing === null) {
+            $clash = auth_user_find_by_username($username);
+            if ($clash !== null) {
+                $username = 'nexapp-' . substr(hash('sha256', $identity), 0, 12);
+            }
+            $payload['username'] = $username;
+            $payload['id'] = $id !== '' ? $id : auth_uuid();
+            $payload['password'] = bin2hex(random_bytes(16));
+            $row = auth_user_create($payload);
+            $keep[$row['id']] = true;
+        } else {
+            $payload['username'] = $existing['username'];
+            auth_user_update($existing['id'], $payload);
+            $keep[$existing['id']] = true;
+        }
+        $upserted++;
+    }
+    $disabled = 0;
+    $db = auth_db();
+    $r = $db->query("SELECT id, role, identity_key FROM users WHERE identity_key IS NOT NULL AND identity_key LIKE 'nexapp:%' AND disabled_at IS NULL");
+    if ($r) {
+        while ($row = $r->fetchArray(SQLITE3_ASSOC)) {
+            if (($row['role'] ?? '') === 'admin') {
+                continue;
+            }
+            if (isset($keep[$row['id']])) {
+                continue;
+            }
+            auth_user_update($row['id'], ['disabled' => true, 'synced_at' => auth_now_iso()]);
+            $disabled++;
+        }
+    }
+    return ['upserted' => $upserted, 'disabled' => $disabled, 'skipped_admin' => $skipped];
+}
+
+/**
+ * @param array<string, mixed> $claims
+ */
+function auth_login_portal_sso(array $claims): array {
+    $identity = '';
+    $nexappSub = trim((string)($claims['nexapp_sub'] ?? ''));
+    if ($nexappSub !== '') {
+        $identity = 'nexapp:' . $nexappSub;
+    }
+    $email = trim((string)($claims['email'] ?? ''));
+    $role = strtolower(trim((string)($claims['role'] ?? 'viewer')));
+    if (!in_array($role, ['viewer', 'operator', 'sharer'], true)) {
+        $role = 'viewer';
+    }
+    $row = $identity !== '' ? auth_user_find_by_identity_key($identity) : null;
+    if ($row === null && $email !== '') {
+        $row = auth_user_find_by_email($email);
+    }
+    if ($row !== null && ($row['role'] ?? '') === 'admin') {
+        auth_login_user($row);
+        return $row;
+    }
+    if ($row === null) {
+        $username = $email !== '' ? $email : ('nexapp-' . substr(hash('sha256', $identity !== '' ? $identity : $email), 0, 12));
+        try {
+            $username = auth_normalize_username($username);
+        } catch (InvalidArgumentException $e) {
+            $username = 'nexapp-' . substr(hash('sha256', $identity . $email), 0, 12);
+        }
+        if (auth_user_find_by_username($username) !== null) {
+            $username = 'nexapp-' . substr(hash('sha256', $identity . $email), 0, 12);
+        }
+        $row = auth_user_create([
+            'username' => $username,
+            'email' => $email !== '' ? $email : null,
+            'role' => $role,
+            'identity_key' => $identity !== '' ? $identity : null,
+            'channels' => $claims['channels'] ?? null,
+            'password' => bin2hex(random_bytes(16)),
+            'must_change_password' => false,
+            'synced_at' => auth_now_iso(),
+        ]);
+    } else {
+        if (($row['role'] ?? '') !== 'admin') {
+            auth_user_update($row['id'], [
+                'role' => $role,
+                'identity_key' => $identity !== '' ? $identity : ($row['identity_key'] ?? null),
+                'email' => $email !== '' ? $email : null,
+                'channels' => array_key_exists('channels', $claims) ? $claims['channels'] : ($row['channels'] ?? null),
+                'disabled_at' => null,
+                'synced_at' => auth_now_iso(),
+            ]);
+            $row = auth_user_find_by_id($row['id']);
+        }
+    }
+    if ($row === null || !empty($row['disabled_at'])) {
+        throw new RuntimeException('unauthorized');
+    }
+    auth_login_user($row);
+    return $row;
 }
 
 /** Normalize channel path list: chN base ids → include lo companions for WHEP. */
@@ -965,6 +1218,7 @@ function auth_user_row_public(array $row): array {
         'created_at' => $row['created_at'],
         'updated_at' => $row['updated_at'],
         'synced_at' => $row['synced_at'] ?: null,
+        'identity_key' => $row['identity_key'] ?? null,
     ];
 }
 
@@ -990,6 +1244,19 @@ function auth_user_find_by_email(string $email): ?array {
     $db = auth_db();
     $st = $db->prepare('SELECT * FROM users WHERE email = :e COLLATE NOCASE LIMIT 1');
     $st->bindValue(':e', $email, SQLITE3_TEXT);
+    $r = $st->execute();
+    $row = $r ? $r->fetchArray(SQLITE3_ASSOC) : false;
+    return $row ?: null;
+}
+
+function auth_user_find_by_identity_key(string $key): ?array {
+    $key = trim($key);
+    if ($key === '') {
+        return null;
+    }
+    $db = auth_db();
+    $st = $db->prepare('SELECT * FROM users WHERE identity_key = :k LIMIT 1');
+    $st->bindValue(':k', $key, SQLITE3_TEXT);
     $r = $st->execute();
     $row = $r ? $r->fetchArray(SQLITE3_ASSOC) : false;
     return $row ?: null;
@@ -1027,8 +1294,8 @@ function auth_user_create(array $in): array {
     }
     $db = auth_db();
     $st = $db->prepare(
-        'INSERT INTO users (id, username, password_hash, email, role, must_change_password, disabled_at, channels, created_at, updated_at, synced_at)
-         VALUES (:id, :u, :ph, :e, :r, :m, :d, :ch, :c, :up, :sy)'
+        'INSERT INTO users (id, username, password_hash, email, role, must_change_password, disabled_at, channels, created_at, updated_at, synced_at, identity_key)
+         VALUES (:id, :u, :ph, :e, :r, :m, :d, :ch, :c, :up, :sy, :ik)'
     );
     $st->bindValue(':id', $id, SQLITE3_TEXT);
     $st->bindValue(':u', $username, SQLITE3_TEXT);
@@ -1041,6 +1308,8 @@ function auth_user_create(array $in): array {
     $st->bindValue(':c', $in['created_at'] ?? $now, SQLITE3_TEXT);
     $st->bindValue(':up', $in['updated_at'] ?? $now, SQLITE3_TEXT);
     $st->bindValue(':sy', $in['synced_at'] ?? null, isset($in['synced_at']) && $in['synced_at'] ? SQLITE3_TEXT : SQLITE3_NULL);
+    $ik = isset($in['identity_key']) && is_string($in['identity_key']) && $in['identity_key'] !== '' ? $in['identity_key'] : null;
+    $st->bindValue(':ik', $ik, $ik === null ? SQLITE3_NULL : SQLITE3_TEXT);
     if (!$st->execute()) {
         throw new RuntimeException('user create failed (username taken?)');
     }
@@ -1104,7 +1373,7 @@ function auth_user_update(string $id, array $in): array {
     $db = auth_db();
     $st = $db->prepare(
         'UPDATE users SET username=:u, password_hash=:ph, email=:e, role=:r,
-         must_change_password=:m, disabled_at=:d, channels=:ch, updated_at=:up, synced_at=:sy WHERE id=:id'
+         must_change_password=:m, disabled_at=:d, channels=:ch, updated_at=:up, synced_at=:sy, identity_key=:ik WHERE id=:id'
     );
     $st->bindValue(':u', $username, SQLITE3_TEXT);
     $st->bindValue(':ph', $hash, SQLITE3_TEXT);
@@ -1115,6 +1384,10 @@ function auth_user_update(string $id, array $in): array {
     $st->bindValue(':ch', $channelsSql, $channelsSql === null || $channelsSql === '' ? SQLITE3_NULL : SQLITE3_TEXT);
     $st->bindValue(':up', $now, SQLITE3_TEXT);
     $st->bindValue(':sy', $in['synced_at'] ?? $row['synced_at'], isset($in['synced_at']) || $row['synced_at'] ? SQLITE3_TEXT : SQLITE3_NULL);
+    $ik = array_key_exists('identity_key', $in)
+        ? ((is_string($in['identity_key']) && $in['identity_key'] !== '') ? $in['identity_key'] : null)
+        : ($row['identity_key'] ?? null);
+    $st->bindValue(':ik', $ik, $ik === null ? SQLITE3_NULL : SQLITE3_TEXT);
     $st->bindValue(':id', $id, SQLITE3_TEXT);
     if (!$st->execute()) {
         throw new RuntimeException('user update failed');

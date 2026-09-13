@@ -29,7 +29,7 @@ class TestShareManage(unittest.TestCase):
 
     def test_auth_lib_stores_share_token(self) -> None:
         lib = (ROOT / "web-node" / "nexvue-auth-lib.php").read_text(encoding="utf-8")
-        self.assertIn("NEXVUE_AUTH_SCHEMA_VERSION = 5", lib)
+        self.assertIn("NEXVUE_AUTH_SCHEMA_VERSION = 6", lib)
         self.assertIn("function auth_share_build_url", lib)
         self.assertIn("auth_try_mail_share", lib)
         self.assertIn("token, page, channels", lib)

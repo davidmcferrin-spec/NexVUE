@@ -8,29 +8,32 @@
  * (see portal_user_channel_stations()/portal_catalog_list_for_user()).
  *
  * Deliberately self-contained — does NOT require_once anything from
- * web-node/. A portal deployment is a separate box from an edge node (see
- * setup.sh --portal); this file has its own SQLite store, its own RSA
- * signing keypair, and its own bcrypt session model, styled identically to
- * web-node/nexvue-auth-lib.php but never sharing state with it. The one
- * hard wire contract shared between the two: portal_mint_viewer_jwt()'s
- * claim shape (mediamtx_permissions: [{action, path}]) must exactly match
- * what MediaMTX validates on the target edge — that's enforced by
- * convention, not by code sharing.
+ * web-node/. Humans authenticate via NexAPP (Alias /nexvue on the hub
+ * vhost). Local bcrypt login is test-only (NEXVUE_PORTAL_TEST_AUTH=1).
+ * This file has its own SQLite store and RSA signing keypair for
+ * MediaMTX viewer JWTs + edge SSO JWTs. The hard wire contract with
+ * every edge: portal_mint_viewer_jwt() claim shape
+ * (mediamtx_permissions: [{action, path}]).
  *
  * SQLite: /var/lib/nexvue-portal/portal.db (override NEXVUE_PORTAL_DB)
  * Keys:   /var/lib/nexvue-portal/{private.pem,public.pem,jwks.json,kid}
  *         (override NEXVUE_PORTAL_DIR)
  *
- * Roles (org-scoped): org_admin | org_operator | org_viewer. org_admin and
- * org_operator implicitly see every station/channel in their org (no ACL
- * rows needed); org_viewer sees only what catalog_acl grants.
+ * Portal roles stay org_admin | org_operator | org_viewer internally.
+ * NexAPP catalog admin maps to org_admin; catalog user maps to
+ * org_viewer. NexAPP groups map to stations/channels via
+ * group_station_acl; that bundle is echoed on station_heartbeat
+ * (edge outbound) — the portal never calls a node.
  */
 
 declare(strict_types=1);
 
 const NEXVUE_PORTAL_ROLES = ['org_admin', 'org_operator', 'org_viewer'];
 const NEXVUE_PORTAL_VIEWER_JWT_TTL_S = 90;
-const NEXVUE_PORTAL_SCHEMA_VERSION = 3;
+const NEXVUE_PORTAL_SCHEMA_VERSION = 4;
+const NEXVUE_PORTAL_SSO_JWT_TTL_S = 180;
+const NEXVUE_PORTAL_HEARTBEAT_STALE_S = 700;
+const NEXVUE_PORTAL_EDGE_SYNC_ROLES = ['viewer', 'operator', 'sharer'];
 const NEXVUE_PORTAL_MAX_CHANNEL_ID = 7;
 /** Enrollment tokens are single-use and short-lived — an admin generates
  *  one right before pasting it into the edge's Settings → Adopt form. */
@@ -186,13 +189,15 @@ SQL);
         if ($orgCount === 0) {
             $orgName = getenv('NEXVUE_PORTAL_SEED_ORG_NAME') ?: 'Default Org';
             $org = portal_org_create((string)$orgName);
-            portal_user_create([
-                'org_id' => $org['id'],
-                'username' => 'admin',
-                'password' => 'password',
-                'role' => 'org_admin',
-                'must_change_password' => true,
-            ]);
+            if (portal_test_auth_enabled()) {
+                portal_user_create([
+                    'org_id' => $org['id'],
+                    'username' => 'admin',
+                    'password' => 'password',
+                    'role' => 'org_admin',
+                    'must_change_password' => true,
+                ]);
+            }
         }
         $ver = 1;
     }
@@ -227,6 +232,37 @@ SQL);
             $db->exec('ALTER TABLE stations ADD COLUMN sfu_play_json TEXT');
         }
         $ver = 3;
+    }
+    if ($ver < 4) {
+        $cols = [];
+        $info = $db->query('PRAGMA table_info(portal_users)');
+        if ($info) {
+            while ($c = $info->fetchArray(SQLITE3_ASSOC)) {
+                $cols[(string)$c['name']] = true;
+            }
+        }
+        if (!isset($cols['identity_key'])) {
+            $db->exec('ALTER TABLE portal_users ADD COLUMN identity_key TEXT');
+        }
+        if (!isset($cols['catalog_role'])) {
+            $db->exec("ALTER TABLE portal_users ADD COLUMN catalog_role TEXT NOT NULL DEFAULT 'user'");
+        }
+        $db->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_users_identity ON portal_users(identity_key)');
+        $db->exec(<<<'SQL'
+CREATE TABLE IF NOT EXISTS group_station_acl (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  nexapp_group_id TEXT NOT NULL,
+  nexapp_group_name TEXT,
+  station_id TEXT NOT NULL REFERENCES stations(id),
+  channel_base TEXT,
+  edge_role TEXT NOT NULL DEFAULT 'viewer',
+  created_at TEXT NOT NULL,
+  UNIQUE(nexapp_group_id, station_id, channel_base)
+);
+CREATE INDEX IF NOT EXISTS idx_group_acl_station ON group_station_acl(station_id);
+SQL);
+        $ver = 4;
     }
     $db->exec('PRAGMA user_version = ' . (string)NEXVUE_PORTAL_SCHEMA_VERSION);
     $done = true;
@@ -428,6 +464,8 @@ function portal_user_row_public(array $row): array {
         'username' => $row['username'],
         'email' => $row['email'] !== null && $row['email'] !== '' ? $row['email'] : null,
         'role' => $row['role'],
+        'catalog_role' => ($row['catalog_role'] ?? '') === 'admin' ? 'admin' : 'user',
+        'identity_key' => $row['identity_key'] ?? null,
         'must_change_password' => ((int)$row['must_change_password']) === 1,
         'disabled_at' => $row['disabled_at'] ?: null,
         'created_at' => $row['created_at'],
@@ -592,6 +630,7 @@ function portal_users_list_for_org(string $orgId): array {
 // ---------------------------------------------------------------------------
 
 function portal_station_row_public(array $row): array {
+    $hb = $row['last_heartbeat_at'] ?: null;
     return [
         'id' => $row['id'],
         'org_id' => $row['org_id'],
@@ -600,10 +639,25 @@ function portal_station_row_public(array $row): array {
         'edge_whep_port' => (int)$row['edge_whep_port'],
         'status' => $row['status'],
         'edge_version' => $row['edge_version'] ?: null,
-        'last_heartbeat_at' => $row['last_heartbeat_at'] ?: null,
+        'last_heartbeat_at' => $hb,
+        'health' => portal_station_health_from_heartbeat($hb),
         'created_at' => $row['created_at'],
         'updated_at' => $row['updated_at'],
     ];
+}
+
+function portal_station_health_from_heartbeat(?string $lastHeartbeatAt): string {
+    if ($lastHeartbeatAt === null || $lastHeartbeatAt === '') {
+        return 'unknown';
+    }
+    $ts = strtotime($lastHeartbeatAt);
+    if ($ts === false) {
+        return 'unknown';
+    }
+    if ((time() - $ts) > NEXVUE_PORTAL_HEARTBEAT_STALE_S) {
+        return 'down';
+    }
+    return 'ok';
 }
 
 function portal_station_find_by_id(string $id): ?array {
@@ -1100,24 +1154,7 @@ function portal_catalog_acl_put(string $orgId, string $portalUserId, string $sta
 function portal_catalog_list_for_user(array $user): array {
     $stations = portal_stations_list_for_org($user['org_id']);
     $seeAll = in_array($user['role'], ['org_admin', 'org_operator'], true);
-    $grants = null; // station_id => null(all) | list<channel_base>
-    if (!$seeAll) {
-        $grants = [];
-        $db = portal_db();
-        $st = $db->prepare('SELECT station_id, channel_base FROM catalog_acl WHERE portal_user_id = :u');
-        $st->bindValue(':u', $user['id'], SQLITE3_TEXT);
-        $r = $st->execute();
-        if ($r) {
-            while ($row = $r->fetchArray(SQLITE3_ASSOC)) {
-                $sid = (string)$row['station_id'];
-                if ($row['channel_base'] === null) {
-                    $grants[$sid] = null; // all channels
-                } elseif (!array_key_exists($sid, $grants) || $grants[$sid] !== null) {
-                    $grants[$sid][] = (string)$row['channel_base'];
-                }
-            }
-        }
-    }
+    $grants = $seeAll ? null : portal_user_channel_grants_map($user);
     $out = [];
     foreach ($stations as $station) {
         if ($station['status'] !== 'active') {
@@ -1125,10 +1162,10 @@ function portal_catalog_list_for_user(array $user): array {
         }
         $allowedChannels = null;
         if (!$seeAll) {
-            if (!array_key_exists($station['id'], $grants)) {
-                continue; // no grant at all on this station
+            if ($grants === null || !array_key_exists($station['id'], $grants)) {
+                continue;
             }
-            $allowedChannels = $grants[$station['id']]; // null = all
+            $allowedChannels = $grants[$station['id']];
         }
         $channels = [];
         foreach (portal_station_channels_list($station['id']) as $ch) {
@@ -1144,6 +1181,8 @@ function portal_catalog_list_for_user(array $user): array {
             'id' => $station['id'],
             'name' => $station['name'],
             'status' => $station['status'],
+            'health' => $station['health'] ?? 'unknown',
+            'edge_base_url' => $station['edge_base_url'] ?? '',
             'channels' => $channels,
         ];
     }
@@ -1159,16 +1198,12 @@ function portal_user_allows_channel(array $user, string $stationId, string $chan
     if (in_array($user['role'], ['org_admin', 'org_operator'], true)) {
         return true;
     }
-    $db = portal_db();
-    $st = $db->prepare(
-        'SELECT COUNT(*) FROM catalog_acl WHERE portal_user_id = :u AND station_id = :s AND (channel_base IS NULL OR channel_base = :c)'
-    );
-    $st->bindValue(':u', $user['id'], SQLITE3_TEXT);
-    $st->bindValue(':s', $stationId, SQLITE3_TEXT);
-    $st->bindValue(':c', $channelBase, SQLITE3_TEXT);
-    $r = $st->execute();
-    $row = $r ? $r->fetchArray(SQLITE3_NUM) : false;
-    return $row !== false && (int)$row[0] > 0;
+    $grants = portal_user_channel_grants_map($user);
+    if (!array_key_exists($stationId, $grants)) {
+        return false;
+    }
+    $allowed = $grants[$stationId];
+    return $allowed === null || in_array($channelBase, $allowed, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1187,7 +1222,7 @@ function portal_session_start(): void {
         || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443);
     session_name('nexvue_portal_session');
     session_set_cookie_params([
-        'lifetime' => 0, 'path' => '/', 'secure' => $secure, 'httponly' => true, 'samesite' => 'Lax',
+        'lifetime' => 0, 'path' => portal_base_path() . '/', 'secure' => $secure, 'httponly' => true, 'samesite' => 'Lax',
     ]);
     session_start();
 }
@@ -1247,7 +1282,16 @@ function portal_current_user(bool $forceDb = false): ?array {
 }
 
 function portal_me_payload(): ?array {
-    $user = portal_current_user();
+    $user = null;
+    try {
+        $user = portal_try_nexapp_user();
+    } catch (RuntimeException $e) {
+        if ($e->getMessage() === 'forbidden') {
+            throw $e;
+        }
+        $user = null;
+    }
+    $user = $user ?? portal_current_user();
     if ($user === null) {
         return null;
     }
@@ -1271,7 +1315,8 @@ function portal_require_roles(array $roles): array {
             'must_change_password' => 0, 'disabled_at' => null, 'created_at' => '', 'updated_at' => '',
         ];
     }
-    $user = portal_current_user();
+    $nexapp = portal_try_nexapp_user();
+    $user = $nexapp ?? portal_current_user();
     if ($user === null) {
         throw new RuntimeException('unauthorized');
     }
@@ -1285,9 +1330,445 @@ function portal_require_any(): array {
     if (portal_bypass_enabled()) {
         return portal_require_roles(['org_viewer']);
     }
+    $nexapp = portal_try_nexapp_user();
+    if ($nexapp !== null) {
+        return $nexapp;
+    }
     $user = portal_current_user();
     if ($user === null) {
         throw new RuntimeException('unauthorized');
     }
     return $user;
 }
+
+function portal_test_auth_enabled(): bool {
+    return getenv('NEXVUE_PORTAL_TEST_AUTH') === '1';
+}
+
+function portal_base_path(): string {
+    $o = getenv('NEXVUE_PORTAL_BASE');
+    if (is_string($o) && $o !== '') {
+        $o = rtrim($o, '/');
+        return $o === '' ? '' : $o;
+    }
+    return '/nexvue';
+}
+
+function portal_nexapp_lib_load(): void {
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $done = true;
+    $here = __DIR__ . '/nexvue-portal-nexapp.php';
+    if (is_file($here)) {
+        require_once $here;
+    }
+}
+
+/**
+ * @return array<string, mixed>|null
+ */
+function portal_try_nexapp_user(): ?array {
+    portal_nexapp_lib_load();
+    if (!function_exists('portal_nexapp_check_access')) {
+        return null;
+    }
+    $access = portal_nexapp_check_access();
+    if (empty($access['ok'])) {
+        if ((int)($access['status'] ?? 0) === 403) {
+            throw new RuntimeException('forbidden');
+        }
+        if ((int)($access['status'] ?? 0) === 503) {
+            throw new RuntimeException('unauthorized');
+        }
+        return null;
+    }
+    return portal_nexapp_upsert_user($access);
+}
+
+/**
+ * @param array{sub?:string,email?:string,name?:string,role?:string} $access
+ */
+function portal_nexapp_upsert_user(array $access): array {
+    $sub = trim((string)($access['sub'] ?? ''));
+    if ($sub === '') {
+        throw new RuntimeException('unauthorized');
+    }
+    $email = trim((string)($access['email'] ?? ''));
+    $catalog = portal_nexapp_normalize_catalog_role($access['role'] ?? 'user');
+    $role = $catalog === 'admin' ? 'org_admin' : 'org_viewer';
+    $identity = 'nexapp:' . $sub;
+    $org = portal_default_org();
+    $row = portal_user_find_by_identity_key($identity);
+    if ($row === null && $email !== '') {
+        $row = portal_user_find_by_email($email);
+    }
+    if ($row === null) {
+        $username = portal_nexapp_username($email, $sub);
+        $row = portal_user_create([
+            'org_id' => $org['id'],
+            'username' => $username,
+            'password' => bin2hex(random_bytes(16)),
+            'role' => $role,
+            'email' => $email !== '' ? $email : null,
+            'must_change_password' => false,
+        ]);
+    }
+    $now = portal_now_iso();
+    $db = portal_db();
+    $st = $db->prepare(
+        'UPDATE portal_users SET identity_key=:k, catalog_role=:cr, role=:r, email=:e, disabled_at=NULL, updated_at=:up WHERE id=:id'
+    );
+    $st->bindValue(':k', $identity, SQLITE3_TEXT);
+    $st->bindValue(':cr', $catalog, SQLITE3_TEXT);
+    $st->bindValue(':r', $role, SQLITE3_TEXT);
+    $st->bindValue(':e', $email !== '' ? $email : null, $email === '' ? SQLITE3_NULL : SQLITE3_TEXT);
+    $st->bindValue(':up', $now, SQLITE3_TEXT);
+    $st->bindValue(':id', $row['id'], SQLITE3_TEXT);
+    $st->execute();
+    $out = portal_user_find_by_id($row['id']);
+    if ($out === null) {
+        throw new RuntimeException('nexapp upsert failed');
+    }
+    portal_login_user($out);
+    return $out;
+}
+
+function portal_nexapp_username(string $email, string $sub): string {
+    $base = $email !== '' ? $email : ('nexapp-' . substr(preg_replace('/[^A-Za-z0-9]/', '', $sub) ?: hash('sha256', $sub), 0, 24));
+    try {
+        return portal_normalize_username($base);
+    } catch (InvalidArgumentException $e) {
+        return portal_normalize_username('nexapp-' . substr(hash('sha256', $sub), 0, 16));
+    }
+}
+
+function portal_default_org(): array {
+    $db = portal_db();
+    $r = $db->query('SELECT * FROM orgs ORDER BY created_at ASC LIMIT 1');
+    $row = $r ? $r->fetchArray(SQLITE3_ASSOC) : false;
+    if ($row) {
+        return $row;
+    }
+    $name = getenv('NEXVUE_PORTAL_SEED_ORG_NAME') ?: 'Default Org';
+    return portal_org_create((string)$name);
+}
+
+function portal_user_find_by_identity_key(string $key): ?array {
+    if ($key === '') {
+        return null;
+    }
+    $db = portal_db();
+    $st = $db->prepare('SELECT * FROM portal_users WHERE identity_key = :k LIMIT 1');
+    $st->bindValue(':k', $key, SQLITE3_TEXT);
+    $r = $st->execute();
+    $row = $r ? $r->fetchArray(SQLITE3_ASSOC) : false;
+    return $row ?: null;
+}
+
+function portal_user_find_by_email(string $email): ?array {
+    $email = trim($email);
+    if ($email === '') {
+        return null;
+    }
+    $db = portal_db();
+    $st = $db->prepare('SELECT * FROM portal_users WHERE email = :e COLLATE NOCASE LIMIT 1');
+    $st->bindValue(':e', $email, SQLITE3_TEXT);
+    $r = $st->execute();
+    $row = $r ? $r->fetchArray(SQLITE3_ASSOC) : false;
+    return $row ?: null;
+}
+
+function portal_normalize_edge_sync_role(string $role): string {
+    $role = strtolower(trim($role));
+    if (!in_array($role, NEXVUE_PORTAL_EDGE_SYNC_ROLES, true)) {
+        return 'viewer';
+    }
+    return $role;
+}
+
+/**
+ * @param list<string>|null $channels null = all channels on the station
+ */
+function portal_group_acl_put(string $orgId, string $groupId, string $groupName, string $stationId, ?array $channels, string $edgeRole): void {
+    $groupId = trim($groupId);
+    if ($groupId === '') {
+        throw new InvalidArgumentException('nexapp_group_id required');
+    }
+    $station = portal_station_find_by_id($stationId);
+    if ($station === null || $station['org_id'] !== $orgId) {
+        throw new InvalidArgumentException('station not found in org');
+    }
+    $edgeRole = portal_normalize_edge_sync_role($edgeRole);
+    $db = portal_db();
+    $del = $db->prepare('DELETE FROM group_station_acl WHERE nexapp_group_id = :g AND station_id = :s');
+    $del->bindValue(':g', $groupId, SQLITE3_TEXT);
+    $del->bindValue(':s', $stationId, SQLITE3_TEXT);
+    $del->execute();
+    $rows = $channels === null ? [null] : array_values(array_unique($channels));
+    foreach ($rows as $base) {
+        if ($base !== null && !preg_match('/^ch[0-7]$/', (string)$base)) {
+            throw new InvalidArgumentException('invalid channel: ' . $base);
+        }
+        $st = $db->prepare(
+            'INSERT INTO group_station_acl (id, org_id, nexapp_group_id, nexapp_group_name, station_id, channel_base, edge_role, created_at)
+             VALUES (:id, :org, :g, :n, :s, :c, :r, :cr)'
+        );
+        $st->bindValue(':id', portal_uuid(), SQLITE3_TEXT);
+        $st->bindValue(':org', $orgId, SQLITE3_TEXT);
+        $st->bindValue(':g', $groupId, SQLITE3_TEXT);
+        $st->bindValue(':n', $groupName, SQLITE3_TEXT);
+        $st->bindValue(':s', $stationId, SQLITE3_TEXT);
+        $st->bindValue(':c', $base, $base === null ? SQLITE3_NULL : SQLITE3_TEXT);
+        $st->bindValue(':r', $edgeRole, SQLITE3_TEXT);
+        $st->bindValue(':cr', portal_now_iso(), SQLITE3_TEXT);
+        $st->execute();
+    }
+}
+
+/** @return list<array<string,mixed>> */
+function portal_group_acl_list(string $orgId): array {
+    $db = portal_db();
+    $st = $db->prepare('SELECT * FROM group_station_acl WHERE org_id = :o ORDER BY nexapp_group_name, station_id');
+    $st->bindValue(':o', $orgId, SQLITE3_TEXT);
+    $r = $st->execute();
+    $out = [];
+    if ($r) {
+        while ($row = $r->fetchArray(SQLITE3_ASSOC)) {
+            $out[] = [
+                'id' => $row['id'],
+                'nexapp_group_id' => $row['nexapp_group_id'],
+                'nexapp_group_name' => $row['nexapp_group_name'],
+                'station_id' => $row['station_id'],
+                'channel_base' => $row['channel_base'],
+                'edge_role' => $row['edge_role'],
+            ];
+        }
+    }
+    return $out;
+}
+
+/**
+ * station_id => null (all channels) | list of channel bases
+ *
+ * @return array<string, list<string>|null>
+ */
+function portal_user_channel_grants_map(array $user): array {
+    $grants = [];
+    $db = portal_db();
+    $st = $db->prepare('SELECT station_id, channel_base FROM catalog_acl WHERE portal_user_id = :u');
+    $st->bindValue(':u', $user['id'], SQLITE3_TEXT);
+    $r = $st->execute();
+    if ($r) {
+        while ($row = $r->fetchArray(SQLITE3_ASSOC)) {
+            portal_grants_map_add($grants, (string)$row['station_id'], $row['channel_base']);
+        }
+    }
+    $identity = (string)($user['identity_key'] ?? '');
+    $sub = str_starts_with($identity, 'nexapp:') ? substr($identity, 7) : '';
+    if ($sub !== '') {
+        portal_nexapp_lib_load();
+        $gids = function_exists('portal_nexapp_group_ids_for_sub') ? portal_nexapp_group_ids_for_sub($sub) : [];
+        foreach ($gids as $gid) {
+            $gst = $db->prepare('SELECT station_id, channel_base FROM group_station_acl WHERE nexapp_group_id = :g');
+            $gst->bindValue(':g', $gid, SQLITE3_TEXT);
+            $gr = $gst->execute();
+            if ($gr) {
+                while ($row = $gr->fetchArray(SQLITE3_ASSOC)) {
+                    portal_grants_map_add($grants, (string)$row['station_id'], $row['channel_base']);
+                }
+            }
+        }
+    }
+    return $grants;
+}
+
+/**
+ * @param array<string, list<string>|null> $grants
+ */
+function portal_grants_map_add(array &$grants, string $stationId, mixed $channelBase): void {
+    if ($channelBase === null || $channelBase === '') {
+        $grants[$stationId] = null;
+        return;
+    }
+    if (array_key_exists($stationId, $grants) && $grants[$stationId] === null) {
+        return;
+    }
+    $grants[$stationId][] = (string)$channelBase;
+}
+
+function portal_edge_role_rank(string $role): int {
+    return match (portal_normalize_edge_sync_role($role)) {
+        'operator' => 3,
+        'sharer' => 2,
+        default => 1,
+    };
+}
+
+/**
+ * Users the edge should materialize for this station. Null directory →
+ * omit sync (caller must not send users_sync).
+ *
+ * @return null|list<array<string,mixed>>
+ */
+function portal_heartbeat_users_for_station(string $stationId): ?array {
+    portal_nexapp_lib_load();
+    if (!function_exists('portal_nexapp_directory')) {
+        return null;
+    }
+    $directory = portal_nexapp_directory();
+    if ($directory === null) {
+        return null;
+    }
+    $db = portal_db();
+    /** @var array<string, array{sub:string,email:string,name:string,role:string,channels:?list<string>}> $bySub */
+    $bySub = [];
+    foreach ($directory as $g) {
+        $gst = $db->prepare('SELECT channel_base, edge_role FROM group_station_acl WHERE nexapp_group_id = :g AND station_id = :s');
+        $gst->bindValue(':g', $g['id'], SQLITE3_TEXT);
+        $gst->bindValue(':s', $stationId, SQLITE3_TEXT);
+        $gr = $gst->execute();
+        $groupChannels = [];
+        $groupAll = false;
+        $groupRole = 'viewer';
+        $any = false;
+        if ($gr) {
+            while ($row = $gr->fetchArray(SQLITE3_ASSOC)) {
+                $any = true;
+                $groupRole = portal_edge_role_rank($row['edge_role']) > portal_edge_role_rank($groupRole)
+                    ? portal_normalize_edge_sync_role((string)$row['edge_role'])
+                    : $groupRole;
+                if ($row['channel_base'] === null || $row['channel_base'] === '') {
+                    $groupAll = true;
+                } else {
+                    $groupChannels[] = (string)$row['channel_base'];
+                }
+            }
+        }
+        if (!$any) {
+            continue;
+        }
+        $ch = $groupAll ? null : array_values(array_unique($groupChannels));
+        foreach ($g['members'] as $m) {
+            $sub = $m['sub'];
+            if ($sub === '') {
+                continue;
+            }
+            if (!isset($bySub[$sub])) {
+                $bySub[$sub] = [
+                    'sub' => $sub,
+                    'email' => $m['email'],
+                    'name' => $m['name'],
+                    'role' => $groupRole,
+                    'channels' => $ch,
+                ];
+                continue;
+            }
+            if (portal_edge_role_rank($groupRole) > portal_edge_role_rank($bySub[$sub]['role'])) {
+                $bySub[$sub]['role'] = $groupRole;
+            }
+            if ($bySub[$sub]['channels'] === null || $ch === null) {
+                $bySub[$sub]['channels'] = null;
+            } else {
+                $bySub[$sub]['channels'] = array_values(array_unique(array_merge($bySub[$sub]['channels'], $ch)));
+            }
+        }
+    }
+    $out = [];
+    foreach ($bySub as $u) {
+        $id = $u['sub'];
+        $email = $u['email'];
+        $username = $email !== '' ? $email : ('nexapp-' . substr(hash('sha256', $id), 0, 12));
+        $out[] = [
+            'id' => $id,
+            'username' => $username,
+            'email' => $email !== '' ? $email : null,
+            'identity_key' => 'nexapp:' . $id,
+            'role' => portal_normalize_edge_sync_role($u['role']),
+            'channels' => $u['channels'],
+            'disabled_at' => null,
+            'must_change_password' => false,
+        ];
+    }
+    return $out;
+}
+
+function portal_mint_sso_jwt(array $user, string $stationId): string {
+    $station = portal_station_find_by_id($stationId);
+    if ($station === null || $station['org_id'] !== $user['org_id']) {
+        throw new InvalidArgumentException('station not found');
+    }
+    $role = 'viewer';
+    $channels = null;
+    if (in_array($user['role'], ['org_admin', 'org_operator'], true)) {
+        $role = 'operator';
+        $channels = null;
+    } else {
+        $grants = portal_user_channel_grants_map($user);
+        if (!array_key_exists($stationId, $grants)) {
+            throw new RuntimeException('forbidden');
+        }
+        $channels = $grants[$stationId];
+        $identity = (string)($user['identity_key'] ?? '');
+        $sub = str_starts_with($identity, 'nexapp:') ? substr($identity, 7) : '';
+        if ($sub !== '') {
+            $db = portal_db();
+            $gids = portal_nexapp_group_ids_for_sub($sub);
+            foreach ($gids as $gid) {
+                $st = $db->prepare('SELECT edge_role FROM group_station_acl WHERE nexapp_group_id = :g AND station_id = :s');
+                $st->bindValue(':g', $gid, SQLITE3_TEXT);
+                $st->bindValue(':s', $stationId, SQLITE3_TEXT);
+                $r = $st->execute();
+                if ($r) {
+                    while ($row = $r->fetchArray(SQLITE3_ASSOC)) {
+                        if (portal_edge_role_rank((string)$row['edge_role']) > portal_edge_role_rank($role)) {
+                            $role = portal_normalize_edge_sync_role((string)$row['edge_role']);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    $identity = (string)($user['identity_key'] ?? '');
+    $nexappSub = str_starts_with($identity, 'nexapp:') ? substr($identity, 7) : '';
+    return portal_jwt_encode([
+        'sub' => 'portal:' . $user['id'],
+        'typ' => 'nexvue-portal-sso',
+        'email' => $user['email'] ?? '',
+        'name' => $user['username'] ?? '',
+        'nexapp_sub' => $nexappSub,
+        'station_id' => $stationId,
+        'role' => $role,
+        'channels' => $channels,
+    ], NEXVUE_PORTAL_SSO_JWT_TTL_S);
+}
+
+function portal_station_login_url(array $station, string $jwt): string {
+    $base = rtrim((string)$station['edge_base_url'], '/');
+    return $base . '/login#portal_sso=' . rawurlencode($jwt);
+}
+
+function portal_health_summary(string $orgId): array {
+    $stations = portal_stations_list_for_org($orgId);
+    $ok = 0;
+    $down = 0;
+    $unknown = 0;
+    foreach ($stations as $s) {
+        $h = $s['health'] ?? 'unknown';
+        if ($h === 'ok') {
+            $ok++;
+        } elseif ($h === 'down') {
+            $down++;
+        } else {
+            $unknown++;
+        }
+    }
+    return [
+        'stations' => count($stations),
+        'ok' => $ok,
+        'down' => $down,
+        'unknown' => $unknown,
+    ];
+}
+

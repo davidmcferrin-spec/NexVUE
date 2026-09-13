@@ -1,0 +1,76 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+/* Fallback copy of NexAPP /assets/nexapp-theme.css tokens. Loaded
+   *before* the kit so a live kit overrides these. */
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --nx-bg: #f3f4f6;
+  --nx-surface: #ffffff;
+  --nx-surface-2: #f9fafb;
+  --nx-ink: #111827;
+  --nx-muted: #6b7280;
+  --nx-line: #e5e7eb;
+  --nx-accent: #2563eb;
+  --nx-accent-hover: #1d4ed8;
+  --nx-accent-soft: #eff6ff;
+  --nx-ok: #067647;
+  --nx-warn: #b54708;
+  --nx-danger: #b42318;
+  --nx-hero-from: #0b3a5c;
+  --nx-hero-to: #1a6b9a;
+  --nx-tile-shadow: 0 1px 2px rgba(17, 24, 39, 0.06), 0 4px 12px rgba(17, 24, 39, 0.04);
+  --nx-font: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", sans-serif;
+  --nx-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --nx-radius: 10px;
+  --nx-sidebar: #ffffff;
+  --nx-sidebar-border: #e5e7eb;
+  --nx-rail-active: #2563eb;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --nx-bg: #0b0f14;
+  --nx-surface: #151b23;
+  --nx-surface-2: #1a222c;
+  --nx-ink: #e8eef4;
+  --nx-muted: #9aa8b5;
+  --nx-line: #2a3542;
+  --nx-accent: #3ecf8e;
+  --nx-accent-hover: #2fb87a;
+  --nx-accent-soft: rgba(62, 207, 142, 0.12);
+  --nx-ok: #3ecf8e;
+  --nx-warn: #f5a524;
+  --nx-danger: #f87171;
+  --nx-hero-from: #061018;
+  --nx-hero-to: #0d2838;
+  --nx-tile-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --nx-sidebar: #0f1419;
+  --nx-sidebar-border: #1e2834;
+  --nx-rail-active: #3ecf8e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --nx-bg: #0b0f14;
+    --nx-surface: #151b23;
+    --nx-surface-2: #1a222c;
+    --nx-ink: #e8eef4;
+    --nx-muted: #9aa8b5;
+    --nx-line: #2a3542;
+    --nx-accent: #3ecf8e;
+    --nx-accent-hover: #2fb87a;
+    --nx-accent-soft: rgba(62, 207, 142, 0.12);
+    --nx-ok: #3ecf8e;
+    --nx-warn: #f5a524;
+    --nx-danger: #f87171;
+    --nx-hero-from: #061018;
+    --nx-hero-to: #0d2838;
+    --nx-tile-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --nx-sidebar: #0f1419;
+    --nx-sidebar-border: #1e2834;
+    --nx-rail-active: #3ecf8e;
+  }
+}

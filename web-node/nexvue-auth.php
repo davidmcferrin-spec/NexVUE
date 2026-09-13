@@ -133,6 +133,23 @@ try {
         auth_api_ok(['user' => auth_me_payload()]);
     }
 
+    if ($action === 'portal_sso') {
+        $jwt = trim((string)($body['jwt'] ?? ''));
+        if ($jwt === '') {
+            auth_api_fail(400, 'jwt required');
+        }
+        $claims = auth_portal_jwt_verify($jwt);
+        if ($claims === null) {
+            auth_api_fail(401, 'invalid portal SSO token');
+        }
+        try {
+            $row = auth_login_portal_sso($claims);
+        } catch (RuntimeException $e) {
+            auth_api_fail(401, $e->getMessage());
+        }
+        auth_api_ok(['user' => auth_me_payload(), 'source' => 'portal_sso']);
+    }
+
     if ($action === 'logout') {
         auth_session_clear();
         auth_api_ok();

@@ -76,9 +76,7 @@ if ($action === '') {
 }
 
 try {
-    if (!in_array($action, ['enroll_exchange'], true)) {
-        portal_migrate();
-    }
+    portal_migrate();
 } catch (Throwable $e) {
     portal_api_fail(500, 'portal store unavailable');
 }
@@ -87,6 +85,9 @@ try {
     // ---- public --------------------------------------------------------
 
     if ($action === 'login') {
+        if (!portal_test_auth_enabled()) {
+            portal_api_fail(404, 'NexAPP SSO only');
+        }
         $username = (string)($body['username'] ?? '');
         $password = (string)($body['password'] ?? '');
         $row = portal_user_verify($username, $password);
@@ -99,7 +100,8 @@ try {
 
     if ($action === 'logout') {
         portal_session_clear();
-        portal_api_ok();
+        portal_nexapp_lib_load();
+        portal_api_ok(['redirect' => function_exists('portal_nexapp_logout_url') ? portal_nexapp_logout_url() : '/']);
     }
 
     if ($action === 'me') {
@@ -160,12 +162,21 @@ try {
             portal_station_sfu_store($station['id'], (string)($sfu['mode'] ?? 'off'), $play);
         }
         $keys = portal_ensure_keys();
-        portal_api_ok(['portal_jwks' => $keys['jwks']]);
+        $users = portal_heartbeat_users_for_station($station['id']);
+        $extra = ['portal_jwks' => $keys['jwks']];
+        if ($users !== null) {
+            $extra['users_sync'] = true;
+            $extra['users'] = $users;
+        }
+        portal_api_ok($extra);
     }
 
     // ---- any authenticated portal role -----------------------------------
 
     if ($action === 'change_password') {
+        if (!portal_test_auth_enabled()) {
+            portal_api_fail(404, 'NexAPP SSO only');
+        }
         $user = portal_require_any();
         $user = portal_current_user(true) ?? $user; // force-reload for a real password_hash
         $current = (string)($body['current_password'] ?? '');
@@ -251,6 +262,9 @@ try {
     }
 
     if ($action === 'user_create') {
+        if (!portal_test_auth_enabled()) {
+            portal_api_fail(404, 'NexAPP issues portal users');
+        }
         $user = portal_require_roles(['org_admin']);
         try {
             $row = portal_user_create([
@@ -316,6 +330,67 @@ try {
         }
         portal_enroll_token_revoke($id, $user['org_id']);
         portal_api_ok();
+    }
+
+    if ($action === 'nexapp_groups') {
+        $user = portal_require_roles(['org_admin']);
+        portal_nexapp_lib_load();
+        $directory = function_exists('portal_nexapp_directory') ? portal_nexapp_directory() : null;
+        portal_api_ok([
+            'groups' => $directory ?? [],
+            'directory_ok' => $directory !== null,
+            'acl' => portal_group_acl_list($user['org_id']),
+        ]);
+    }
+
+    if ($action === 'group_acl_put') {
+        $user = portal_require_roles(['org_admin']);
+        $groupId = (string)($body['nexapp_group_id'] ?? '');
+        $groupName = (string)($body['nexapp_group_name'] ?? '');
+        $stationId = (string)($body['station_id'] ?? '');
+        $edgeRole = (string)($body['edge_role'] ?? 'viewer');
+        $channels = $body['channels'] ?? null;
+        if ($groupId === '' || $stationId === '') {
+            portal_api_fail(400, 'nexapp_group_id and station_id required');
+        }
+        if ($channels !== null && !is_array($channels)) {
+            portal_api_fail(400, 'channels must be an array or null');
+        }
+        try {
+            portal_group_acl_put($user['org_id'], $groupId, $groupName, $stationId, $channels, $edgeRole);
+        } catch (InvalidArgumentException $e) {
+            portal_api_fail(400, $e->getMessage());
+        }
+        portal_api_ok();
+    }
+
+    if ($action === 'station_sso') {
+        $user = portal_require_any();
+        $stationId = (string)($body['station_id'] ?? '');
+        if ($stationId === '') {
+            portal_api_fail(400, 'station_id required');
+        }
+        $station = portal_station_find_by_id($stationId);
+        if ($station === null || $station['org_id'] !== $user['org_id']) {
+            portal_api_fail(404, 'station not found');
+        }
+        try {
+            $jwt = portal_mint_sso_jwt($user, $stationId);
+        } catch (RuntimeException $e) {
+            portal_api_fail(403, $e->getMessage());
+        } catch (InvalidArgumentException $e) {
+            portal_api_fail(400, $e->getMessage());
+        }
+        portal_api_ok([
+            'jwt' => $jwt,
+            'expires_in' => NEXVUE_PORTAL_SSO_JWT_TTL_S,
+            'login_url' => portal_station_login_url($station, $jwt),
+        ]);
+    }
+
+    if ($action === 'health_summary') {
+        $user = portal_require_any();
+        portal_api_ok(portal_health_summary($user['org_id']));
     }
 
     if ($action === 'catalog_acl_put') {

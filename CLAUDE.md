@@ -195,8 +195,8 @@ this box can't get additional ports opened.
   `nexvue-web-router.php` (server-side session/share gate); pages in
   `pages/`; JSON under `/api/*`; station key `NEXVUE_API_KEY` (alias
   `NEXVUE_SYNC_KEY`) for Bearer/`X-NexVUE-Key` sync + `api_ping`. Client gate
-  JS remains for nav roles + WHEP JWT. Central catalog portal + Entra OIDC
-  remain later. Real (non-self-signed) TLS for Apache + WHEP `:8889` still
+  JS remains for nav roles + WHEP JWT. Catalog portal is Phase 4 (NexAPP
+  Alias `/nexvue`); Entra is at NexAPP. Real (non-self-signed) TLS for Apache + WHEP `:8889` still
   recommended before wider users. UI content is HTTPS-only; WHEP is always
   `https://…:8889` regardless of page scheme (`NexVueAuth.whepUrl()`, not
   `location.protocol`) since MediaMTX's `:8889` listener is TLS-only —
@@ -220,20 +220,33 @@ this box can't get additional ports opened.
   path once; hybrid keeps logged-in station users on MediaMTX and sends
   share + portal viewers to Stream; `sfu` sends everyone. Same-origin
   `sfu_whep` (edge) / portal `sfu_whep` hide Stream play URLs. TURN is
-  connectivity; Stream is fan-out. Remaining: Entra OIDC, CORS, portal relays. (TLS landed early —
+  connectivity; Stream is fan-out. Remaining: CORS, portal relays. Entra
+  lives at NexAPP (not a portal OIDC client). (TLS landed early —
   see README TLS section.)
-- **Phase 4: fleet / cloud portal — first slice landed.** Repo split:
+- **Phase 4: fleet / cloud portal — NexAPP Alias `/nexvue`.** Repo split:
   `web-node/` holds everything from Phases 1-3 (moved as a group, same
-  flat relative layout, zero code changes — `setup.sh` source paths
-  updated, deployed box layout unchanged); `web-portal/` is a brand-new,
-  fully self-contained app (own SQLite `portal.db`, own RSA signing
-  keypair, own bcrypt sessions — never `require_once`s anything from
-  `web-node/`) installed on a **separate** box via `sudo ./setup.sh --portal`
-  (Apache+PHP only — no DeckLink/GStreamer/MediaMTX/encoder anything).
+  flat relative layout — `setup.sh` source paths updated, deployed box
+  layout unchanged); `web-portal/` is a self-contained PHP app (own SQLite
+  `portal.db`, own RSA signing keypair for MediaMTX viewer JWTs + edge
+  SSO — never `require_once`s anything from `web-node/`) installed on a
+  **separate** box via `sudo ./setup.sh --portal` (Apache+PHP only — no
+  DeckLink/GStreamer/MediaMTX/encoder anything). Production humans
+  authenticate via NexAPP (`NexAPP_AUTH` cookie, live `AccessService` /
+  `/api/access.php?service_id=nexvue`); catalog **User / Admin** map to
+  portal `org_viewer` / `org_admin`. No production bcrypt portal accounts
+  (`NEXVUE_PORTAL_TEST_AUTH=1` is tests only). NexAPP groups map to
+  stations/channels via `group_station_acl`; that bundle is echoed on the
+  edge's outbound heartbeat (`users_sync`) — never a portal-to-node
+  inbound call. Catalog `admin` is a portal ceiling only and **never**
+  syncs to edge `admin` (edge sync roles: `viewer` / `operator` /
+  `sharer`). Health is last-heartbeat age (stale after 700s), not a DeckLink
+  probe. Edge SSO is a portal-minted JWT (`typ: nexvue-portal-sso`) in the
+  login hash `#portal_sso=`; local edge login remains the backup. Share
+  links and `NEXVUE_PUBLISH_JWT` stay local.
   Multi-tenant from day one: `orgs` → `portal_users` (`org_admin` /
   `org_operator` / `org_viewer`) → `stations` → `station_channels` →
-  `catalog_acl` (NULL channel = all, same convention as edge
-  `users.channels`), all org-scoped by construction.
+  `catalog_acl` / `group_station_acl` (NULL channel = all, same convention
+  as edge `users.channels`), all org-scoped by construction.
   **Portal becomes the viewer-JWT issuer once a station is adopted** —
   `nexvue-jwks.php` on the edge now serves a **merged** JWKS (local key,
   always present, plus a locally-cached portal key once adopted) via
@@ -250,24 +263,28 @@ this box can't get additional ports opened.
   portal-to-edge inbound call exists anywhere. Heartbeat pushes station
   status + channel catalog + optional Cloudflare `ice_servers` (when TURN
   is on) + Stream `sfu.mode` / play URLs (never publish URLs), portal echoes
-  back its current JWKS each time
+  back its current JWKS each time plus optional `users_sync` (omitted when
+  the NexAPP directory is unavailable so nodes are not wiped).
   (key rotation propagates for free, no separate endpoint). Login page
   shows a non-blocking "sign in via portal" nudge when adopted+reachable
   (`portal_status`, public action) — local sign-in and `/s/<token>` share
   links are never affected either way.
-  Portal UI: `/login`, `/catalog` (role-filtered stream list), `/watch`
-  (single-stream WHEP viewer — includes the multiopus SDP-munge fix
-  extracted into `nexvue-portal-whep.js` since every edge publishes 8ch
-  positioned Opus; uses Stream via portal `sfu_whep` when the station is
-  hybrid/sfu; full VU/CC/stats deferred), `/stations` + `/users`
-  (`org_admin`: enrollment-token issuance, portal user + catalog ACL
-  management).
-  Explicit non-goals for this slice: fleet health dashboards, cross-site
-  multi-pane Multiview, org billing/self-serve signup, portal viewers
-  landing on the edge's real Player UI (deferred — would need
-  `nexvue-web-router.php`'s session gate to accept a portal JWT), instant
-  key-rotation/revocation push (bounded by heartbeat interval instead),
-  multi-org membership per portal user.
+  Portal UI (under `/nexvue/`): `/login` (NexAPP continue), `/access`
+  (403 not-assigned), `/catalog` (role-filtered stream list + Open station
+  UI SSO), `/watch` (single-stream WHEP viewer — includes the multiopus
+  SDP-munge fix extracted into `nexvue-portal-whep.js` since every edge
+  publishes 8ch positioned Opus; uses Stream via portal `sfu_whep` when
+  the station is hybrid/sfu; full VU/CC/stats deferred), `/stations` +
+  `/users` (`org_admin`: enrollment-token issuance, NexAPP group→station
+  mapping). Adopt URL on edges must include `/nexvue`
+  (`https://nexapp.nexstar.tv/nexvue`) so heartbeat hits
+  `/nexvue/api/portal`.
+  Explicit non-goals for this slice: fleet health dashboards beyond
+  heartbeat-age, cross-site multi-pane Multiview, org billing/self-serve
+  signup, portal viewers landing on the edge's real Player UI without SSO
+  (SSO hash hop is the path; a portal JWT on the edge session gate is
+  separate), instant key-rotation/revocation push (bounded by heartbeat
+  interval instead), multi-org membership per portal user.
 
 ## Known open items / risks
 

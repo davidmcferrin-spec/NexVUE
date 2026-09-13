@@ -3,95 +3,65 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NexVUE Portal — Users</title>
-<script src="/assets/nexvue-ui.js"></script>
+<title>NexVUE — Access</title>
+<link rel="stylesheet" href="/nexvue/assets/nexapp-tokens.css">
+<link rel="stylesheet" href="/assets/nexapp-theme.css">
+<link rel="stylesheet" href="/nexvue/assets/nexvue-portal.css">
+<script>
+(function () {
+  var t = localStorage.getItem("nexapp-theme") || "system";
+  var r = t === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : t;
+  document.documentElement.setAttribute("data-theme", r);
+})();
+</script>
+<script src="/assets/theme.js" defer></script>
+<script src="/nexvue/assets/nexvue-ui.js"></script>
 <style>
-  :root {
-    --bg: #14181d; --panel: #1d232b; --edge: #2c3542;
-    --text: #d6dde6; --dim: #98a6b5; --muted: #b0bbc8;
-    --ok: #4cc38a; --bad: #e5484d; --acc: #56c4f5; --on-acc: #08131a;
-  }
-  html[data-theme="light"] {
-    --bg: #f3f5f7; --panel: #ffffff; --edge: #cdd5de;
-    --text: #1c232b; --dim: #5a6675; --muted: #3d4a58;
-    --ok: #1f9d5c; --bad: #c62828; --acc: #0b7ea4; --on-acc: #ffffff;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; }
-  nav.topnav {
-    display: flex; align-items: center; gap: 14px; padding: 10px 16px;
-    background: var(--panel); border-bottom: 1px solid var(--edge);
-  }
-  nav.topnav a { color: var(--dim); text-decoration: none; font-size: 13px; }
-  nav.topnav a:hover, nav.topnav a.active { color: var(--acc); }
-  nav.topnav .spacer { flex: 1; }
-  .theme-toggle {
-    background: transparent; color: var(--text); border: 1px solid var(--edge);
-    border-radius: 4px; padding: 5px 9px; font: inherit; font-size: 12px; cursor: pointer;
-  }
-  main { padding: 16px; max-width: 900px; margin: 0 auto; }
-  h1 { font-size: 16px; margin: 0 0 12px; color: var(--acc); }
-  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 14px; margin-bottom: 16px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--edge); }
-  th { color: var(--dim); font-weight: 500; }
-  input, select { background: var(--bg); color: var(--text); border: 1px solid var(--edge); border-radius: 4px; padding: 7px 9px; font: inherit; }
-  button { background: var(--acc); color: var(--on-acc); border: none; border-radius: 4px; padding: 7px 12px; font: inherit; font-weight: 600; cursor: pointer; }
   form.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .chk-list { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; font-size: 13px; }
-  .err { color: var(--bad); font-size: 12px; }
-  .ok-msg { color: var(--ok); font-size: 12px; }
-  .empty { color: var(--dim); font-size: 13px; }
 </style>
 </head>
 <body>
 <nav class="topnav">
-  <span style="color:var(--acc);font-weight:600;">NexVUE Portal</span>
-  <a href="/catalog">Catalog</a>
-  <a href="/stations">Stations</a>
-  <a href="/users" class="active">Users</a>
+  <a class="apps-link" href="/portal.php">Apps</a>
+  <a class="brand" href="/nexvue/catalog">NexVUE</a>
+  <a href="/nexvue/catalog">Catalog</a>
+  <a href="/nexvue/stations">Stations</a>
+  <a href="/nexvue/users" class="active">Access</a>
   <span class="spacer"></span>
   <span id="nav-who" hidden></span>
   <a href="#" id="nav-logout" hidden>Sign out</a>
-  <button type="button" class="theme-toggle" id="theme-toggle">Light</button>
+  <button type="button" class="theme-toggle" id="theme-toggle">Theme</button>
 </nav>
 <main>
-  <h1>Portal users</h1>
+  <h1>NexAPP groups</h1>
+  <p class="meta">NexAPP User/Admin is the catalog ceiling. Map a granted group to stations and channels; that bundle is pushed on the next node heartbeat. Never maps to station admin.</p>
   <div class="panel">
-    <div id="users"><p class="empty">Loading…</p></div>
+    <div id="groups"><p class="empty">Loading…</p></div>
   </div>
 
-  <h1>Add a user</h1>
-  <div class="panel">
-    <form id="create-form" class="row">
-      <input id="new-username" placeholder="Username" required>
-      <input id="new-password" type="password" placeholder="Password (min 8)" required minlength="8">
-      <select id="new-role">
-        <option value="org_viewer">org_viewer</option>
-        <option value="org_operator">org_operator</option>
-        <option value="org_admin">org_admin</option>
-      </select>
-      <button type="submit">Create</button>
-    </form>
-    <div class="err" id="create-err"></div>
-  </div>
-
-  <h1>Catalog access (org_viewer)</h1>
+  <h1>Map group → station</h1>
   <div class="panel">
     <form id="acl-form" class="row">
-      <select id="acl-user"></select>
+      <select id="acl-group"></select>
       <select id="acl-station"></select>
-      <button type="submit">Grant selected channels</button>
+      <select id="acl-role">
+        <option value="viewer">edge viewer</option>
+        <option value="operator">edge operator</option>
+        <option value="sharer">edge sharer</option>
+      </select>
+      <button type="submit">Save mapping</button>
     </form>
+    <label><input type="checkbox" id="acl-all" checked> All channels on this station</label>
     <div class="chk-list" id="acl-channels"></div>
     <div class="err" id="acl-err"></div>
     <div class="ok-msg" id="acl-ok"></div>
   </div>
 </main>
-<script src="/assets/nexvue-portal-auth-gate.js"></script>
+<script src="/nexvue/assets/nexvue-portal-auth-gate.js"></script>
 <script>
 (function () {
-  let usersCache = [];
+  let groupsCache = [];
   let stationsCache = [];
 
   function escapeHtml(s) {
@@ -100,44 +70,49 @@
     });
   }
 
-  function renderUsers(users) {
-    const el = document.getElementById("users");
-    if (!users.length) {
-      el.innerHTML = '<p class="empty">No users.</p>';
+  function renderGroups(groups, acl) {
+    const el = document.getElementById("groups");
+    if (!groups.length) {
+      el.innerHTML = '<p class="empty">No NexAPP groups granted to NexVUE yet (or directory unavailable).</p>';
       return;
     }
     const table = document.createElement("table");
-    table.innerHTML = "<tr><th>Username</th><th>Role</th><th>Email</th><th>Disabled</th></tr>";
-    for (const u of users) {
+    table.innerHTML = "<tr><th>Group</th><th>Catalog</th><th>Members</th><th>Station maps</th></tr>";
+    groups.forEach(function (g) {
+      const maps = (acl || []).filter(function (a) { return a.nexapp_group_id === g.id; });
       const tr = document.createElement("tr");
       tr.innerHTML =
-        "<td>" + escapeHtml(u.username) + "</td>" +
-        "<td>" + escapeHtml(u.role) + "</td>" +
-        "<td>" + escapeHtml(u.email || "—") + "</td>" +
-        "<td>" + (u.disabled_at ? "yes" : "no") + "</td>";
+        "<td>" + escapeHtml(g.name) + "</td>" +
+        "<td>" + escapeHtml(g.catalog_role) + "</td>" +
+        "<td>" + (g.members || []).length + "</td>" +
+        "<td>" + (maps.length ? maps.map(function (m) {
+          return escapeHtml(m.station_id.slice(0, 8)) + " " + escapeHtml(m.edge_role) +
+            (m.channel_base ? " " + m.channel_base : " all");
+        }).join("; ") : "—") + "</td>";
       table.appendChild(tr);
-    }
+    });
     el.textContent = "";
     el.appendChild(table);
   }
 
-  function populateAclSelectors() {
-    const userSel = document.getElementById("acl-user");
-    userSel.textContent = "";
-    for (const u of usersCache.filter(function (u) { return u.role === "org_viewer"; })) {
+  function populate() {
+    const groupSel = document.getElementById("acl-group");
+    groupSel.textContent = "";
+    groupsCache.forEach(function (g) {
       const opt = document.createElement("option");
-      opt.value = u.id;
-      opt.textContent = u.username;
-      userSel.appendChild(opt);
-    }
+      opt.value = g.id;
+      opt.textContent = g.name + " (" + g.catalog_role + ")";
+      opt.dataset.name = g.name;
+      groupSel.appendChild(opt);
+    });
     const stationSel = document.getElementById("acl-station");
     stationSel.textContent = "";
-    for (const s of stationsCache) {
+    stationsCache.forEach(function (s) {
       const opt = document.createElement("option");
       opt.value = s.id;
       opt.textContent = s.name;
       stationSel.appendChild(opt);
-    }
+    });
     renderAclChannels();
   }
 
@@ -147,7 +122,7 @@
     const box = document.getElementById("acl-channels");
     box.textContent = "";
     if (!station) return;
-    for (const ch of station.channels || []) {
+    (station.channels || []).forEach(function (ch) {
       const label = document.createElement("label");
       const cb = document.createElement("input");
       cb.type = "checkbox";
@@ -155,18 +130,18 @@
       label.appendChild(cb);
       label.appendChild(document.createTextNode(" " + (ch.alias || ch.channel_base)));
       box.appendChild(label);
-    }
+    });
   }
 
   function loadAll() {
     return Promise.all([
-      NexVuePortal.api("users_list"),
+      NexVuePortal.api("nexapp_groups"),
       NexVuePortal.api("stations_list"),
     ]).then(function (results) {
-      usersCache = results[0].users || [];
+      groupsCache = results[0].groups || [];
       stationsCache = results[1].stations || [];
-      renderUsers(usersCache);
-      populateAclSelectors();
+      renderGroups(groupsCache, results[0].acl || []);
+      populate();
     });
   }
 
@@ -175,23 +150,8 @@
   });
 
   document.getElementById("acl-station").addEventListener("change", renderAclChannels);
-
-  document.getElementById("create-form").addEventListener("submit", async function (ev) {
-    ev.preventDefault();
-    const err = document.getElementById("create-err");
-    err.textContent = "";
-    try {
-      await NexVuePortal.api("user_create", {
-        username: document.getElementById("new-username").value,
-        password: document.getElementById("new-password").value,
-        role: document.getElementById("new-role").value,
-      });
-      document.getElementById("new-username").value = "";
-      document.getElementById("new-password").value = "";
-      loadAll();
-    } catch (e) {
-      err.textContent = e.message || "failed";
-    }
+  document.getElementById("acl-all").addEventListener("change", function () {
+    document.getElementById("acl-channels").hidden = document.getElementById("acl-all").checked;
   });
 
   document.getElementById("acl-form").addEventListener("submit", async function (ev) {
@@ -200,22 +160,28 @@
     const ok = document.getElementById("acl-ok");
     err.textContent = "";
     ok.textContent = "";
-    const userId = document.getElementById("acl-user").value;
+    const groupSel = document.getElementById("acl-group");
+    const groupId = groupSel.value;
+    const groupName = groupSel.options[groupSel.selectedIndex] ? groupSel.options[groupSel.selectedIndex].dataset.name : "";
     const stationId = document.getElementById("acl-station").value;
-    const channels = Array.from(document.querySelectorAll("#acl-channels input:checked")).map(function (cb) {
+    const all = document.getElementById("acl-all").checked;
+    const channels = all ? null : Array.from(document.querySelectorAll("#acl-channels input:checked")).map(function (cb) {
       return cb.value;
     });
-    if (!userId || !stationId) {
-      err.textContent = "select a viewer and a station";
+    if (!groupId || !stationId) {
+      err.textContent = "select a group and a station";
       return;
     }
     try {
-      await NexVuePortal.api("catalog_acl_put", {
-        portal_user_id: userId,
+      await NexVuePortal.api("group_acl_put", {
+        nexapp_group_id: groupId,
+        nexapp_group_name: groupName,
         station_id: stationId,
+        edge_role: document.getElementById("acl-role").value,
         channels: channels,
       });
-      ok.textContent = "Saved (" + channels.length + " channel(s) granted).";
+      ok.textContent = "Saved. Nodes pick this up on the next heartbeat.";
+      loadAll();
     } catch (e) {
       err.textContent = e.message || "failed";
     }
