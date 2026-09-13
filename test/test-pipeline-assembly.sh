@@ -51,10 +51,10 @@ grep -q "audiorate" <<<"$out" || fail "T1 audiorate present (gapless timestamp f
 grep -q "tee" <<<"$out" && fail "T1 no tee when LO disabled"
 
 # T2: LO rendition adds tee, second sink, lo caps, audio tee
-out=$(DEVICE_NUMBER=3 CHANNEL_PATH=ch3 LO_ENABLE=true LO_PRESET=720p run_encode)
+out=$(DEVICE_NUMBER=3 CHANNEL_PATH=ch3 LO_ENABLE=true LO_PRESET=540p run_encode)
 grep -q "name=sinklo location=rtsp://127.0.0.1:8554/ch3lo" <<<"$out" || fail "T2 lo sink url"
 grep -q "tee name=vt" <<<"$out" || fail "T2 video tee"
-grep -q "width=1280,height=720,framerate=30000/1001" <<<"$out" || fail "T2 lo caps"
+grep -q "width=960,height=540,framerate=30000/1001" <<<"$out" || fail "T2 lo caps"
 grep -q "tee name=at" <<<"$out" || fail "T2 audio tee"
 [ "$(grep -o "vah264enc" <<<"$out" | wc -l)" -eq 2 ] || fail "T2 two encoders"
 
@@ -99,6 +99,10 @@ grep -q "bitrate=400" <<<"$out" || fail "T8 override bitrate"
 
 # T9: invalid preset rejected
 DEVICE_NUMBER=0 CHANNEL_PATH=ch0 LO_ENABLE=true LO_PRESET=1080p expect_usage_64 "T9 accepted bogus preset"
+out=$(DEVICE_NUMBER=0 CHANNEL_PATH=ch0 HI_PRESET=720p LO_ENABLE=true LO_PRESET=720p run_encode)
+grep -q "width=1280,height=720" <<<"$out" || fail "T9b HI 720p raster"
+grep -q "width=960,height=540" <<<"$out" || fail "T9b legacy LO 720p coerced to 540p"
+DEVICE_NUMBER=0 CHANNEL_PATH=ch0 HI_PRESET=480p expect_usage_64 "T9b accepted bogus HI preset"
 
 
 # T10: MAX_DEVICES bounds validation (Duo 2 = 4 channels)

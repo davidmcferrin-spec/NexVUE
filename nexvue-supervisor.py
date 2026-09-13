@@ -123,14 +123,24 @@ def normalize_lo_fps(value: str) -> str:
 # Bitrate defaults sized for CBR at LO target-usage=7 (same speed tier as HI).
 # Lower LO_TARGET_USAGE values look "sharper" but send QoS upstream and the
 # LO videorate/videoscale path then over-drops — can land near ~1 fps.
+HI_PRESETS: Dict[str, Tuple[int, int]] = {
+    "1080p": (1920, 1080),
+    "720p": (1280, 720),
+}
+# LO top rung is 540p — 720p is a HI raster, not a second encode.
 LO_PRESETS: Dict[str, Tuple[int, int, int]] = {
-    "720p": (1280, 720, 2500),
     "540p": (960, 540, 1500),
     "480p": (854, 480, 1200),
     "360p": (640, 360, 800),
     "240p": (426, 240, 500),
     "180p": (320, 180, 350),
 }
+LO_PRESET_ALIASES = {"720p": "540p"}
+
+
+def normalize_lo_preset(raw: str) -> str:
+    v = (raw or "360p").strip()
+    return LO_PRESET_ALIASES.get(v, v)
 
 
 @dataclass(frozen=True)
@@ -172,9 +182,9 @@ class SupervisorConfig:
     lo_preset: str = "360p"
     lo_fps: str = "30000/1001"
     lo_rtsp_url: str = ""
-    lo_width: int = 1280
-    lo_height: int = 720
-    lo_bitrate_kbps: int = 2500
+    lo_width: int = 640
+    lo_height: int = 360
+    lo_bitrate_kbps: int = 800
     # LO quality / buffering (default usage=7 matches HI speed; lower = sharper but
     # risks QoS-driven frame starvation on the LO scale/rate branch).
     lo_target_usage: int = 7
@@ -355,8 +365,14 @@ def load_config(
     if watchdog_ms < 0:
         raise ConfigError(f"WATCHDOG_MS must be >= 0, got {watchdog_ms}")
 
-    output_width = opt_int("OUTPUT_WIDTH", 1920)
-    output_height = opt_int("OUTPUT_HEIGHT", 1080)
+    hi_preset = opt("HI_PRESET", "1080p")
+    if hi_preset not in HI_PRESETS:
+        raise ConfigError(
+            f"HI_PRESET must be one of {','.join(HI_PRESETS)}, got {hi_preset!r}"
+        )
+    hi_w, hi_h = HI_PRESETS[hi_preset]
+    output_width = opt_int("OUTPUT_WIDTH", hi_w) if raw("OUTPUT_WIDTH") is not None else hi_w
+    output_height = opt_int("OUTPUT_HEIGHT", hi_h) if raw("OUTPUT_HEIGHT") is not None else hi_h
     if output_width <= 0 or output_width % 2 or output_height <= 0 or output_height % 2:
         raise ConfigError(
             f"OUTPUT_WIDTH/OUTPUT_HEIGHT must be positive even integers, got {output_width}x{output_height}"
@@ -372,7 +388,7 @@ def load_config(
 
     lo_enable = opt_bool("LO_ENABLE", True)
 
-    lo_preset = opt("LO_PRESET", "360p")
+    lo_preset = normalize_lo_preset(opt("LO_PRESET", "360p"))
     if lo_preset not in LO_PRESETS:
         raise ConfigError(f"LO_PRESET must be one of {','.join(LO_PRESETS)}, got {lo_preset!r}")
     lo_w_def, lo_h_def, lo_br_def = LO_PRESETS[lo_preset]

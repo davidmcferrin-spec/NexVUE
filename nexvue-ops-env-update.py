@@ -32,6 +32,7 @@ EDITABLE_KEYS = frozenset({
     "SRT_LATENCY_MS",
     "DEINT_FIELDS",
     "DEINT_METHOD",
+    "HI_PRESET",
     "BITRATE_KBPS",
     "GOP_FRAMES",
     "ENABLE_AUDIO",
@@ -73,7 +74,9 @@ SRT_URI_SAFE_RE = re.compile(r"^srt://[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+$", re
 
 # Curated LO framerates only — free-form "29.97" / "15" breaks GStreamer caps.
 LO_FPS_ALLOWED = frozenset({"", "60000/1001", "30000/1001", "15000/1001"})
-LO_PRESET_ALLOWED = frozenset({"720p", "540p", "480p", "360p", "240p", "180p"})
+HI_PRESET_ALLOWED = frozenset({"1080p", "720p"})
+LO_PRESET_ALLOWED = frozenset({"540p", "480p", "360p", "240p", "180p"})
+LO_PRESET_ALIASES = {"720p": "540p"}
 LO_TARGET_USAGE_ALLOWED = frozenset({"1", "2", "3", "4", "5", "6", "7"})
 AUDIO_FRAME_MS_ALLOWED = frozenset({"2", "5", "10", "20", "40", "60"})
 AUDIO_CHANNELS_ALLOWED = frozenset({"2", "4", "6", "8"})
@@ -287,9 +290,16 @@ def sanitize_value(key: str, value: str) -> str:
         if value not in VIDEO_ENCODER_ALLOWED:
             raise ValueError("VIDEO_ENCODER must be vah264enc or x264enc")
         return value
+    if key == "HI_PRESET":
+        if value == "":
+            return value
+        if value not in HI_PRESET_ALLOWED:
+            raise ValueError("HI_PRESET must be 1080p or 720p")
+        return value
     if key == "LO_PRESET":
         if value == "":
             return value
+        value = LO_PRESET_ALIASES.get(value, value)
         if value not in LO_PRESET_ALLOWED:
             raise ValueError(
                 "LO_PRESET must be one of " + ", ".join(sorted(LO_PRESET_ALLOWED))

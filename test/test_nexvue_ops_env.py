@@ -103,6 +103,14 @@ class TestApplyPatch(unittest.TestCase):
         self.assertIn("AUDIO_EMBEDS=1,2,7,8", out)
 
     def test_auto_none_sentinels(self):
+        self.assertEqual(mod.sanitize_value("HI_PRESET", "720p"), "720p")
+        self.assertEqual(mod.sanitize_value("HI_PRESET", ""), "")
+        with self.assertRaises(ValueError):
+            mod.sanitize_value("HI_PRESET", "480p")
+        self.assertEqual(mod.sanitize_value("LO_PRESET", "720p"), "540p")
+        self.assertEqual(mod.sanitize_value("LO_PRESET", "360p"), "360p")
+        with self.assertRaises(ValueError):
+            mod.sanitize_value("LO_PRESET", "1080p")
         self.assertEqual(mod.sanitize_value("LO_WIDTH", "auto"), "")
         self.assertEqual(mod.sanitize_value("LO_HEIGHT", "AUTO"), "")
         self.assertEqual(mod.sanitize_value("LO_BITRATE_KBPS", "auto"), "")
@@ -265,8 +273,16 @@ class TestApplyPatch(unittest.TestCase):
         php_keys = set(re.findall(r"'([A-Z0-9_]+)'", m.group(1)))
         self.assertEqual(php_keys, set(mod.EDITABLE_KEYS))
         self.assertIn("DEINT_METHOD", php_keys)
+        self.assertIn("HI_PRESET", php_keys)
         self.assertIn("AUTO_PARK_UNLOCK_CYCLES", php_keys)
         self.assertIn("AUTO_UNPARK", php_keys)
+
+    def test_settings_hi_preset_and_lo_cutoff(self) -> None:
+        html = (SPEC_PATH.parent / "web-node" / "channels.html").read_text(encoding="utf-8")
+        self.assertIn('HI_PRESET: "1080p"', html)
+        self.assertIn('options: ["1080p", "720p"]', html)
+        self.assertIn('options: ["540p", "480p", "360p", "240p", "180p"]', html)
+        self.assertNotIn('options: ["720p", "540p"', html)
 
 
 if __name__ == "__main__":

@@ -107,7 +107,7 @@ const LOGO_ALLOWED_MIMES = [
 
 const EDITABLE_KEYS = [
     'CHANNEL_ALIAS', 'INPUT_TYPE', 'SRT_URI', 'SRT_LATENCY_MS',
-    'DEINT_FIELDS', 'DEINT_METHOD', 'BITRATE_KBPS', 'GOP_FRAMES',
+    'DEINT_FIELDS', 'DEINT_METHOD', 'HI_PRESET', 'BITRATE_KBPS', 'GOP_FRAMES',
     'ENABLE_AUDIO', 'AUDIO_FRAME_MS', 'AUDIO_BITRATE_BPS', 'AUDIO_CHANNELS', 'AUDIO_LAYOUT', 'AUDIO_EMBEDS',
     'DECKLINK_BUFFER_FRAMES', 'DECKLINK_DROP_NO_SIGNAL_FRAMES', 'VIDEO_ENCODER', 'EXTRA_ENC_ARGS',
     'LO_ENABLE', 'LO_PRESET', 'LO_WIDTH', 'LO_HEIGHT', 'LO_BITRATE_KBPS', 'LO_FPS',
@@ -1928,6 +1928,7 @@ if ($action === 'channels_list') {
             'INPUT_TYPE' => $keys['INPUT_TYPE'] ?? 'decklink',
             'DEVICE_NUMBER' => $keys['DEVICE_NUMBER'] ?? (string)$id,
             'DEINT_FIELDS' => $keys['DEINT_FIELDS'] ?? '',
+            'HI_PRESET' => $keys['HI_PRESET'] ?? '',
             'BITRATE_KBPS' => $keys['BITRATE_KBPS'] ?? '',
             'ENABLE_AUDIO' => $keys['ENABLE_AUDIO'] ?? '',
             'LO_ENABLE' => $keys['LO_ENABLE'] ?? '',

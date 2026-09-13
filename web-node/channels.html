@@ -787,6 +787,7 @@
   // Concrete defaults match nexvue-encode.sh; the form never shows blank/unset.
   const FIELD_DEFAULTS = {
     CHANNEL_ALIAS: "",
+    HI_PRESET: "1080p",
     BITRATE_KBPS: "5000",
     GOP_FRAMES: "60",
     DEINT_FIELDS: "all",
@@ -817,10 +818,20 @@
       tip: "Friendly label on every UI except this Path column (Users, shares, Metrics, Services, Player, Multiview, portal). Does not change the MediaMTX path (still ch0, ch1, …). Spaces are fine. Empty = UIs show the path only.",
       placeholder: "(none — show path)",
     },
+    HI_PRESET: {
+      label: "HI resolution",
+      type: "select",
+      options: ["1080p", "720p"],
+      optionLabels: {
+        "1080p": "1080p (1920×1080)",
+        "720p": "720p (1280×720)",
+      },
+      tip: "Primary encode raster. Use 720p for 720p50/59.94/60 sources (no upscale). 1080i/1080p sources stay 1080p. Input is always scaled to this size so WHEP does not renegotiate. Default: 1080p.",
+    },
     BITRATE_KBPS: {
       label: "HI bitrate (kbps)",
       type: "text",
-      tip: "Primary H.264 CBR bitrate in kbps. Typical: 4000–6000 for 1080p59.94; 2500–3000 for 29.97p. Default 5000.",
+      tip: "Primary H.264 CBR bitrate in kbps. Typical: 4000–6000 for 1080p59.94; 2500–4000 for 720p59.94; 2500–3000 for 29.97p. Default 5000.",
     },
     GOP_FRAMES: {
       label: "Keyframe interval (frames)",
@@ -832,8 +843,8 @@
       type: "select",
       options: ["all", "top"],
       optionLabels: {
-        all: "All fields → 1080p59.94",
-        top: "Top field → 1080p29.97",
+        all: "All fields → 59.94p",
+        top: "Top field → 29.97p",
       },
       tip: "From a 1080i59.94 source: all = full-motion 59.94p (program / director). top = 29.97p at about half encode cost (multiview / prompter). Default: all fields.",
     },
@@ -917,8 +928,8 @@
     LO_PRESET: {
       label: "LO resolution",
       type: "select",
-      options: ["720p", "540p", "480p", "360p", "240p", "180p"],
-      tip: "LO height ladder with safe default bitrates. Prefer this over custom width/height under Advanced. Default: 360p.",
+      options: ["540p", "480p", "360p", "240p", "180p"],
+      tip: "LO height ladder (max 540p) with safe default bitrates. 720p is HI only. Prefer this over custom width/height under Advanced. Default: 360p.",
       depends: { LO_ENABLE: true },
     },
     LO_FPS: {
@@ -986,7 +997,7 @@
       title: "Video",
       blurb: "HI encode from DeckLink SDI. Source connector is the channel slot device number.",
       keys: [
-        "BITRATE_KBPS", "GOP_FRAMES", "DEINT_FIELDS", "DEINT_METHOD", "VIDEO_ENCODER",
+        "HI_PRESET", "BITRATE_KBPS", "GOP_FRAMES", "DEINT_FIELDS", "DEINT_METHOD", "VIDEO_ENCODER",
         "DECKLINK_BUFFER_FRAMES",
       ],
     },
@@ -1029,6 +1040,7 @@
   function resolveFieldValue(key, raw) {
     const v = raw == null ? "" : String(raw).trim();
     if (key === "CHANNEL_ALIAS") return v;
+    if (key === "LO_PRESET" && v === "720p") return "540p";
     if (key === "LO_WIDTH" || key === "LO_HEIGHT" || key === "LO_BITRATE_KBPS") {
       return v === "" ? "auto" : v;
     }
@@ -1047,6 +1059,7 @@
   /** Form value → value written to .env (auto/none → blank). */
   function serializeFieldValue(key, value) {
     const v = value == null ? "" : String(value).trim();
+    if (key === "LO_PRESET" && v === "720p") return "540p";
     if (key === "LO_WIDTH" || key === "LO_HEIGHT" || key === "LO_BITRATE_KBPS") {
       if (v === "" || v.toLowerCase() === "auto") return "";
       return v;
@@ -1290,7 +1303,7 @@
         .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
       let loHtml;
       if (c.LO_ENABLE === "true") {
-        const preset = esc(c.LO_PRESET || "on");
+        const preset = esc(c.LO_PRESET === "720p" ? "540p" : (c.LO_PRESET || "on"));
         loHtml = `<span class="lo-yes">yes</span> · ${preset}`;
       } else {
         loHtml = `<span class="lo-no">no</span>`;
@@ -1302,7 +1315,9 @@
       const stateTxt = parked
         ? "disabled"
         : (c.state || "—") + (c.enabled === "disabled" ? " · disabled" : "");
+      const hi = c.HI_PRESET === "720p" ? "720p" : "1080p";
       const deint = c.DEINT_FIELDS === "top" ? "29.97p" : (c.DEINT_FIELDS === "all" ? "59.94p" : (c.DEINT_FIELDS || "—"));
+      const output = (deint === "59.94p" || deint === "29.97p") ? (hi + deint) : (hi + (deint !== "—" ? " " + deint : ""));
       const audio = c.ENABLE_AUDIO === "false" ? "off" : (c.ENABLE_AUDIO === "true" || !c.ENABLE_AUDIO ? "on" : (c.ENABLE_AUDIO || "—"));
       return `<tr class="row" data-id="${c.id}">
         <td><input type="checkbox" class="sel" value="${c.id}"></td>
@@ -1310,7 +1325,7 @@
         <td>${esc(c.CHANNEL_PATH || ("ch" + c.id))}</td>
         <td>${esc(alias)}</td>
         <td>${esc(c.BITRATE_KBPS || "—")}</td>
-        <td>${esc(deint)}</td>
+        <td>${esc(output)}</td>
         <td>${esc(audio)}</td>
         <td>${loHtml}</td>
         <td>${esc(stateTxt)}</td>

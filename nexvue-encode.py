@@ -73,14 +73,24 @@ class ConfigError(Exception):
         self.exit_code = exit_code
 
 
+HI_PRESETS = {
+    "1080p": (1920, 1080),
+    "720p": (1280, 720),
+}
+# LO top rung is 540p — 720p is a HI raster, not a second encode.
 LO_PRESETS = {
-    "720p": (1280, 720, 1200),
     "540p": (960, 540, 800),
     "480p": (854, 480, 700),
     "360p": (640, 360, 500),
     "240p": (426, 240, 300),
     "180p": (320, 180, 200),
 }
+LO_PRESET_ALIASES = {"720p": "540p"}
+
+
+def normalize_lo_preset(raw: str) -> str:
+    v = (raw or "360p").strip()
+    return LO_PRESET_ALIASES.get(v, v)
 LO_FPS_ALLOWED = frozenset({"60000/1001", "30000/1001", "15000/1001"})
 LO_FPS_ALIASES = {
     "60": "60000/1001",
@@ -502,8 +512,18 @@ def load_config(env: Mapping[str, str]) -> EncodeConfig:
     if watchdog_ms < 0:
         raise ConfigError(f"WATCHDOG_MS must be >= 0, got {watchdog_ms}")
 
-    output_width = opt_int("OUTPUT_WIDTH", 1920)
-    output_height = opt_int("OUTPUT_HEIGHT", 1080)
+    hi_preset = opt("HI_PRESET", "1080p")
+    if hi_preset not in HI_PRESETS:
+        raise ConfigError(
+            f"HI_PRESET must be one of {','.join(HI_PRESETS)}, got {hi_preset!r}"
+        )
+    hi_w, hi_h = HI_PRESETS[hi_preset]
+    output_width = opt_int("OUTPUT_WIDTH", hi_w) if raw("OUTPUT_WIDTH") is not None else hi_w
+    output_height = opt_int("OUTPUT_HEIGHT", hi_h) if raw("OUTPUT_HEIGHT") is not None else hi_h
+    if output_width <= 0 or output_width % 2 or output_height <= 0 or output_height % 2:
+        raise ConfigError(
+            f"OUTPUT_WIDTH/OUTPUT_HEIGHT must be positive even integers, got {output_width}x{output_height}"
+        )
     rtsp_url = opt("RTSP_URL", f"rtsp://127.0.0.1:8554/{channel_path}")
     video_encoder = opt("VIDEO_ENCODER", "vah264enc")
     if video_encoder not in ("vah264enc", "x264enc"):
@@ -511,7 +531,7 @@ def load_config(env: Mapping[str, str]) -> EncodeConfig:
     extra_enc_args = opt("EXTRA_ENC_ARGS", "")
 
     lo_enable = opt_bool("LO_ENABLE", True)
-    lo_preset = opt("LO_PRESET", "360p")
+    lo_preset = normalize_lo_preset(opt("LO_PRESET", "360p"))
     if lo_preset not in LO_PRESETS:
         raise ConfigError(
             f"LO_PRESET must be one of {','.join(LO_PRESETS)}, got {lo_preset!r}"

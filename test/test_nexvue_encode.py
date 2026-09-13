@@ -126,11 +126,24 @@ class TestPipelineAssembly(unittest.TestCase):
         self.assertIn("watchdog timeout=3000", blob)
 
     def test_lo_tee_and_two_encoders(self) -> None:
-        blob = mod.print_pipelines(mod.load_config(env(LO_ENABLE="true", LO_PRESET="720p")))
+        blob = mod.print_pipelines(mod.load_config(env(LO_ENABLE="true", LO_PRESET="540p")))
         self.assertIn("tee name=vt", blob)
         self.assertIn("name=sinklo location=rtsp://127.0.0.1:8554/ch0lo", blob)
         self.assertEqual(blob.count("vah264enc"), 2)
+        self.assertIn("width=960,height=540", blob)
+
+    def test_hi_preset_720p_and_legacy_lo_720p_coerces(self) -> None:
+        cfg = mod.load_config(env(HI_PRESET="720p", LO_ENABLE="true", LO_PRESET="720p"))
+        self.assertEqual((cfg.output_width, cfg.output_height), (1280, 720))
+        self.assertEqual(cfg.lo_preset, "540p")
+        self.assertEqual((cfg.lo_width, cfg.lo_height), (960, 540))
+        blob = mod.print_pipelines(cfg)
         self.assertIn("width=1280,height=720", blob)
+        self.assertIn("width=960,height=540", blob)
+        cfg1080 = mod.load_config(env())
+        self.assertEqual((cfg1080.output_width, cfg1080.output_height), (1920, 1080))
+        with self.assertRaises(mod.ConfigError):
+            mod.load_config(env(HI_PRESET="480p"))
 
     def test_no_audio_omits_decklinkaudiosrc(self) -> None:
         blob = mod.print_pipelines(mod.load_config(env(ENABLE_AUDIO="false")))

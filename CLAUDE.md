@@ -44,7 +44,9 @@ this box can't get additional ports opened.
 - Adaptive bandwidth = per-channel LO rendition (tee in the same pipeline —
   DeckLink sub-devices are exclusive-open, never a second process) plus
   player-side loss-driven switching. Defaults: `LO_ENABLE=true`,
-  `LO_PRESET=360p` (per-channel override still supported). True simulcast/SFU
+  `LO_PRESET=360p`, ladder max **540p** (720p is HI only; legacy `720p` LO
+  coerces to 540p). Per-channel `HI_PRESET=1080p|720p` (Settings → HI
+  resolution; default 1080p). True simulcast/SFU
   (Ant Media, Janus) is the deliberate back-pocket option, not the plan.
 - Channel slots `MAX_CHANNELS` (default 8, ids 0–7) match Quad 2 DeckLink
   `MAX_DEVICES`. Settings → Card / encode slots (admin) is the writer;
@@ -426,8 +428,8 @@ this box can't get additional ports opened.
  allowlisted sudo wrappers. Logo upload/delete is www-data direct write
  (no sudo). Settings channel editor (and bulk edit) shows only live encode/player
  knobs with human labels; audio-on / LO-on reveal dependent fields;
- Advanced is collapsed. Per-channel `DEINT_METHOD` (default yadif) sits next
- to `DEINT_FIELDS` for 1080i→p quality. Field labels show a ~2s hover/focus tip
+ Advanced is collapsed. Per-channel `HI_PRESET` (1080p / 720p) and
+ `DEINT_METHOD` (default yadif) sit with `DEINT_FIELDS` for 1080i→p quality. Field labels show a ~2s hover/focus tip
  (`#field-tip`) with purpose, recommended range, and blank semantics —
   same delay pattern as Player `#stat-tip`. Requires admin/operator session
   (not share links). Services is admin-only. Settings **Card / encode slots**

@@ -122,6 +122,18 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual((cfg.lo_width, cfg.lo_height, cfg.lo_bitrate_kbps), (640, 360, 800))
         self.assertEqual(cfg.lo_target_usage, 7)
         self.assertEqual(cfg.lo_queue_buffers, 16)
+        cfg720 = mod.load_config(
+            {
+                "DEVICE_NUMBER": "0",
+                "CHANNEL_PATH": "ch0",
+                "HI_PRESET": "720p",
+                "LO_ENABLE": "true",
+                "LO_PRESET": "720p",
+            }
+        )
+        self.assertEqual((cfg720.output_width, cfg720.output_height), (1280, 720))
+        self.assertEqual(cfg720.lo_preset, "540p")
+        self.assertEqual((cfg720.lo_width, cfg720.lo_height), (960, 540))
         with self.assertRaises(mod.ConfigError):
             mod.load_config(
                 {"DEVICE_NUMBER": "0", "CHANNEL_PATH": "ch0", "LO_ENABLE": "true", "LO_PRESET": "1080p"}

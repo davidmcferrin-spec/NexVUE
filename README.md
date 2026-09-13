@@ -271,8 +271,13 @@ proxies (`nexvue-mediamtx-api.php`, `nexvue-status.php`).
   is `nexvue-scopes-pop` / `nexvue-spectrum-pop`, drag position is
   `nexvue-scopes-pos` / `nexvue-spectrum-pos`).
   Existing prefs unchanged.
-- **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`
-  (existing station `.env` files unchanged until rewritten).
+- **HI raster:** per-channel `HI_PRESET=1080p` (default, 1920×1080) or
+  `720p` (1280×720). Settings → HI resolution. Input is scaled to that
+  constant size (720p SDI → 720p HI with no upscale). `OUTPUT_WIDTH` /
+  `OUTPUT_HEIGHT` still override if hand-set.
+- **LO defaults (new channel / factory):** `LO_ENABLE=true`, `LO_PRESET=360p`.
+  LO ladder max is **540p** (720p is HI only). Legacy `LO_PRESET=720p` is
+  coerced to 540p.
 - **MediaMTX:** `authMethod: jwt`, JWKS at
   `http://127.0.0.1:9080/nexvue-jwks.php` (localhost-only Apache vhost from
   `setup.sh` — avoids HTTPS redirects breaking JWKS), short-lived viewer JWTs
@@ -1242,7 +1247,7 @@ expired; JWT auth is the lasting gate.
   `systemctl enable --now nexvue-status`. Status queries coexist safely with an
   active capture.
 - **LO renditions (adaptive bandwidth):** default `LO_ENABLE=true` /
-  `LO_PRESET=360p` for new channel envs and Factory defaults (override per
+  `LO_PRESET=360p` (ladder max 540p) for new channel envs and Factory defaults (override per
   channel). Publishes `<path>lo` alongside HI — one live source, two QSV
   encodes via tee (`LO_TARGET_USAGE=7`, deeper LO queue, `qos=false` on LO
   videorate/scale). Watch iGPU load when many LO tees run. Settings only
