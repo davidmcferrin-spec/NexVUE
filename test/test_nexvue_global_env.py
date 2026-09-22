@@ -43,9 +43,8 @@ def migrate_max_devices(legacy_values: list[str]) -> tuple[str, str | None]:
 
 class TestEncodeServicePrecedence(unittest.TestCase):
     def test_channel_env_sourced_before_global(self) -> None:
-        # Phase 1.5 input-selector/slate (nexvue-supervisor.py) was rolled
-        # back — production ExecStart is nexvue-encode.sh -> nexvue-encode.py
-        # (persistent MediaMTX publish + disposable DeckLink capture).
+        # Production ExecStart is nexvue-encode.sh → nexvue-encode.py.
+        # The removed Phase 1.5 supervisor must not come back as ExecStart.
         text = (ROOT / "nexvue-encode@.service").read_text(encoding="utf-8")
         self.assertIn("nexvue-encode.sh", text)
         self.assertNotIn("nexvue-supervisor.py", text)

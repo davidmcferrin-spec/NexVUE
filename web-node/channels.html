@@ -782,8 +782,9 @@
     el.addEventListener("blur", () => { if (tipAnchor === el) hideFieldTip(); });
   }
 
-  // UI surface only — unused / supervisor-era keys stay writable via hand-edited
-  // .env and factory-default wipe, but are not shown in the editor.
+  // UI surface only — allowlisted keys that are not in FIELD_GROUPS (SRT hold,
+  // legacy audio) stay writable and are blanked by Factory defaults, but are
+  // not shown in the editor.
   // Concrete defaults match nexvue-encode.sh; the form never shows blank/unset.
   const FIELD_DEFAULTS = {
     CHANNEL_ALIAS: "",

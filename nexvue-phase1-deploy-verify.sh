@@ -124,7 +124,7 @@ else
 fi
 echo
 
-# ---- station config + supervisor -------------------------------------------
+# ---- station config / encode ExecStart -------------------------------------
 echo "-- station config / encode ExecStart --"
 if [ -f /etc/nexvue/nexvue.env ]; then
   # shellcheck disable=SC1091

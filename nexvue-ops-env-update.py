@@ -42,7 +42,6 @@ EDITABLE_KEYS = frozenset({
     "AUDIO_LAYOUT",
     "AUDIO_EMBEDS",
     "DECKLINK_BUFFER_FRAMES",
-    "DECKLINK_DROP_NO_SIGNAL_FRAMES",
     "VIDEO_ENCODER",
     "EXTRA_ENC_ARGS",
     "LO_ENABLE",
@@ -53,10 +52,6 @@ EDITABLE_KEYS = frozenset({
     "LO_FPS",
     "LO_TARGET_USAGE",
     "LO_QUEUE_BUFFERS",
-    "LO_GOP_FRAMES",
-    "SIGNAL_LOSS_DEBOUNCE_S",
-    "SIGNAL_ACQUIRE_DEBOUNCE_S",
-    "DECKLINK_RETRY_S",
     "AUTO_PARK_UNLOCK_CYCLES",
     "AUTO_UNPARK",
 })
@@ -278,12 +273,6 @@ def sanitize_value(key: str, value: str) -> str:
         return ",".join(str(n) for n in ordered)
     if key == "DECKLINK_BUFFER_FRAMES":
         return _require_int(key, value, lo=1, hi=16)
-    if key == "DECKLINK_DROP_NO_SIGNAL_FRAMES":
-        if value == "":
-            return value
-        if value not in ("true", "false"):
-            raise ValueError("DECKLINK_DROP_NO_SIGNAL_FRAMES must be true or false")
-        return value
     if key == "VIDEO_ENCODER":
         if value == "":
             return value
@@ -339,23 +328,9 @@ def sanitize_value(key: str, value: str) -> str:
         return value
     if key == "LO_QUEUE_BUFFERS":
         return _require_int(key, value, lo=1, hi=64)
-    if key == "LO_GOP_FRAMES":
-        return _require_int(key, value, lo=1, hi=300)
     if key == "AUTO_PARK_UNLOCK_CYCLES":
         # 0 = off; upper bound is generous (operators may want a long streak).
         return _require_int(key, value, lo=0, hi=1000)
-    if key in ("SIGNAL_LOSS_DEBOUNCE_S", "SIGNAL_ACQUIRE_DEBOUNCE_S", "DECKLINK_RETRY_S"):
-        if value == "":
-            return value
-        try:
-            f = float(value)
-        except ValueError as exc:
-            raise ValueError(f"{key}: must be a number") from exc
-        if f < 0:
-            raise ValueError(f"{key}: must be >= 0")
-        if key == "DECKLINK_RETRY_S" and f <= 0:
-            raise ValueError(f"{key}: must be > 0")
-        return value
     if key == "EXTRA_ENC_ARGS":
         # Settings UI uses "none" for no extra properties (stored as blank).
         if value == "" or value.lower() == "none":

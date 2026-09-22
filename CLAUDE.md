@@ -143,7 +143,7 @@ this box can't get additional ports opened.
   (appsrc → HI/LO encode → RTSP) + disposable DeckLink capture (appsink).
   SDI/`not-negotiated`/exclusive-open races tear down capture only; publish
   holds last-frame then black (`SIGNAL_LOSS_HOLD_S`, default 15s) so WHEP
-  stays up. No `input-selector` / slate (`nexvue-supervisor.py` unused).
+  stays up. The Phase 1.5 input-selector / slate supervisor was removed.
   Empty ports still auto-park after consecutive never-live unlocks, then
   auto-unpark when DeckLink lock returns.
   Captions/LO/metrics/ops UI remain. Tests: `test/test_nexvue_encode.py`,

@@ -20,7 +20,7 @@ echo
 
 echo "-- ExecStart / binary --"
 systemctl show -p FragmentPath -p ExecStart nexvue-encode@0 2>/dev/null || true
-for f in /usr/local/bin/nexvue-encode.sh /usr/local/bin/nexvue-encode.py /usr/local/bin/nexvue-supervisor.py; do
+for f in /usr/local/bin/nexvue-encode.sh /usr/local/bin/nexvue-encode.py /usr/local/bin/nexvue-encode-auto-park.sh; do
   if [ -x "$f" ] || [ -f "$f" ]; then
     ls -l "$f"
   else
@@ -38,7 +38,7 @@ echo "-- PyGObject / GStreamer --"
 if python3 -c 'import gi; gi.require_version("Gst","1.0"); from gi.repository import Gst; print("GI OK", Gst.version_string())' 2>/dev/null; then
   :
 else
-  echo "GI FAIL — supervisor will exit 69; apt install python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0"
+  echo "GI FAIL — encode will not start; apt install python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0"
 fi
 echo
 
@@ -62,20 +62,21 @@ for n in 0 1 2 3 4 5 6 7 8 9; do
 done
 echo
 
-echo "-- Journal tails (errors / supervisor, last 2h) --"
+echo "-- Journal tails (errors, last 2h) --"
 for n in 0 1 2 3 4 5 6 7 8 9; do
   unit="nexvue-encode@${n}"
   systemctl is-active --quiet "$unit" 2>/dev/null || continue
   echo "======== ${unit} ========"
   journalctl -u "$unit" --since -2h --no-pager 2>/dev/null \
-    | grep -Ei 'nexvue-supervisor|ERROR|Traceback|fatal|signal|DeckLink|RTSP|MediaMTX|GI|import|caption|EPIPE|Failed|Started|watchdog' \
+    | grep -Ei 'ERROR|Traceback|fatal|signal|DeckLink|RTSP|MediaMTX|GI|import|caption|EPIPE|Failed|Started|watchdog|auto-park|not-negotiated' \
     | tail -40 || echo "(no matching lines)"
   echo
 done
 
 echo "Classify:"
 echo "  GI/import / exit 69     → sudo ./setup.sh ; restart encode@*"
-echo "  caption / filesink / EPIPE → fixed in supervisor (caption errors non-fatal); redeploy"
-echo "  watchdog under 15s debounce → WATCHDOG_MS now defaults 0; redeploy"
+echo "  caption / filesink / EPIPE → encode treats caption errors as non-fatal; redeploy nexvue-encode.py"
+echo "  WATCHDOG_MS set         → default is 0; a hitch is last-frame/black (SIGNAL_LOSS_HOLD_S), not a unit bounce"
+echo "  unlocked + restart loop → never-live slots auto-park; a previously-live slot retries capture in-process"
 echo "  72h high / 1h low       → historical pollution; re-soak with --since 1h then 24h"
 echo "  RTSP / MediaMTX         → check mediamtx journal; publish URL"

@@ -5,8 +5,8 @@
 # Instance name %i selects /etc/nexvue/channels/%i.env
 #
 # ExecStart runs nexvue-encode.sh → nexvue-encode.py (persistent MediaMTX
-# publish + disposable DeckLink capture). Phase 1.5 input-selector/slate is
-# not used. Encoders restart independently; RTSP sink death rebuilds publish
+# publish + disposable DeckLink capture). The Phase 1.5 input-selector/slate
+# path was removed. Encoders restart independently; RTSP sink death rebuilds publish
 # only. Capture not-negotiated / exclusive-open races do not tear down WHEP.
 
 [Unit]
