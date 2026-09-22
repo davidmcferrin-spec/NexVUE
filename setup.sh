@@ -666,7 +666,7 @@ fi
 # ---- Required repo files (verify before touching the system) ---------------------
 REQUIRED_FILES=(
   mediamtx.yml mediamtx.service
-  nexvue-encode.sh nexvue-encode.py nexvue_opus_ms.py nexvue-supervisor.py nexvue-encode@.service
+  nexvue-encode.sh nexvue-encode.py nexvue_opus_ms.py nexvue-encode@.service
   nexvue-encode-auto-park.sh
   nexvue-encode-auto-unpark.service nexvue-encode-auto-unpark.timer
   nexvue-decklink-configure.service
@@ -917,7 +917,8 @@ install -m 755 "${REPO_DIR}/nexvue-encode.sh" /usr/local/bin/nexvue-encode.sh
 install -m 755 "${REPO_DIR}/nexvue-encode.py" /usr/local/bin/nexvue-encode.py
 install -m 644 "${REPO_DIR}/nexvue_opus_ms.py" /usr/local/bin/nexvue_opus_ms.py
 install -m 755 "${REPO_DIR}/nexvue-encode-auto-park.sh" /usr/local/bin/nexvue-encode-auto-park.sh
-install -m 755 "${REPO_DIR}/nexvue-supervisor.py" /usr/local/bin/nexvue-supervisor.py
+# Phase 1.5 slate supervisor was removed; drop a leftover binary from older installs.
+rm -f /usr/local/bin/nexvue-supervisor.py
 install -m 755 "${REPO_DIR}/nexvue-status-server.py" /usr/local/bin/nexvue-status-server.py
 install -m 755 "${REPO_DIR}/nexvue-metrics-server.py" /usr/local/bin/nexvue-metrics-server.py
 install -m 755 "${REPO_DIR}/nexvue-sfu-publish.py" /usr/local/bin/nexvue-sfu-publish.py
@@ -1657,10 +1658,9 @@ else
   warn "no H.264 encode entrypoints in vainfo — headless iGPU disabled in BIOS, pre-reboot HWE state, or (Arrow Lake) media driver too old: use Intel's apt repo"
 fi
 
-# GStreamer elements (encode path + Phase 1.5 slate supervisor)
+# GStreamer elements (encode path + Stream WHIP)
 for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc \
-          opusparse rtspclientsink ccextractor ccconverter webrtcbin \
-          input-selector videotestsrc audiotestsrc textoverlay valve identity; do
+          opusparse rtspclientsink ccextractor ccconverter webrtcbin; do
   if gst-inspect-1.0 "$el" >/dev/null 2>&1; then
     ok "gstreamer element: $el"
   else
@@ -1671,8 +1671,6 @@ for el in decklinkvideosrc vah264enc x264enc watchdog deinterlace opusenc \
       rtspclientsink)   warn "missing $el — install gstreamer1.0-rtsp (setup apt step); encode publish will fail" ;;
       webrtcbin)        warn "missing $el — install gstreamer1.0-plugins-bad + gstreamer1.0-nice; Stream WHIP publisher will idle" ;;
       ccextractor|ccconverter) warn "missing $el — caption side channel needs gstreamer1.0-plugins-bad" ;;
-      input-selector|videotestsrc|audiotestsrc|textoverlay|valve|identity)
-        warn "missing $el — Phase 1.5 supervisor needs gstreamer1.0-plugins-base / good" ;;
       *)                warn "missing $el — check gstreamer package install" ;;
     esac
   fi
@@ -1696,10 +1694,6 @@ done
 [ -x /usr/local/bin/nexvue-encode-auto-park.sh ] \
   && ok "nexvue-encode-auto-park.sh present" \
   || warn "nexvue-encode-auto-park.sh missing — empty-port auto-park disabled"
-# Supervisor is installed but not used by ExecStart (Phase 1.5 rolled back).
-[ -x /usr/local/bin/nexvue-supervisor.py ] \
-  && ok "nexvue-supervisor.py present (deferred — not ExecStart)" \
-  || true
 
 # MediaMTX + units
 [ -x /usr/local/bin/mediamtx ] && ok "mediamtx binary present" || warn "mediamtx binary missing"

@@ -217,12 +217,12 @@ class TestApplyPatch(unittest.TestCase):
             text = p.read_text(encoding="utf-8")
             new = mod.apply_patch(text, {
                 "ENABLE_AUDIO": "false",
-                "SIGNAL_LOSS_DEBOUNCE_S": "15",
+                "AUTO_PARK_UNLOCK_CYCLES": "5",
             })
             p.write_text(new, encoding="utf-8")
             keys = mod.parse_env_text(p.read_text(encoding="utf-8"))
             self.assertEqual(keys["ENABLE_AUDIO"], "false")
-            self.assertEqual(keys["SIGNAL_LOSS_DEBOUNCE_S"], "15")
+            self.assertEqual(keys["AUTO_PARK_UNLOCK_CYCLES"], "5")
             self.assertEqual(keys["CHANNEL_PATH"], "ch0")
 
     def test_max_devices_not_channel_editable(self):
@@ -276,6 +276,14 @@ class TestApplyPatch(unittest.TestCase):
         self.assertIn("HI_PRESET", php_keys)
         self.assertIn("AUTO_PARK_UNLOCK_CYCLES", php_keys)
         self.assertIn("AUTO_UNPARK", php_keys)
+        for gone in (
+            "SIGNAL_LOSS_DEBOUNCE_S",
+            "SIGNAL_ACQUIRE_DEBOUNCE_S",
+            "DECKLINK_RETRY_S",
+            "LO_GOP_FRAMES",
+            "DECKLINK_DROP_NO_SIGNAL_FRAMES",
+        ):
+            self.assertNotIn(gone, php_keys)
 
     def test_settings_hi_preset_and_lo_cutoff(self) -> None:
         html = (SPEC_PATH.parent / "web-node" / "channels.html").read_text(encoding="utf-8")

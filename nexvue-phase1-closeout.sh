@@ -14,9 +14,10 @@
 #   sudo ./nexvue-phase1-closeout.sh
 #   sudo ./nexvue-phase1-closeout.sh --since 24h   # shorter soak window
 #
-# Phase 1.5: an unlocked active encoder is healthy when it holds slate without
-# systemd restarting (Started counts). Prefer disabling empty ports anyway
-# (needless load). Long-window Started with a quiet last hour → WARN historical.
+# An unlocked active encoder is healthy when it is not restarting: a
+# previously-live slot retries capture in-process and publish holds last-frame
+# then black (SIGNAL_LOSS_HOLD_S). A never-live empty port should auto-park
+# instead of looping. Long-window Started with a quiet last hour → WARN historical.
 #
 # Manual items this script cannot finish:
 #   - confirm Quad 2 connectors are Input (BlackmagicDesktopVideoSetup)
@@ -114,7 +115,7 @@ if [ -x /usr/local/bin/decklink-status ]; then
       done < <(printf '%s' "$STATUS_JSON" | jq -r '.devices[]? | "\(.index)\t\(.input_locked)"')
       UNLOCKED="$(printf '%s' "$STATUS_JSON" | jq -r '[.devices[]? | select(.input_locked!=true)] | length')"
       if [ "${UNLOCKED:-0}" -gt 0 ]; then
-        warn "unlocked inputs present — empty BNC or not Input; Phase 1.5 supervisor serves NO SIGNAL slate when encode@N is left enabled"
+        warn "unlocked inputs present — empty BNC or not Input; a never-live encode@N auto-parks, a previously-live slot holds last-frame then black and retries capture in-process"
       fi
     else
       fail "decklink-status returned no JSON"
@@ -127,9 +128,10 @@ else
 fi
 
 # ---- Soak: per-instance encoder Started counts ------------------------------
-# Phase 1.5: an unlocked active encoder is healthy if it is NOT restarting
-# (supervisor holds slate). Fail on live storms; WARN when the long window is
-# polluted but the last hour is quiet (bring-up / emptied-port history).
+# An unlocked active encoder is healthy if it is NOT restarting (in-process
+# capture retry + last-frame/black publish). Fail on live storms; WARN when
+# the long window is polluted but the last hour is quiet (bring-up history).
+# A never-live empty port should have auto-parked and not stay in this list.
 if command -v journalctl >/dev/null 2>&1; then
   if [ "${#ACTIVE_NS[@]}" -eq 0 ]; then
     warn "no active encoders — skip soak Started counts"
@@ -158,7 +160,7 @@ if command -v journalctl >/dev/null 2>&1; then
 
       if [ "$started" -le "$STARTED_OK_MAX" ]; then
         if [ "$locked" = "false" ]; then
-          verdict="ok (slate / unlocked)"
+          verdict="ok (hold / unlocked)"
         else
           verdict="ok"
         fi
@@ -174,9 +176,9 @@ if command -v journalctl >/dev/null 2>&1; then
         printf '  %-18s %-8s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$recent" "$verdict"
         fail "${unit}: Started=${recent} in last 1h on locked device ${dev} (want ≤${STARTED_OK_MAX}); sudo nexvue-encode-storm-diagnose.sh"
       else
-        verdict="FAIL live storm while unlocked/slate"
+        verdict="FAIL live storm while unlocked"
         printf '  %-18s %-8s %-8s %-8s %-8s %s\n' "$unit" "$dev" "$locked" "$started" "$recent" "$verdict"
-        fail "${unit}: Started=${recent} in last 1h while unlocked (supervisor should slate without restarting)"
+        fail "${unit}: Started=${recent} in last 1h while unlocked (auto-park or in-process capture retry should stop the restart loop)"
       fi
     done
   fi
@@ -216,9 +218,9 @@ fi
 
 # ---- Manual gate reminder ---------------------------------------------------
 echo
-echo "Manual Phase 1 / 1.5 gates (not automatable here):"
+echo "Manual Phase 1 gates (not automatable here):"
 echo "  1. Quad 2: intended connectors Input; MAX_DEVICES in /etc/nexvue/nexvue.env"
-echo "  2. Supervisor: unlocked encode@N should publish NO SIGNAL slate without restarting"
+echo "  2. Empty ports auto-park; a live slot holds last-frame then black across SDI loss without restarting"
 echo "  3. Latency: RTT-based ~200 ms estimate is accepted for remote datacenter;"
 echo "     glass-to-glass photo deferred (see README) — not a Phase 1 blocker"
 echo "  4. Confirm soak window, then re-run this script"
