@@ -101,7 +101,10 @@ try {
     if ($action === 'logout') {
         portal_session_clear();
         portal_nexapp_lib_load();
-        portal_api_ok(['redirect' => function_exists('portal_nexapp_logout_url') ? portal_nexapp_logout_url() : '/']);
+        $client = function_exists('portal_nexapp_logout_client')
+            ? portal_nexapp_logout_client()
+            : ['logout_url' => '/logout.php', 'csrf' => null, 'return_to' => '/login.php'];
+        portal_api_ok($client);
     }
 
     if ($action === 'me') {

@@ -37,6 +37,69 @@
     });
   }
 
+  /** Hub GET /logout.php is 405. POST csrf from the hub session, else scrape the hub shell. */
+  function hubLogoutAction(data) {
+    var action = (data && data.logout_url) || "/logout.php";
+    try {
+      var url = new URL(action, global.location.href);
+      if (url.origin === global.location.origin) {
+        return url.pathname + url.search;
+      }
+    } catch (e) {}
+    return action;
+  }
+
+  function csrfFromHubHtml(html) {
+    var meta = /<meta\s+name="csrf-token"\s+content="([^"]+)"/i.exec(html || "");
+    if (meta && meta[1]) {
+      return meta[1];
+    }
+    var input = /<input\s+[^>]*name="csrf"\s+[^>]*value="([^"]+)"/i.exec(html || "");
+    return (input && input[1]) || "";
+  }
+
+  function submitHubLogout(action, csrf, ret) {
+    var form = document.createElement("form");
+    form.method = "post";
+    form.action = action;
+    var csrfInput = document.createElement("input");
+    csrfInput.type = "hidden";
+    csrfInput.name = "csrf";
+    csrfInput.value = csrf;
+    form.appendChild(csrfInput);
+    var retInput = document.createElement("input");
+    retInput.type = "hidden";
+    retInput.name = "return";
+    retInput.value = ret || "/login.php";
+    form.appendChild(retInput);
+    (document.body || document.documentElement).appendChild(form);
+    form.submit();
+  }
+
+  function finishHubSignOut(data) {
+    data = data || {};
+    var action = hubLogoutAction(data);
+    var ret = data.return_to || "/login.php";
+    if (data.csrf) {
+      submitHubLogout(action, data.csrf, ret);
+      return;
+    }
+    return fetch("/portal.php", {
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "follow",
+    }).then(function (res) {
+      return res.text();
+    }).then(function (html) {
+      var scraped = csrfFromHubHtml(html);
+      if (!scraped) {
+        global.location.href = "/login.php";
+        return;
+      }
+      submitHubLogout(action, scraped, ret);
+    });
+  }
+
   function applyNav(user) {
     var role = user && user.role;
     document.querySelectorAll("[data-auth-role]").forEach(function (el) {
@@ -57,9 +120,9 @@
       logout.onclick = function (ev) {
         ev.preventDefault();
         api("logout", {}).then(function (data) {
-          global.location.href = (data && data.redirect) || "/logout.php";
+          return finishHubSignOut(data);
         }).catch(function () {
-          global.location.href = "/logout.php";
+          global.location.href = "/login.php";
         });
       };
     }
