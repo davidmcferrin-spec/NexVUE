@@ -1333,7 +1333,9 @@ DeckLink/GStreamer/MediaMTX). On the NexAPP hub it is an Alias at
 **`/nexvue`** (`nexapp.nexstar.tv/nexvue`): add
 `service_docroots['/nexvue']`, Rescan, Enable, and grant groups **User** or
 **Admin**. Production has no portal bcrypt accounts — NexAPP is the only
-human identity. Catalog Admin is the portal configuration ceiling
+human identity (`__Host-NexAPP_AUTH`, legacy `NexAPP_AUTH` still accepted).
+Portal Sign out clears the local session and POSTs to hub `/logout.php`
+with the hub CSRF token. Catalog Admin is the portal configuration ceiling
 (`org_admin`); it never becomes station `admin`. Map NexAPP groups to
 stations/channels on `/nexvue/users`; that ACL rides the node's outbound
 heartbeat. Health is last-heartbeat age (stale after 700s). Edge SSO is a

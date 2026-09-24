@@ -263,6 +263,96 @@ echo json_encode(['admin' => $admin, 'orgs' => $orgs]);
         self.assertIsNone(data["admin"])
         self.assertEqual(data["orgs"], 1)
 
+    def test_cookie_prefers_host_then_legacy(self) -> None:
+        data = self._php(
+            r"""
+$_COOKIE = [
+    '__Host-NexAPP_AUTH' => 'host-token',
+    'NexAPP_AUTH' => 'legacy-token',
+];
+unset($_SERVER['HTTP_AUTHORIZATION'], $_SERVER['REDIRECT_HTTP_AUTHORIZATION']);
+$both = portal_nexapp_token_from_request();
+$_COOKIE['__Host-NexAPP_AUTH'] = '';
+$legacy = portal_nexapp_token_from_request();
+unset($_COOKIE['NexAPP_AUTH']);
+$_COOKIE['__Host-NexAPP_AUTH'] = 'only-host';
+$host = portal_nexapp_token_from_request();
+$_SERVER['HTTP_AUTHORIZATION'] = 'Bearer header-token';
+$bearer = portal_nexapp_token_from_request();
+echo json_encode([
+    'both' => $both,
+    'legacy' => $legacy,
+    'host' => $host,
+    'bearer' => $bearer,
+    'names' => [NEXVUE_NEXAPP_COOKIE, NEXVUE_NEXAPP_COOKIE_LEGACY],
+]);
+"""
+        )
+        self.assertEqual(data["names"], ["__Host-NexAPP_AUTH", "NexAPP_AUTH"])
+        self.assertEqual(data["both"], "host-token")
+        self.assertEqual(data["legacy"], "legacy-token")
+        self.assertEqual(data["host"], "only-host")
+        self.assertEqual(data["bearer"], "header-token")
+
+    def test_hub_logout_client_reads_existing_csrf(self) -> None:
+        save = Path(self._td.name) / "sess"
+        save.mkdir()
+        data = self._php(
+            r"""
+$save = getenv('NEXVUE_TEST_SESSION_PATH');
+ini_set('session.save_path', $save);
+ini_set('session.use_cookies', '0');
+ini_set('session.use_strict_mode', '0');
+session_name('PHPSESSID');
+session_start();
+$_SESSION['csrf'] = 'hub-csrf-token';
+$id = session_id();
+session_write_close();
+session_name('nexvue_portal_session');
+session_id('portalsess0123456789abcdef');
+session_start();
+$_SESSION['user_id'] = 'local-portal-user';
+$_COOKIE['PHPSESSID'] = $id;
+portal_session_clear();
+$client = portal_nexapp_logout_client();
+$again = portal_nexapp_hub_csrf_token();
+echo json_encode([
+    'id' => $id,
+    'client' => $client,
+    'again' => $again,
+    'name' => session_name(),
+    'portal_active' => session_status() === PHP_SESSION_ACTIVE,
+]);
+""",
+            extra_env={"NEXVUE_TEST_SESSION_PATH": str(save)},
+        )
+        self.assertEqual(data["client"]["csrf"], "hub-csrf-token")
+        self.assertEqual(data["again"], "hub-csrf-token")
+        self.assertEqual(data["client"]["return_to"], "/login.php")
+        self.assertTrue(str(data["client"]["logout_url"]).endswith("/logout.php"))
+        self.assertNotIn("redirect", data["client"])
+        self.assertEqual(data["name"], "nexvue_portal_session")
+        self.assertFalse(data["portal_active"])
+
+    def test_hub_csrf_missing_cookie_is_null(self) -> None:
+        data = self._php(
+            r"""
+unset($_COOKIE['PHPSESSID']);
+echo json_encode(['csrf' => portal_nexapp_hub_csrf_token()]);
+"""
+        )
+        self.assertIsNone(data["csrf"])
+
+    def test_auth_gate_posts_hub_logout(self) -> None:
+        js = (ROOT / "web-portal" / "nexvue-portal-auth-gate.js").read_text(encoding="utf-8")
+        self.assertIn('form.method = "post"', js)
+        self.assertIn('csrfInput.name = "csrf"', js)
+        self.assertIn('retInput.name = "return"', js)
+        self.assertIn('name="csrf-token"', js)
+        self.assertNotIn("data.redirect", js)
+        self.assertNotIn('location.href = "/logout.php"', js)
+        self.assertNotIn("location.href = (data", js)
+
     def test_portal_sso_jwt_roundtrip(self) -> None:
         data = self._php(
             """

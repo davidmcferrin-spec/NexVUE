@@ -231,8 +231,11 @@ this box can't get additional ports opened.
   SSO — never `require_once`s anything from `web-node/`) installed on a
   **separate** box via `sudo ./setup.sh --portal` (Apache+PHP only — no
   DeckLink/GStreamer/MediaMTX/encoder anything). Production humans
-  authenticate via NexAPP (`NexAPP_AUTH` cookie, live `AccessService` /
-  `/api/access.php?service_id=nexvue`); catalog **User / Admin** map to
+  authenticate via NexAPP (`__Host-NexAPP_AUTH`, legacy `NexAPP_AUTH`
+  during rollout, live `AccessService` /
+  `/api/access.php?service_id=nexvue`). Portal Sign out clears the local
+  portal session, then POSTs to hub `/logout.php` with that session's
+  CSRF token (`GET` is 405). Catalog **User / Admin** map to
   portal `org_viewer` / `org_admin`. No production bcrypt portal accounts
   (`NEXVUE_PORTAL_TEST_AUTH=1` is tests only). NexAPP groups map to
   stations/channels via `group_station_acl`; that bundle is echoed on the

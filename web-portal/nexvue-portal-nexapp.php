@@ -12,7 +12,11 @@
 declare(strict_types=1);
 
 const NEXVUE_NEXAPP_SERVICE_ID = 'nexvue';
-const NEXVUE_NEXAPP_COOKIE = 'NexAPP_AUTH';
+/** Hub AuthCookie::read order: configured name, then legacy. */
+const NEXVUE_NEXAPP_COOKIE = '__Host-NexAPP_AUTH';
+const NEXVUE_NEXAPP_COOKIE_LEGACY = 'NexAPP_AUTH';
+/** Hub bootstrap never calls session_name(); php.ini default is PHPSESSID. */
+const NEXVUE_NEXAPP_HUB_SESSION = 'PHPSESSID';
 const NEXVUE_NEXAPP_ISSUER_DEFAULT = 'https://nexapp.nexstar.tv';
 const NEXVUE_NEXAPP_PUBLIC_KEY_DEFAULT = '/etc/nexvue-portal/jwt_public.pem';
 const NEXVUE_NEXAPP_ROOT_DEFAULT = '/var/www/nexapp';
@@ -58,13 +62,101 @@ function portal_nexapp_logout_url(): string {
     return (is_string($o) && $o !== '') ? $o : NEXVUE_NEXAPP_LOGOUT_DEFAULT;
 }
 
+/**
+ * Browser sign-out fields. Hub GET /logout.php is 405; the client must POST
+ * `csrf` + `return`. csrf is null when the hub PHP session cookie is absent.
+ *
+ * @return array{logout_url: string, csrf: ?string, return_to: string}
+ */
+function portal_nexapp_logout_client(): array {
+    return [
+        'logout_url' => portal_nexapp_logout_url(),
+        'csrf' => portal_nexapp_hub_csrf_token(),
+        'return_to' => '/login.php',
+    ];
+}
+
+/**
+ * CSRF lives in the hub PHP session ($_SESSION['csrf']), not the portal session.
+ * Read that session in place. Do not mint a new PHPSESSID (a Set-Cookie from
+ * this Alias would shadow the hub cookie on /nexvue/).
+ */
+function portal_nexapp_hub_csrf_token(): ?string {
+    $cookie = $_COOKIE[NEXVUE_NEXAPP_HUB_SESSION] ?? null;
+    if (!is_string($cookie) || preg_match('/^[A-Za-z0-9,-]{1,128}$/', $cookie) !== 1) {
+        return null;
+    }
+
+    $priorActive = session_status() === PHP_SESSION_ACTIVE;
+    $priorName = session_name();
+    $priorId = $priorActive ? session_id() : '';
+    $priorData = $priorActive ? $_SESSION : null;
+    $priorParams = session_get_cookie_params();
+    $priorUseCookies = (string) ini_get('session.use_cookies');
+    if ($priorActive) {
+        session_write_close();
+    }
+
+    $token = null;
+    try {
+        ini_set('session.use_cookies', '0');
+        session_name(NEXVUE_NEXAPP_HUB_SESSION);
+        session_id($cookie);
+        $started = session_start();
+        if ($started === true && session_id() === $cookie) {
+            $minted = false;
+            if (!isset($_SESSION['csrf']) || !is_string($_SESSION['csrf']) || $_SESSION['csrf'] === '') {
+                $_SESSION['csrf'] = bin2hex(random_bytes(16));
+                $minted = true;
+            }
+            $token = $_SESSION['csrf'];
+            if ($minted) {
+                session_write_close();
+            } else {
+                session_abort();
+            }
+        } elseif (session_status() === PHP_SESSION_ACTIVE) {
+            $_SESSION = [];
+            session_destroy();
+        }
+    } catch (Throwable $e) {
+        $token = null;
+    }
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+
+    ini_set('session.use_cookies', $priorUseCookies);
+    session_name($priorName !== '' ? $priorName : 'nexvue_portal_session');
+    session_set_cookie_params([
+        'lifetime' => (int) ($priorParams['lifetime'] ?? 0),
+        'path' => (string) ($priorParams['path'] ?? '/'),
+        'domain' => (string) ($priorParams['domain'] ?? ''),
+        'secure' => (bool) ($priorParams['secure'] ?? false),
+        'httponly' => (bool) ($priorParams['httponly'] ?? true),
+        'samesite' => (string) ($priorParams['samesite'] ?? 'Lax'),
+    ]);
+    if ($priorActive && $priorId !== '') {
+        session_id($priorId);
+        if (session_start() === true && is_array($priorData)) {
+            $_SESSION = $priorData;
+        }
+    }
+    return is_string($token) && $token !== '' ? $token : null;
+}
+
 function portal_nexapp_token_from_request(): ?string {
     $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
     if (is_string($header) && preg_match('/^Bearer\s+(\S+)/i', $header, $m) === 1) {
         return $m[1];
     }
-    $cookie = $_COOKIE[NEXVUE_NEXAPP_COOKIE] ?? null;
-    return is_string($cookie) && $cookie !== '' ? $cookie : null;
+    foreach ([NEXVUE_NEXAPP_COOKIE, NEXVUE_NEXAPP_COOKIE_LEGACY] as $name) {
+        $cookie = $_COOKIE[$name] ?? null;
+        if (is_string($cookie) && $cookie !== '') {
+            return $cookie;
+        }
+    }
+    return null;
 }
 
 function portal_nexapp_b64url_decode(string $data): string {
