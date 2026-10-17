@@ -1,17 +1,11 @@
 /**
- * nexvue-portal-whep.js — minimal WHEP offer prep for the portal's watch
- * page: just the multiopus SDP negotiation fix, extracted from the edge's
- * nexvue-vu.js (mungeWhepOfferSdp/prepareWhepOffer, unchanged logic).
+ * Minimal WHEP offer prep for the portal watch page. Same multiopus SDP
+ * munge as the edge player (mungeWhepOfferSdp / prepareWhepOffer).
  *
- * Why this exists as its own small file instead of copying all of
- * nexvue-vu.js: every NexVUE edge encode publishes 8ch positioned Opus
- * (CLAUDE.md — "Encode always opens DeckLink 8ch and publishes 8ch
- * positioned Opus"). Chrome/Edge won't advertise multiopus in a WHEP offer
- * on their own, and MediaMTX rejects >2ch Opus without it — so without this
- * munge, watch.html's WHEP negotiation can fail outright against a real
- * edge stream, not just lose audio. The full VU meter UI (canvas meters,
- * per-channel solo/mute) is out of scope for this first portal slice — see
- * web-node/nexvue-vu.js if/when the portal grows a real audio meter.
+ * Every edge encode publishes 8-channel positioned Opus. Chrome and Edge
+ * do not put multiopus in a WHEP offer, and MediaMTX rejects Opus above
+ * two channels without it, so watch.html fails negotiation against a real
+ * edge. The VU meter stays on the edge player.
  */
 (function (global) {
   "use strict";

@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-auth-lib.php — local auth helpers (stdlib PHP + openssl, no Composer).
+ * Local auth helpers (stdlib PHP + openssl, no Composer).
  *
  * SQLite: /var/lib/nexvue/auth/auth.db (override NEXVUE_AUTH_DB)
  * Keys:   /var/lib/nexvue/auth/{private.pem,public.pem,jwks.json,kid}

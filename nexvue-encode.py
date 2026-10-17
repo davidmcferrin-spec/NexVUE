@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-encode.py — persistent MediaMTX publish + disposable DeckLink capture.
+Persistent MediaMTX publish + disposable DeckLink capture.
 
 Production encoder for nexvue-encode@N (invoked via nexvue-encode.sh).
 Two GStreamer pipelines in one process, no input-selector / slate:

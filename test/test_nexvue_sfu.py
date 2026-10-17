@@ -122,6 +122,30 @@ class TestSfuPublishConfig(unittest.TestCase):
         self.assertEqual(set(cfg["paths"]), {"ch0"})
         self.assertNotIn("play_url", cfg["paths"]["ch0"])
 
+    def test_whip_pipeline_keeps_caps_and_escapes_location(self) -> None:
+        mod = _load_publisher()
+        plain = mod.whip_pipeline("rtsp://127.0.0.1:8554/ch0")
+        self.assertEqual(
+            plain,
+            "webrtcbin name=send stun-server=stun://stun.cloudflare.com:3478 "
+            "bundle-policy=max-bundle "
+            'rtspsrc name=src location="rtsp://127.0.0.1:8554/ch0" protocols=tcp latency=200 '
+            "src. ! application/x-rtp,media=video ! queue max-size-buffers=8 leaky=downstream ! send. "
+            "src. ! application/x-rtp,media=audio ! queue max-size-buffers=8 leaky=downstream ! send.",
+        )
+        escaped = mod.whip_pipeline('rtsp://127.0.0.1:8554/ch0?jwt=a"b\\c')
+        self.assertIn(r'location="rtsp://127.0.0.1:8554/ch0?jwt=a\"b\\c"', escaped)
+
+    def test_session_failures_are_named(self) -> None:
+        mod = _load_publisher()
+        self.assertIn(RuntimeError, mod._PUBLISH_ERRORS)
+        self.assertIn(ImportError, mod._PUBLISH_ERRORS)
+        self.assertNotIn(Exception, mod._PUBLISH_ERRORS)
+        src = PUBLISH_PY.read_text(encoding="utf-8")
+        self.assertNotIn("except Exception", src)
+        self.assertNotIn("def send_offer", src)
+        self.assertNotIn("def on_offer_created", src)
+
     def test_rtsp_url_with_jwt(self) -> None:
         mod = _load_publisher()
         url = mod.rtsp_url_with_jwt("rtsp://127.0.0.1:8554/ch0", "a/b+c=")

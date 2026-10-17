@@ -1,7 +1,7 @@
 #!/usr/bin/env php
 <?php
 /**
- * nexvue-portal-bootstrap.php — create portal.db, keypair, seed default
+ * Create portal.db, keypair, seed default
  * org + admin user.
  *
  * Run by setup.sh --portal (as root, then smoke-tested as www-data). Safe

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-ops-network-write.py — persist public hostname / IP and patch MediaMTX.
+Persist public hostname / IP and patch MediaMTX.
 
 Writes NEXVUE_PUBLIC_HOSTNAME and NEXVUE_PUBLIC_IP to /etc/nexvue/nexvue.env
 and mirrors the hostname onto NEXVUE_TLS_DOMAIN (Let's Encrypt write-through).

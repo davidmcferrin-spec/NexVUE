@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-ops-hardware-write.py — persist card / encode slot count.
+Persist card / encode slot count.
 
 Writes MAX_DEVICES and MAX_CHANNELS (same value) to /etc/nexvue/nexvue.env,
 seeds missing /etc/nexvue/channels/<N>.env, strips leftover per-channel

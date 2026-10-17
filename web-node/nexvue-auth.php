@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-auth.php — JSON API for NexVUE local auth + share links.
+ * JSON API for NexVUE local auth + share links.
  *
  * Public: login, logout, me, forgot, reset, share_redeem
  * Authed: whep_jwt (JWT + optional Cloudflare ice_servers / Stream egress),

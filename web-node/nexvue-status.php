@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-status.php — same-origin proxy for the nexvue-status daemon (:9998).
+ * Same-origin proxy for the nexvue-status daemon (:9998).
  *
  * The player page is served by Apache (often HTTPS). Fetching
  * https://edge:9998/status cross-origin fails when the daemon is still

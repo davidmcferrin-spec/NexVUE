@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-logo.php — stream the station branding logo (if uploaded).
+ * Stream the station branding logo (if uploaded).
  *
  * Reads /var/lib/nexvue/branding/logo.bin (+ logo.json for Content-Type).
  * Returns 404 when no logo is present so <img> stays hidden via onerror.

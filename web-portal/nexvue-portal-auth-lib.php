@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-portal-auth-lib.php — NexVUE cloud portal core (Phase 4).
+ * NexVUE cloud portal core (Phase 4).
  *
  * Multi-tenant from day one: every row below the org level carries an
  * org_id, and every read/write path is org-scoped by the caller's own

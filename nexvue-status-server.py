@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-status-server.py — serve DeckLink input/reference status as JSON over HTTP.
+Serve DeckLink input/reference status as JSON over HTTP.
 
 Polls the decklink-status helper on an interval and caches the result, so any
 number of web clients can poll without hammering the DeckLink API. Stdlib
@@ -15,8 +15,7 @@ Runs as a systemd service (nexvue-status.service), loopback port 9998
 (default NEXVUE_STATUS_BIND=127.0.0.1). Player UI uses nexvue-status.php;
 do not expose :9998 off-box.
 
-Robustness notes (see README "nexvue-status hardening" if that section
-exists, or CLAUDE.md known-issues):
+Robustness notes:
   - poll_loop has a broad except-Exception safety net IN ADDITION TO the
     specific exception handling below it, so an unanticipated failure mode
     can never silently kill the polling thread — systemd's Restart=always

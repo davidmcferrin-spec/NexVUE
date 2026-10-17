@@ -3,7 +3,7 @@
   "display_name": "NexVUE",
   "base_path": "/nexvue",
   "description": "Station catalog, watch, and fleet sync for NexVUE edge nodes.",
-  "version": "2.30.0",
+  "version": "2.30.2",
   "manifest_version": "1",
   "icon": "icon.svg",
   "widgets": [

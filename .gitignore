@@ -7,3 +7,9 @@ decklink-configure
 # Local/test scratch
 *.pyc
 __pycache__/
+
+# Agent notes and machine captures. Not installed, not part of the product.
+CLAUDE.md
+.cursor/rules
+WireShark/
+Support Debug Files/

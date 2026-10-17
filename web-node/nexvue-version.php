@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-version.php — public version stamp for the top-nav badge.
+ * Public version stamp for the top-nav badge.
  *
  * Reads VERSION from the docroot (installed by setup.sh) and optional
  * /var/lib/nexvue/version.json (written by nexvue-ops-update.sh / setup.sh).

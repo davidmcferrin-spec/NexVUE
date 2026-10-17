@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-ops-portal-write.py — write NEXVUE_PORTAL_* fields to the station env
+Write NEXVUE_PORTAL_* fields to the station env
 (/etc/nexvue/nexvue.env).
 
 Run via sudo as root by nexvue-ops-portal-write.sh, invoked from

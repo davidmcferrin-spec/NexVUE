@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-metrics-server.py — usage/analytics metrics COLLECTOR for NexVUE.
+Usage/analytics metrics COLLECTOR for NexVUE.
 
 This process does NOT listen on any network port or serve any HTTP at all —
 it is a pure background poller that writes time-series samples into SQLite.

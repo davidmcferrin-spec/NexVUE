@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-tls.py — inspect / validate / install station TLS PEMs and Lego config.
+Inspect / validate / install station TLS PEMs and Lego config.
 
 Used by nexvue-ops-tls.sh (Settings → Certificates). Stdlib + openssl CLI only.
 

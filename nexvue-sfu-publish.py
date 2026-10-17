@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-nexvue-sfu-publish.py — WHIP each live path to Cloudflare Stream once.
+WHIP each live path to Cloudflare Stream once.
 
 Reads /var/lib/nexvue/auth/sfu-publish.json (written by Settings). When
-mode is hybrid|sfu, pulls local MediaMTX RTSP (H.264 + Opus, no transcode)
-and publishes via WHIP so share/portal viewers can WHEP from Stream.
+mode is hybrid or sfu, pulls local MediaMTX RTSP (H.264 + Opus, no
+transcode) and publishes via WHIP so share and portal viewers can play
+from Stream.
 
 Idle when mode is off or the file is missing. Stdlib + apt PyGObject.
-GI is optional at import so config helpers stay unit-testable.
+GI is optional at import so the config helpers stay unit-testable.
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -35,6 +37,17 @@ IDLE_S = 10
 RECONNECT_S = 5
 STUN = "stun://stun.cloudflare.com:3478"
 ICE_WAIT_S = 12
+
+# GLib.GError is a RuntimeError. KeyError is a promise reply with no offer.
+_PUBLISH_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    ImportError,
+    AttributeError,
+    TypeError,
+    KeyError,
+)
 
 
 def publish_file_path() -> Path:
@@ -79,6 +92,16 @@ def rtsp_url_with_jwt(rtsp_url: str, jwt: str) -> str:
     return rtsp_url + sep + "jwt=" + urllib.parse.quote(jwt, safe="")
 
 
+def whip_pipeline(rtsp_url: str) -> str:
+    loc = rtsp_url.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        f"webrtcbin name=send stun-server={STUN} bundle-policy=max-bundle "
+        f'rtspsrc name=src location="{loc}" protocols=tcp latency=200 '
+        "src. ! application/x-rtp,media=video ! queue max-size-buffers=8 leaky=downstream ! send. "
+        "src. ! application/x-rtp,media=audio ! queue max-size-buffers=8 leaky=downstream ! send."
+    )
+
+
 def whip_post(url: str, sdp: str, timeout: int = 12) -> str:
     req = urllib.request.Request(
         url,
@@ -110,6 +133,120 @@ def _gi_webrtc():
     return GLib, Gst, GstSdp, GstWebRTC
 
 
+class _WhipAttempt:
+    """One GStreamer main loop that WHIPs a single path, then returns."""
+
+    def __init__(self, session: WhipSession) -> None:
+        self._session = session
+        self._glib, self._gst, self._sdp, self._webrtc = _gi_webrtc()
+        self._loop: Any = None
+        self._pipe: Any = None
+        self._webrtcbin: Any = None
+        self._bus: Any = None
+        self._errors: list[str] = []
+        self._posted = False
+
+    def run(self) -> None:
+        gst = self._gst
+        gst.init(None)
+        self._pipe = gst.parse_launch(whip_pipeline(self._session.rtsp_url))
+        self._webrtcbin = self._pipe.get_by_name("send")
+        if self._webrtcbin is None:
+            raise RuntimeError("webrtcbin missing")
+        self._loop = self._glib.MainLoop()
+        self._webrtcbin.connect("on-negotiation-needed", self._on_negotiation_needed)
+        self._bus = self._pipe.get_bus()
+        self._bus.add_signal_watch()
+        self._bus.connect("message", self._on_bus)
+        if self._pipe.set_state(gst.State.PLAYING) == gst.StateChangeReturn.FAILURE:
+            raise RuntimeError("pipeline failed to start")
+        log.info(
+            "%s WHIP publishing %s",
+            self._session.path,
+            self._session.rtsp_url.split("?", 1)[0],
+        )
+        self._glib.timeout_add(250, self._on_stop_tick)
+        self._glib.timeout_add(ICE_WAIT_S * 1000, self._on_ice_timeout)
+        try:
+            self._loop.run()
+            if self._errors:
+                raise RuntimeError(self._errors[0])
+        finally:
+            self._bus.remove_signal_watch()
+            self._pipe.set_state(gst.State.NULL)
+
+    def _fail(self, message: str) -> None:
+        self._errors.append(message)
+        if self._loop is not None:
+            self._loop.quit()
+
+    def _send_offer(self) -> bool:
+        if self._session._stop.is_set():
+            self._loop.quit()
+            return False
+        try:
+            return self._post_gathered_offer()
+        except _PUBLISH_ERRORS as exc:
+            self._fail(str(exc))
+        return False
+
+    def _post_gathered_offer(self) -> bool:
+        webrtc = self._webrtcbin
+        state = webrtc.get_property("ice-gathering-state")
+        if state != self._webrtc.WebRTCICEGatheringState.COMPLETE:
+            return True
+        local = webrtc.get_property("local-description")
+        if local is None:
+            return True
+        if self._posted:
+            return False
+        self._posted = True
+        answer_text = whip_post(self._session.publish_url, local.sdp.as_text())
+        res, sdpmsg = self._sdp.SDPMessage.new_from_text(answer_text)
+        if res != self._sdp.SDPResult.OK:
+            raise RuntimeError("could not parse WHIP SDP answer")
+        answer = self._webrtc.WebRTCSessionDescription.new(
+            self._webrtc.WebRTCSDPType.ANSWER, sdpmsg
+        )
+        webrtc.emit("set-remote-description", answer, self._gst.Promise.new())
+        log.info("%s WHIP published", self._session.path)
+        return False
+
+    def _on_offer_created(self, promise: Any, _user: Any) -> None:
+        try:
+            reply = promise.get_reply()
+            offer = reply.get_value("offer")
+            self._webrtcbin.emit(
+                "set-local-description", offer, self._gst.Promise.new()
+            )
+            self._glib.timeout_add(200, self._send_offer)
+        except _PUBLISH_ERRORS as exc:
+            self._fail(str(exc))
+
+    def _on_negotiation_needed(self, _element: Any) -> None:
+        promise = self._gst.Promise.new_with_change_func(self._on_offer_created, None)
+        self._webrtcbin.emit("create-offer", None, promise)
+
+    def _on_bus(self, _bus: Any, msg: Any) -> bool:
+        if msg.type == self._gst.MessageType.ERROR:
+            gerr, debug = msg.parse_error()
+            self._fail(f"{gerr.message} ({debug})")
+        elif msg.type == self._gst.MessageType.EOS:
+            self._fail("EOS")
+        return True
+
+    def _on_stop_tick(self) -> bool:
+        if self._session._stop.is_set():
+            self._loop.quit()
+            return False
+        return True
+
+    def _on_ice_timeout(self) -> bool:
+        if not self._posted and not self._errors:
+            self._fail("ICE gathering timed out")
+        return False
+
+
 class WhipSession:
     def __init__(self, path: str, rtsp_url: str, publish_url: str) -> None:
         self.path = path
@@ -129,110 +266,14 @@ class WhipSession:
         while not self._stop.is_set():
             try:
                 self._run_once()
-            except Exception as exc:
+            except _PUBLISH_ERRORS as exc:
                 log.warning("%s WHIP session ended: %s", self.path, exc)
             if self._stop.is_set():
                 break
             self._stop.wait(RECONNECT_S)
 
     def _run_once(self) -> None:
-        GLib, Gst, GstSdp, GstWebRTC = _gi_webrtc()
-        Gst.init(None)
-        loc = self.rtsp_url.replace("\\", "\\\\").replace('"', '\\"')
-        desc = (
-            f"webrtcbin name=send stun-server={STUN} bundle-policy=max-bundle "
-            f'rtspsrc name=src location="{loc}" protocols=tcp latency=200 '
-            "src. ! application/x-rtp,media=video ! queue max-size-buffers=8 leaky=downstream ! send. "
-            "src. ! application/x-rtp,media=audio ! queue max-size-buffers=8 leaky=downstream ! send."
-        )
-        pipe = Gst.parse_launch(desc)
-        webrtc = pipe.get_by_name("send")
-        if webrtc is None:
-            raise RuntimeError("webrtcbin missing")
-        loop = GLib.MainLoop()
-        err: list[str] = []
-        posted = {"done": False}
-
-        def fail(msg: str) -> None:
-            err.append(msg)
-            loop.quit()
-
-        def send_offer() -> bool:
-            if self._stop.is_set():
-                loop.quit()
-                return False
-            try:
-                state = webrtc.get_property("ice-gathering-state")
-                if state != GstWebRTC.WebRTCICEGatheringState.COMPLETE:
-                    return True
-                local = webrtc.get_property("local-description")
-                if local is None:
-                    return True
-                if posted["done"]:
-                    return False
-                posted["done"] = True
-                sdp_text = local.sdp.as_text()
-                answer_text = whip_post(self.publish_url, sdp_text)
-                res, sdpmsg = GstSdp.SDPMessage.new_from_text(answer_text)
-                if res != GstSdp.SDPResult.OK:
-                    raise RuntimeError("could not parse WHIP SDP answer")
-                answer = GstWebRTC.WebRTCSessionDescription.new(
-                    GstWebRTC.WebRTCSDPType.ANSWER, sdpmsg
-                )
-                webrtc.emit("set-remote-description", answer, Gst.Promise.new())
-                log.info("%s WHIP published", self.path)
-            except Exception as exc:
-                fail(str(exc))
-            return False
-
-        def on_offer_created(promise: Any, _user: Any) -> None:
-            try:
-                reply = promise.get_reply()
-                offer = reply.get_value("offer")
-                webrtc.emit("set-local-description", offer, Gst.Promise.new())
-                GLib.timeout_add(200, send_offer)
-            except Exception as exc:
-                fail(str(exc))
-
-        def on_negotiation_needed(_el: Any) -> None:
-            promise = Gst.Promise.new_with_change_func(on_offer_created, None)
-            webrtc.emit("create-offer", None, promise)
-
-        def on_bus(_bus: Any, msg: Any) -> bool:
-            if msg.type == Gst.MessageType.ERROR:
-                gerr, debug = msg.parse_error()
-                fail(f"{gerr.message} ({debug})")
-            elif msg.type == Gst.MessageType.EOS:
-                fail("EOS")
-            return True
-
-        def on_stop_tick() -> bool:
-            if self._stop.is_set():
-                loop.quit()
-                return False
-            return True
-
-        webrtc.connect("on-negotiation-needed", on_negotiation_needed)
-        bus = pipe.get_bus()
-        bus.add_signal_watch()
-        bus.connect("message", on_bus)
-        if pipe.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-            raise RuntimeError("pipeline failed to start")
-        log.info("%s WHIP publishing %s", self.path, self.rtsp_url.split("?", 1)[0])
-        def ice_timeout() -> bool:
-            if not posted["done"] and not err:
-                fail("ICE gathering timed out")
-            return False
-
-        GLib.timeout_add(250, on_stop_tick)
-        GLib.timeout_add(ICE_WAIT_S * 1000, ice_timeout)
-        try:
-            loop.run()
-            if err:
-                raise RuntimeError(err[0])
-        finally:
-            bus.remove_signal_watch()
-            pipe.set_state(Gst.State.NULL)
+        _WhipAttempt(self).run()
 
 
 def run(stop: threading.Event) -> int:
@@ -261,7 +302,7 @@ def run(stop: threading.Event) -> int:
             else:
                 try:
                     _gi_webrtc()
-                except Exception as exc:
+                except _PUBLISH_ERRORS as exc:
                     log.error("GStreamer WebRTC bindings missing: %s", exc)
                     last_sig = ""
                     stop.wait(IDLE_S)
@@ -277,14 +318,15 @@ def run(stop: threading.Event) -> int:
     return 0
 
 
+def _stop_on_signal(stop: threading.Event, _signum: int, _frame: Any) -> None:
+    stop.set()
+
+
 def main() -> int:
     stop = threading.Event()
-
-    def _handle(_signum: int, _frame: Any) -> None:
-        stop.set()
-
-    signal.signal(signal.SIGTERM, _handle)
-    signal.signal(signal.SIGINT, _handle)
+    handler = functools.partial(_stop_on_signal, stop)
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
     return run(stop)
 
 

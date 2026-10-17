@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-ops.php — JSON API for NexVUE Services + Channels ops UI.
+ * JSON API for NexVUE Services + Channels ops UI.
  *
  * Phase 2 local auth: session cookie required. Roles:
  *   admin — Services + Settings + kick + branding + support/update + host reboot + card/slots + public reachability + certificates + Cloudflare TURN

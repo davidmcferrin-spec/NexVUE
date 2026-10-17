@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-mediamtx-api.php — same-origin proxy for MediaMTX Control API paths/list.
+ * Same-origin proxy for MediaMTX Control API paths/list.
  *
  * Phase 3 binds MediaMTX apiAddress to 127.0.0.1:9997 so kick/config cannot
  * be reached from the DMZ. Player / Multiview still need /v3/paths/list for
