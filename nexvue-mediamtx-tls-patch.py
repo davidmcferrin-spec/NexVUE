@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-mediamtx-tls-patch.py — point MediaMTX WHEP/API TLS at /etc/nexvue/tls.
+Point MediaMTX WHEP/API TLS at /etc/nexvue/tls.
 
 Stdlib only. Idempotent: sets (or uncomments) encryption flags and cert paths.
 Does not rewrite unrelated config.

@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-metrics.php — reads NexVUE's usage/analytics SQLite database
+ * Reads NexVUE's usage/analytics SQLite database
  * directly and serves JSON. No Python HTTP server, no reverse proxy, no
  * WebSocket, no new port — just Apache running PHP against a database file
  * on the same disk, which is about as "Apache-native" as a data source gets.

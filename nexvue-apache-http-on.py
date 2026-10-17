@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-apache-http-on.py — ensure Listen 80 is uncommented in Apache
+Ensure Listen 80 is uncommented in Apache
 ports.conf.
 
 UI is HTTPS-only, but Apache still listens on :80 specifically to 301

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-mediamtx-ice-patch.py — set MediaMTX webrtcAdditionalHosts.
+Set MediaMTX webrtcAdditionalHosts.
 
 Stdlib only. Idempotent: replaces webrtcAdditionalHosts (flow or block
 list) and removes the deprecated webrtcICEHostNAT1To1IPs alias so the two

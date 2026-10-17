@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-support-bundle — build a redacted zip for bake-in / remote debug.
+Build a redacted zip for bake-in / remote debug.
 
 Runs as root via nexvue-ops-support-bundle.sh (sudoers allowlist).
 Stdout: absolute path to the zip (single line). Progress on stderr.

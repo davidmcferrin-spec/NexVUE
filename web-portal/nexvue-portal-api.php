@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-portal-api.php — JSON API for the NexVUE cloud portal (Phase 4).
+ * JSON API for the NexVUE cloud portal (Phase 4).
  *
  * Public: login, logout, me
  * Authed (any portal role): change_password, catalog_list, viewer_jwt, sfu_whep

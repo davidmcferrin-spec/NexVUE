@@ -1,7 +1,7 @@
 #!/usr/bin/env php
 <?php
 /**
- * nexvue-portal-heartbeat.php — periodic outbound sync to an adopted portal
+ * Periodic outbound sync to an adopted portal
  * (Phase 4). Run by nexvue-portal-heartbeat.timer as www-data — needs no
  * root/sudo: only reads world-readable env files and writes inside the
  * already www-data-owned auth dir (JWKS cache + heartbeat-status.json).

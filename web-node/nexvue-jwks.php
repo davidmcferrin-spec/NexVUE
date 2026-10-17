@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-jwks.php — public JWKS for MediaMTX JWT auth (no session required).
+ * Public JWKS for MediaMTX JWT auth (no session required).
  *
  * MediaMTX polls this once (cached) via authJWTJWKS. Serves the local key
  * (always present, fast on-disk jwks.json path — falls back to

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-captions-decode.py — CEA-608/CC1 decoder for the NexVUE caption side channel.
+CEA-608/CC1 decoder for the NexVUE caption side channel.
 
 Reads raw CEA-608 byte pairs from a FIFO (fed by the encode pipeline's
 ccextractor → ccconverter branch) and atomically writes the latest display

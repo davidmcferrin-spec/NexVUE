@@ -1,3 +1,0 @@
-gst-launch-1.0 version 1.24.2
-GStreamer 1.24.2
-https://launchpad.net/ubuntu/+source/gstreamer1.0

@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-portal-web-router.php — path front door for the NexVUE cloud
+ * Path front door for the NexVUE cloud
  * portal UI + /api/portal, mounted as NexAPP Alias /nexvue.
  *
  * App root (parent of public/): pages/, nexvue-portal-*.php.

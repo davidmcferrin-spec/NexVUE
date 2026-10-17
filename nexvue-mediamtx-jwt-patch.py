@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-mediamtx-jwt-patch.py — set MediaMTX JWT auth keys in mediamtx.yml.
+Set MediaMTX JWT auth keys in mediamtx.yml.
 
 Stdlib only. Idempotent: updates existing keys or inserts a JWT block before
 the first top-level "paths:" (or appends). Does not rewrite unrelated config.

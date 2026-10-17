@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue_opus_ms.py — 8ch Opus with Chrome / MediaMTX multiopus mapping.
+8ch Opus with Chrome / MediaMTX multiopus mapping.
 
 Stock GStreamer opusenc uses libopus family-1 surround (5 streams, 3
 coupled, mapping 0,4,1,2,3,5,6,7). MediaMTX's WHEP SDP (and the player

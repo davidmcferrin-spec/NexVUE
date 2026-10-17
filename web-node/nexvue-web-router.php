@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-web-router.php — path front door for the NexVUE edge UI + /api/*.
+ * Path front door for the NexVUE edge UI + /api/*.
  *
  * App root (parent of public/): pages/, nexvue-*.php, VERSION.
  * DocumentRoot must be {app}/public so those files are not web-enumerable.

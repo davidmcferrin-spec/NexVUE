@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nexvue-ops-env-update.py — line-based updater for /etc/nexvue/channels/<N>.env
+Line-based updater for /etc/nexvue/channels/<N>.env
 
 Preserves comments and layout. Used by nexvue-ops-env-read.sh /
 nexvue-ops-env-write.sh (via sudo). Also importable by unit tests.

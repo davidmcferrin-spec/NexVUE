@@ -1,7 +1,7 @@
 #!/usr/bin/env php
 <?php
 /**
- * nexvue-auth-bootstrap.php — create auth.db, keypair, seed admin, publish JWT.
+ * Create auth.db, keypair, seed admin, publish JWT.
  *
  * Run by setup.sh (as root). Safe to re-run: does not reset existing users or
  * rotate keys/JWT if already present.

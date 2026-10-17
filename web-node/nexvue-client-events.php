@@ -1,6 +1,6 @@
 <?php
 /**
- * nexvue-client-events.php — opt-in Player / Multiview session reports.
+ * Opt-in Player / Multiview session reports.
  *
  * Separate SQLite from metrics.db: Apache (www-data) writes here; the
  * nexvue-metrics collector never touches this file. Nothing is stored
