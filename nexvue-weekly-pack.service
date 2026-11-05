@@ -1,0 +1,17 @@
+# /etc/systemd/system/nexvue-weekly-pack.service
+#
+# Oneshot weekly pack. The timer is opt-in (NEXVUE_WEEKLY_PACK=1); this
+# unit does not enable itself. Root, because journalctl, decklink-status,
+# and the metrics DB are read from here, and the instance role is the
+# process credential. No AWS access keys are set in this unit.
+
+[Unit]
+Description=NexVUE weekly metrics and service-status pack
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/bin/nexvue-weekly-pack.py
+Nice=10
+TimeoutStartSec=15min
