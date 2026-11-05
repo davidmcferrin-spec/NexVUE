@@ -1,0 +1,28 @@
+# /etc/systemd/system/nexvue-weekly-pack.timer
+#
+# Sunday 23:00 America/New_York, spread across 10 minutes so a rack of
+# appliances does not PUT at the same second. The host clock is Eastern
+# too; Timezone= keeps the fire time if that ever drifts.
+# Persistent so a box that was off at 23:00 still uploads after boot.
+#
+# setup.sh installs this unit and enables it only when nexvue.env
+# contains NEXVUE_WEEKLY_PACK=1. Turn that on for NYC first
+# (hostname like nynycof1nexvue01), then other sites.
+# A drop-in can replace the calendar:
+#   /etc/systemd/system/nexvue-weekly-pack.timer.d/calendar.conf
+#   [Timer]
+#   OnCalendar=
+#   OnCalendar=Sun *-*-* 22:30:00
+
+[Unit]
+Description=NexVUE weekly metrics pack timer (Sunday 23:00 America/New_York)
+
+[Timer]
+OnCalendar=Sun *-*-* 23:00:00
+Timezone=America/New_York
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

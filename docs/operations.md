@@ -91,6 +91,66 @@ The dashboard is `/metrics` on Apache. Samples are UTC. Labels use
 read from a long-running `intel_gpu_top -J` process. A one-shot pipe never
 flushes, so the chart stays empty.
 
+## Weekly metrics pack
+
+Opt-in Sunday upload of a compact pack, not the support-bundle zip.
+Enable it on NYC first (hostname like `nynycof1nexvue01`), then other
+sites. The timer fires at 23:00 America/New_York. The S3 prefix is the
+ISO week of that local Sunday:
+
+```text
+s3://$NEXVUE_S3_BUCKET/nexvue/<hostname>/weekly/YYYY-Www/
+```
+
+23:00 Eastern is already Monday UTC. The folder uses the local week so
+the Sunday pack is not filed under the next ISO week.
+
+A Quad has inputs 0–7. Slots come from `MAX_CHANNELS` (else
+`MAX_DEVICES`), then from `/etc/nexvue/channels/<N>.env` when that count
+is unset. When `decklink-status` returns a device list, indexes the card
+did not enumerate are left out. `encode@8` and `encode@9` are not
+reported. Those numbers exist only because the support bundle probes the
+systemd template through `@9`.
+
+The instance role is the credential. Do not put access keys in
+`nexvue.env` or the unit. `s3:PutObject` on
+`arn:aws:s3:::BUCKET/nexvue/HOSTNAME/weekly/*` is enough. A fleet role
+can use `nexvue/*/weekly/*`.
+
+```bash
+# /etc/nexvue/nexvue.env
+NEXVUE_WEEKLY_PACK=1
+NEXVUE_S3_BUCKET=your-bucket
+NEXVUE_S3_REGION=us-east-1
+```
+
+`NEXVUE_S3_PREFIX` defaults to `nexvue`. `NEXVUE_SITE_ID` is optional and
+wins over `NEXVUE_PORTAL_STATION_ID`. `sudo ./setup.sh` enables the timer
+when `NEXVUE_WEEKLY_PACK=1`. It does not turn the timer off again if you
+enabled it by hand.
+
+```bash
+sudo nexvue-weekly-pack.py --no-upload
+sudo nexvue-weekly-pack.py
+aws s3 ls "s3://BUCKET/nexvue/$(hostname)/weekly/"
+aws s3 cp "s3://BUCKET/nexvue/$(hostname)/weekly/YYYY-Www/manifest.json" -
+systemctl list-timers nexvue-weekly-pack.timer
+```
+
+`--no-upload` / `--dry-run` writes the pack under
+`/var/lib/nexvue/weekly/YYYY-Www/` (or `--out-dir`) and does not call
+AWS. The upload prints the `s3://` prefix. Objects are `manifest.json`,
+`host_samples.jsonl.gz`, `host_summary.json`, `services.json`,
+`restarts.json`, plus `decklink-status.json` when the helper exists.
+`viewer_sessions.json` and `totals.json` are written only when those
+tables are already in `metrics.db`. Session rows are counts: no viewer
+addresses, names, or user agents. Secret-bearing lines are redacted the
+same way as the support bundle, and `nexvue.env` is not copied.
+
+A calendar drop-in replaces `OnCalendar` on
+`nexvue-weekly-pack.timer`. Clear the stock value first (`OnCalendar=`)
+or both fire times stay active.
+
 ## Portal
 
 `sudo ./setup.sh --portal` on a machine without DeckLink or MediaMTX.

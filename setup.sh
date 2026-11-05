@@ -701,6 +701,7 @@ REQUIRED_FILES=(
   nexvue-ops-env-read.sh nexvue-ops-env-write.sh nexvue-ops-restart.sh
   nexvue-ops-enable.sh nexvue-ops-audio-probe.sh
   nexvue-ops-support-bundle.sh nexvue-support-bundle.py
+  nexvue-weekly-pack.py nexvue-weekly-pack.service nexvue-weekly-pack.timer
   nexvue-ops-update.sh nexvue-ops-reboot.sh
   web-node/nexvue-version.php
   VERSION
@@ -937,6 +938,7 @@ install -m 755 "${REPO_DIR}/nexvue-ops-enable.sh" /usr/local/bin/nexvue-ops-enab
 install -m 755 "${REPO_DIR}/nexvue-ops-audio-probe.sh" /usr/local/bin/nexvue-ops-audio-probe.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-support-bundle.sh" /usr/local/bin/nexvue-ops-support-bundle.sh
 install -m 755 "${REPO_DIR}/nexvue-support-bundle.py" /usr/local/bin/nexvue-support-bundle.py
+install -m 755 "${REPO_DIR}/nexvue-weekly-pack.py" /usr/local/bin/nexvue-weekly-pack.py
 install -m 755 "${REPO_DIR}/nexvue-ops-update.sh" /usr/local/bin/nexvue-ops-update.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-reboot.sh" /usr/local/bin/nexvue-ops-reboot.sh
 install -m 755 "${REPO_DIR}/nexvue-ops-portal-write.py" /usr/local/bin/nexvue-ops-portal-write.py
@@ -1003,7 +1005,9 @@ install -m 644 "${REPO_DIR}/mediamtx.service" \
                "${REPO_DIR}/nexvue-tls-renew.service" \
                "${REPO_DIR}/nexvue-tls-renew.timer" \
                "${REPO_DIR}/nexvue-encode-auto-unpark.service" \
-               "${REPO_DIR}/nexvue-encode-auto-unpark.timer" /etc/systemd/system/
+               "${REPO_DIR}/nexvue-encode-auto-unpark.timer" \
+               "${REPO_DIR}/nexvue-weekly-pack.service" \
+               "${REPO_DIR}/nexvue-weekly-pack.timer" /etc/systemd/system/
 systemctl daemon-reload
 ok "scripts + units installed, systemd reloaded"
 
@@ -1068,6 +1072,18 @@ if systemctl enable --now nexvue-encode-auto-unpark.timer >/dev/null 2>&1; then
   ok "enabled --now nexvue-encode-auto-unpark.timer (SDI lock starts parked encode@N)"
 else
   warn "could not enable --now nexvue-encode-auto-unpark.timer"
+fi
+
+# Weekly metrics pack is opt-in so NYC can be turned on before other sites.
+# setup.sh does not disable a timer an admin already enabled by hand.
+if [ "$(nexvue_env_get NEXVUE_WEEKLY_PACK 0)" = "1" ]; then
+  if systemctl enable --now nexvue-weekly-pack.timer >/dev/null 2>&1; then
+    ok "enabled --now nexvue-weekly-pack.timer (NEXVUE_WEEKLY_PACK=1)"
+  else
+    warn "could not enable nexvue-weekly-pack.timer"
+  fi
+else
+  ok "nexvue-weekly-pack.timer installed, not enabled (set NEXVUE_WEEKLY_PACK=1 on NYC first)"
 fi
 
 enc_ok=0
@@ -1699,7 +1715,8 @@ done
 [ -x /usr/local/bin/mediamtx ] && ok "mediamtx binary present" || warn "mediamtx binary missing"
 for u in mediamtx.service nexvue-encode@.service nexvue-decklink-configure.service \
          nexvue-status.service nexvue-metrics.service nexvue-sfu-publish.service \
-         nexvue-encode-auto-unpark.service nexvue-encode-auto-unpark.timer; do
+         nexvue-encode-auto-unpark.service nexvue-encode-auto-unpark.timer \
+         nexvue-weekly-pack.service nexvue-weekly-pack.timer; do
   [ -f "/etc/systemd/system/$u" ] && ok "unit installed: $u" || warn "unit missing: $u"
 done
 
@@ -1880,7 +1897,8 @@ fi
 for w in nexvue-ops-status.sh nexvue-ops-journal.sh nexvue-ops-env-read.sh \
          nexvue-ops-env-write.sh nexvue-ops-restart.sh nexvue-ops-enable.sh \
          nexvue-ops-audio-probe.sh nexvue-ops-support-bundle.sh \
-         nexvue-support-bundle.py nexvue-ops-update.sh nexvue-ops-reboot.sh \
+         nexvue-support-bundle.py nexvue-weekly-pack.py \
+         nexvue-ops-update.sh nexvue-ops-reboot.sh \
          nexvue-ops-env-update.py nexvue-phase1-closeout.sh \
          nexvue-phase1-deploy-verify.sh nexvue-encode-storm-diagnose.sh \
          nexvue-encode-auto-park.sh          nexvue-ops-network-write.sh \
@@ -1904,6 +1922,14 @@ if [ -f /usr/local/share/nexvue/VERSION ]; then
   ok "VERSION: $(tr -d '[:space:]' </usr/local/share/nexvue/VERSION)"
 else
   warn "VERSION stamp missing under /usr/local/share/nexvue"
+fi
+if systemctl is-enabled nexvue-weekly-pack.timer >/dev/null 2>&1; then
+  ok "nexvue-weekly-pack.timer enabled"
+  if [ -z "$(nexvue_env_get NEXVUE_S3_BUCKET "")" ]; then
+    warn "nexvue-weekly-pack.timer is enabled but NEXVUE_S3_BUCKET is empty — Sunday upload will fail"
+  fi
+else
+  ok "nexvue-weekly-pack.timer not enabled (opt-in; NEXVUE_WEEKLY_PACK=1 for NYC)"
 fi
 if [ -f /etc/sudoers.d/nexvue-ops ]; then
   ok "sudoers drop-in: /etc/sudoers.d/nexvue-ops"

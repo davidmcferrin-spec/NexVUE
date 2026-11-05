@@ -107,3 +107,65 @@ sudo ./setup.sh --check
 
 Ports, TLS, signal loss, captions, metrics, and the portal are in
 [docs/operations.md](docs/operations.md).
+
+## Weekly metrics pack
+
+Sunday 23:00 America/New_York, an opt-in timer writes a compact pack (not
+the support-bundle zip) and uploads it:
+
+```text
+s3://$NEXVUE_S3_BUCKET/nexvue/<hostname>/weekly/YYYY-Www/
+```
+
+`YYYY-Www` is the ISO week of that Sunday in America/New_York. 23:00
+Eastern is already Monday in UTC; the folder follows the local week.
+
+NYC appliances are named like `nynycof1nexvue01`. A DeckLink Quad has
+inputs 0–7. The pack lists `nexvue-encode@` for the configured slots
+(`MAX_CHANNELS`, otherwise `channels/*.env`, narrowed to devices
+`decklink-status` actually returns). It does not report `encode@8` or
+`encode@9` as disabled inputs. Enable NYC first, then other sites.
+
+Auth is the instance role (the default AWS credential chain). Do not put
+access keys in `nexvue.env`, the systemd unit, or the script.
+
+Add this to `/etc/nexvue/nexvue.env`, then re-run `sudo ./setup.sh` (or
+enable the timer yourself):
+
+```bash
+NEXVUE_WEEKLY_PACK=1
+NEXVUE_S3_BUCKET=your-bucket
+NEXVUE_S3_REGION=us-east-1
+# NEXVUE_S3_PREFIX=nexvue
+# NEXVUE_SITE_ID=
+```
+
+`NEXVUE_SITE_ID` is recorded when set. Otherwise the pack uses
+`NEXVUE_PORTAL_STATION_ID` if the station is adopted. The station API key
+is not read. `NEXVUE_S3_REGION` is optional when the instance already has
+a default region.
+
+The instance role needs `s3:PutObject` on
+`arn:aws:s3:::BUCKET/nexvue/HOSTNAME/weekly/*` for one appliance, or
+`arn:aws:s3:::BUCKET/nexvue/*/weekly/*` for the fleet. `s3:ListBucket` is
+not required for the upload.
+
+Check the pack without S3, upload once, then confirm the object and the
+timer:
+
+```bash
+sudo nexvue-weekly-pack.py --no-upload
+sudo nexvue-weekly-pack.py
+aws s3 ls "s3://BUCKET/nexvue/$(hostname)/weekly/"
+aws s3 cp "s3://BUCKET/nexvue/$(hostname)/weekly/YYYY-Www/manifest.json" -
+systemctl list-timers nexvue-weekly-pack.timer
+```
+
+`--no-upload` (also `--dry-run`) prints the local directory and does not
+call AWS. A real run prints the `s3://` prefix. `manifest.json` is plain
+JSON. Host samples are `host_samples.jsonl.gz`, with every sample still
+rolled up in `host_summary.json`.
+
+`setup.sh` installs the unit on every edge and enables
+`nexvue-weekly-pack.timer` only when `NEXVUE_WEEKLY_PACK=1`. A drop-in
+can move the fire time; see `nexvue-weekly-pack.timer`.
