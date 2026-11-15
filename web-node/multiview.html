@@ -349,6 +349,24 @@
     margin: 12px 0; text-align: left;
   }
   .qr-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* Phone / short landscape: the grid-sync inline width clips the control
+     bar. Let it use the viewport and wrap instead of scrolling sideways. */
+  @media (max-width: 759px), (max-height: 520px) and (max-width: 1024px) {
+    body { overflow-x: hidden; }
+    .bar {
+      width: auto !important;
+      max-width: 100%;
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+    }
+    .bar-cluster { flex-wrap: wrap; }
+    .pane-bar { flex-wrap: wrap; min-width: 0; }
+    .pane-bar select { min-height: 44px; min-width: 0; }
+    .pane-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    #grid { max-width: 100%; }
+    .stage { min-width: 0; min-height: 120px; }
+  }
 </style>
 </head>
 <body>
@@ -1474,7 +1492,16 @@
     const stage = document.querySelector(".stage");
     const bar = document.querySelector(".bar");
     if (!stage || !bar || !grid) return;
+    const compactMq = window.matchMedia("(max-width: 759px), (max-height: 520px) and (max-width: 1024px)");
     function sync() {
+      // Inline width tracks the centered grid on a desktop. On a phone that
+      // width is narrower than the controls and clips them.
+      if (compactMq.matches) {
+        bar.style.width = "";
+        bar.style.marginLeft = "";
+        bar.style.marginRight = "";
+        return;
+      }
       const gr = grid.getBoundingClientRect();
       const sr = stage.getBoundingClientRect();
       bar.style.width = gr.width + "px";

@@ -20,6 +20,10 @@
   var VERSION_URL = "/api/version";
   var ROTATE_KEY = "nexvue-video-rotate";
   var THEATER_KEY = "nexvue-theater";
+  var TOOLS_KEY = "nexvue-player-tools";
+  // Phones, plus short landscape (a landscape phone is wide but not tall).
+  // 759px leaves a 768px tablet on the desktop bars.
+  var COMPACT_MQ = "(max-width: 759px), (max-height: 520px) and (max-width: 1024px)";
   var _maxChannels = 8;
 
   function normalizeRotate(deg) {
@@ -95,6 +99,31 @@
   function pageWantsTheater() {
     var root = global.document && global.document.documentElement;
     return !!(root && root.hasAttribute("data-theater-page"));
+  }
+
+  function pageIsPlayer() {
+    var root = global.document && global.document.documentElement;
+    return !!(root && root.hasAttribute("data-player-page"));
+  }
+
+  function readPlayerToolsOpen() {
+    try {
+      return global.localStorage.getItem(TOOLS_KEY) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setPlayerToolsOpen(on) {
+    on = !!on;
+    var root = global.document && global.document.documentElement;
+    if (root) root.classList.toggle("player-tools-open", on);
+    try {
+      global.localStorage.setItem(TOOLS_KEY, on ? "1" : "0");
+    } catch (e) {
+      /* private mode */
+    }
+    return on;
   }
 
   function getTheaterPref() {
@@ -400,6 +429,10 @@
   if (pageWantsTheater()) {
     applyTheater(getTheaterPref());
   }
+  // Player options default closed on a phone. Remembered per browser.
+  if (pageIsPlayer() && readPlayerToolsOpen()) {
+    global.document.documentElement.classList.add("player-tools-open");
+  }
 
   function ensureVersionEl() {
     var el = global.document.getElementById("nav-version");
@@ -576,8 +609,216 @@
     return _aliasPromise;
   }
 
+  function ensureCompactNavCss() {
+    if (global.document.getElementById("nexvue-ui-compact-css")) return;
+    var s = global.document.createElement("style");
+    s.id = "nexvue-ui-compact-css";
+    s.textContent = [
+      ".nav-menu-btn{display:none}",
+      ".nav-menu{display:none}",
+      "@media " + COMPACT_MQ + "{",
+      ".topnav{position:relative;z-index:80;flex-wrap:nowrap;gap:6px}",
+      ".topnav .brand{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".topnav .nav-logo{height:22px;max-width:64px;margin-right:4px}",
+      ".nav-menu-btn{display:inline-flex;align-items:center;justify-content:center;",
+      "flex:0 0 auto;min-width:44px;min-height:44px;padding:8px}",
+      ".topnav .theme-toggle,.topnav .nav-logout,.topnav .nav-version{flex-shrink:0}",
+      ".topnav .theme-toggle,.topnav .nav-logout,.topnav .brand{min-height:44px}",
+      ".nav-menu-bars{display:block;width:18px;height:2px;background:currentColor;position:relative}",
+      ".nav-menu-bars::before,.nav-menu-bars::after{content:\"\";position:absolute;left:0;",
+      "width:18px;height:2px;background:currentColor}",
+      ".nav-menu-bars::before{top:-6px}",
+      ".nav-menu-bars::after{top:6px}",
+      ".topnav.menu-open .nav-menu-bars{background:transparent}",
+      ".topnav.menu-open .nav-menu-bars::before{top:0;transform:rotate(45deg)}",
+      ".topnav.menu-open .nav-menu-bars::after{top:0;transform:rotate(-45deg)}",
+      ".nav-menu{position:absolute;top:100%;left:0;right:0;z-index:80;",
+      "flex-direction:column;align-items:stretch;gap:4px;padding:8px;",
+      "background:var(--panel,#1d232b);border-bottom:1px solid var(--edge,#2c3542);",
+      "box-shadow:var(--shadow,0 4px 16px rgba(0,0,0,.45))}",
+      ".topnav.menu-open .nav-menu{display:flex}",
+      ".topnav .nav-menu a,.topnav .nav-menu .nav-share{min-height:44px;display:flex;align-items:center}",
+      ".topnav .nav-menu [hidden]{display:none!important}",
+      ".topnav .nav-menu .nav-who{display:block;max-width:none;margin:6px 8px 2px;",
+      "white-space:normal;overflow:visible;text-overflow:clip}",
+      "}"
+    ].join("");
+    (global.document.head || global.document.documentElement).appendChild(s);
+  }
+
+  // Page links collapse into one menu on a phone. Theme and Logout stay in the bar
+  // because those are the two controls you still need with the menu closed.
+  // Share and the signed-in name move into the menu — they are what wrapped the
+  // bar onto extra rows. Version stays beside the theme toggle.
+  function wireCompactNav() {
+    var nav = global.document.querySelector("nav.topnav");
+    if (!nav || nav.getAttribute("data-compact-nav") === "1") return;
+    nav.setAttribute("data-compact-nav", "1");
+    ensureCompactNavCss();
+
+    var links = Array.prototype.slice.call(nav.querySelectorAll(":scope > a"));
+    var menuBtn = global.document.createElement("button");
+    menuBtn.type = "button";
+    menuBtn.className = "nav-menu-btn";
+    menuBtn.setAttribute("aria-label", "Menu");
+    menuBtn.setAttribute("aria-expanded", "false");
+    menuBtn.setAttribute("aria-controls", "nav-menu");
+    menuBtn.innerHTML = '<span class="nav-menu-bars" aria-hidden="true"></span>';
+
+    var panel = global.document.createElement("div");
+    panel.id = "nav-menu";
+    panel.className = "nav-menu";
+
+    var logo = nav.querySelector(".nav-logo");
+    var brand = nav.querySelector(".brand");
+    var after = logo || brand;
+    if (after && after.nextSibling) nav.insertBefore(menuBtn, after.nextSibling);
+    else nav.insertBefore(menuBtn, nav.firstChild);
+    nav.appendChild(panel);
+
+    var mq = global.matchMedia(COMPACT_MQ);
+    var layingOut = false;
+
+    function closeMenu() {
+      nav.classList.remove("menu-open");
+      menuBtn.setAttribute("aria-expanded", "false");
+    }
+
+    function openMenu() {
+      if (!mq.matches) return;
+      nav.classList.add("menu-open");
+      menuBtn.setAttribute("aria-expanded", "true");
+    }
+
+    function shareEl() { return global.document.getElementById("nav-share"); }
+    function whoEl() { return global.document.getElementById("nav-who"); }
+
+    function compactReady() {
+      if (!mq.matches) return false;
+      var i;
+      for (i = 0; i < links.length; i++) {
+        if (links[i].parentNode !== panel) return false;
+      }
+      var want = [];
+      if (shareEl()) want.push(shareEl());
+      if (whoEl()) want.push(whoEl());
+      var seen = [];
+      var n;
+      for (n = panel.firstChild; n; n = n.nextSibling) {
+        if (n.id === "nav-share" || n.id === "nav-who") seen.push(n);
+      }
+      if (seen.length !== want.length) return false;
+      for (i = 0; i < want.length; i++) {
+        if (seen[i] !== want[i]) return false;
+      }
+      return true;
+    }
+
+    function desktopReady() {
+      if (mq.matches) return false;
+      var theme = global.document.getElementById("theme-toggle");
+      var share = shareEl();
+      var who = whoEl();
+      var logout = global.document.getElementById("nav-logout");
+      var version = global.document.getElementById("nav-version");
+      var i;
+      for (i = 0; i < links.length; i++) {
+        if (links[i].parentNode !== nav) return false;
+      }
+      var beforeExtras = share && share.parentNode === nav ? share : theme;
+      if (links.length && beforeExtras && links[links.length - 1].nextSibling !== beforeExtras) {
+        return false;
+      }
+      if (share && theme && share.nextSibling !== theme) return false;
+      if (version && theme && theme.nextSibling !== version) return false;
+      if (who && who.parentNode !== nav) return false;
+      if (who && logout && who.nextSibling !== logout) return false;
+      return true;
+    }
+
+    function layoutNav() {
+      if (layingOut) return;
+      if (compactReady() || desktopReady()) return;
+      layingOut = true;
+      try {
+        var theme = global.document.getElementById("theme-toggle");
+        var share = shareEl();
+        var who = whoEl();
+        var logout = global.document.getElementById("nav-logout");
+        var version = global.document.getElementById("nav-version");
+        if (mq.matches) {
+          links.forEach(function (a) { panel.appendChild(a); });
+          if (share) panel.appendChild(share);
+          if (who) panel.appendChild(who);
+        } else {
+          closeMenu();
+          var anchor = share && share.parentNode === nav ? share : theme;
+          links.forEach(function (a) {
+            if (anchor) nav.insertBefore(a, anchor);
+            else nav.appendChild(a);
+          });
+          if (share && theme) nav.insertBefore(share, theme);
+          if (version && theme) {
+            if (theme.nextSibling) nav.insertBefore(version, theme.nextSibling);
+            else nav.appendChild(version);
+          }
+          if (who && logout) nav.insertBefore(who, logout);
+          else if (who) nav.appendChild(who);
+        }
+      } finally {
+        layingOut = false;
+      }
+    }
+
+    menuBtn.addEventListener("click", function () {
+      if (nav.classList.contains("menu-open")) closeMenu();
+      else openMenu();
+    });
+    panel.addEventListener("click", function (ev) {
+      var t = ev.target;
+      if (t && t.closest && t.closest("a, button")) closeMenu();
+    });
+    global.document.addEventListener("click", function (ev) {
+      if (!nav.classList.contains("menu-open")) return;
+      if (nav.contains(ev.target)) return;
+      closeMenu();
+    });
+    // Capture so Escape closes the menu before theater treats it as "exit fill".
+    global.document.addEventListener("keydown", function (ev) {
+      if (ev.key !== "Escape") return;
+      if (!nav.classList.contains("menu-open")) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      closeMenu();
+      menuBtn.focus();
+    }, true);
+    if (mq.addEventListener) mq.addEventListener("change", layoutNav);
+    else if (mq.addListener) mq.addListener(layoutNav);
+
+    layoutNav();
+    var obs = new MutationObserver(function () { layoutNav(); });
+    obs.observe(nav, { childList: true });
+  }
+
+  function wirePlayerTools() {
+    var btn = global.document.getElementById("tools-toggle");
+    if (!btn) return;
+    function sync() {
+      var on = global.document.documentElement.classList.contains("player-tools-open");
+      btn.setAttribute("aria-expanded", on ? "true" : "false");
+    }
+    sync();
+    btn.addEventListener("click", function () {
+      var on = !global.document.documentElement.classList.contains("player-tools-open");
+      setPlayerToolsOpen(on);
+      sync();
+    });
+  }
+
   onReady(function () {
     syncToggle();
+    wireCompactNav();
+    wirePlayerTools();
     var btn = global.document.getElementById("theme-toggle");
     if (btn) {
       btn.addEventListener("click", function () {

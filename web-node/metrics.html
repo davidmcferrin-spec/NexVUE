@@ -206,6 +206,15 @@
     margin: 12px 0; text-align: left;
   }
   .qr-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* minmax(420px) forces the chart grid wider than a phone. */
+  @media (max-width: 759px), (max-height: 520px) and (max-width: 1024px) {
+    body { overflow-x: hidden; }
+    .grid { grid-template-columns: minmax(0, 1fr); }
+    .panel { max-width: 100%; overflow-x: auto; }
+    .bar { max-width: 100%; }
+    input[type="datetime-local"] { max-width: 100%; min-width: 0; }
+  }
 </style>
 </head>
 <body>
