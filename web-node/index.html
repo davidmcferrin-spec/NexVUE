@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theater-page class="player-idle">
+<html lang="en" data-theater-page data-player-page class="player-idle">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -233,6 +233,7 @@
   }
   html.theater .topnav,
   html.theater .bar,
+  html.theater .tools-toggle,
   html.theater .stats-drawer:not(.open) { display: none; }
   html.theater .frame {
     width: 100%; height: auto; flex: 1; min-height: 0; max-width: none; margin: 0;
@@ -345,6 +346,110 @@
     margin: 12px 0; text-align: left;
   }
   .qr-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* Phone + short landscape. Desktop/tablet keep the bars above.
+     Options start closed so the picture sits under the header; the
+     open/closed choice is localStorage (nexvue-player-tools), per browser. */
+  .tools-toggle { display: none; }
+  .tools-toggle .caret { display: inline-block; transition: transform .15s ease; }
+  html.player-tools-open .tools-toggle .caret { transform: rotate(180deg); }
+
+  @media (max-width: 759px), (max-height: 520px) and (max-width: 1024px) {
+    body { padding: 8px 8px 0; overflow-x: hidden; }
+    .topnav { margin: -8px -8px 8px; padding: 2px 8px; }
+    .stats-drawer { margin-inline: -8px; }
+    .stats-drawer #stats-toggle { min-height: 44px; }
+    .frame { overflow: hidden; min-width: 0; }
+    .channel-bar {
+      flex-wrap: nowrap; gap: 6px; margin-bottom: 0; min-width: 0;
+    }
+    /* Basis 0 so the scroller takes only what Disconnect and the status leave. */
+    #channels {
+      display: flex; flex: 1 1 0; min-width: 0; gap: 6px;
+      overflow-x: auto; overflow-y: hidden;
+      overscroll-behavior-x: contain;
+      scrollbar-width: thin;
+      scrollbar-color: var(--edge) transparent;
+    }
+    #channels::-webkit-scrollbar { height: 4px; }
+    #channels::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 4px; }
+    .channel-bar button { min-height: 44px; flex: 0 0 auto; }
+    .channel-bar #state {
+      flex: 0 0 auto; max-width: 11em;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .tools-toggle {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; min-height: 44px; margin: 0 0 8px;
+      background: transparent; border: none; border-radius: 0; color: var(--dim);
+    }
+    .tools-toggle:hover { color: var(--text); }
+    .bar.controls { display: none; }
+    html.player-tools-open .bar.controls {
+      display: flex; flex-direction: column; align-items: stretch;
+      gap: 8px; margin-bottom: 8px;
+    }
+    .bar.controls .bar-cluster,
+    .bar.controls .bar-cluster + .bar-cluster,
+    .bar.controls .bar-cluster.window {
+      margin-left: 0; padding-left: 0; border-left: none;
+      width: 100%; flex-wrap: wrap;
+    }
+    .bar.controls button,
+    .bar.controls .seg button { min-height: 44px; }
+    .bar.controls .icon-btn { min-width: 44px; }
+    .bar.controls .vol-wrap { flex: 1 1 160px; min-height: 44px; max-width: 100%; }
+    .bar.controls .vol-wrap input[type="range"] {
+      flex: 1 1 auto; width: auto; min-width: 88px; height: 44px;
+    }
+    .stage { align-items: flex-start; min-width: 0; min-height: 0; }
+    /* stage-row is height:100% and centers its child. On a tall phone that
+       drops the picture into the middle of the leftover space. Pin it to the top. */
+    .stage-row { align-items: flex-start; height: auto; width: 100%; }
+    .videowrap { width: 100%; height: auto; max-height: 100%; }
+  }
+
+  /* Landscape phone: the picture fills the frame. The channel row sits on
+     the bottom edge so it does not steal a band of height. */
+  @media (max-height: 520px) and (orientation: landscape) {
+    body { padding: 0; }
+    .topnav { margin: 0; padding: 0 8px; }
+    .stats-drawer { margin-inline: 0; }
+    .frame {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-rows: minmax(0, 1fr) auto auto;
+    }
+    .stage {
+      grid-column: 1 / -1; grid-row: 1 / -1; z-index: 0;
+      align-items: center;
+    }
+    .stage-row { height: 100%; width: 100%; align-items: center; }
+    .videowrap {
+      width: auto; height: 100%; max-width: 100%; max-height: 100%;
+    }
+    .channel-bar {
+      grid-column: 1; grid-row: 2; z-index: 2; margin: 0;
+      background: var(--panel);
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+    }
+    .tools-toggle {
+      grid-column: 2; grid-row: 2; z-index: 2; width: auto; margin: 0;
+      align-self: stretch;
+      background: var(--panel); border: 1px solid var(--edge); border-radius: 0;
+    }
+    .bar.controls {
+      grid-column: 1 / -1; grid-row: 3; z-index: 3;
+      background: var(--panel);
+    }
+    html.player-tools-open .bar.controls {
+      margin: 0; max-height: 46dvh; overflow: auto;
+    }
+  }
+
+  /* Open options must not bring the control bar back during fill-window. */
+  html.theater .bar.controls,
+  html.theater .tools-toggle { display: none; }
 </style>
 </head>
 <body>
@@ -363,13 +468,16 @@
 </nav>
 
 <div class="frame">
-<div class="bar">
+<div class="bar channel-bar">
   <span id="channels"></span>
   <button id="disconnect">Disconnect</button>
   <span id="state">select a channel</span>
 </div>
+<button type="button" id="tools-toggle" class="tools-toggle" aria-expanded="false" aria-controls="player-tools">
+  <span class="caret" aria-hidden="true">▾</span> Options
+</button>
 
-<div class="bar controls">
+<div class="bar controls" id="player-tools">
   <div class="bar-cluster watch">
     <span class="seg" role="group" aria-label="Quality">
       <button type="button" id="q-auto" class="q active">Auto</button>
@@ -601,6 +709,8 @@
   function setState(text, cls) {
     stateEl.textContent = text;
     stateEl.className = cls || "";
+    // The phone row ellipsizes this. title keeps the full line (long errors).
+    stateEl.title = text || "";
   }
 
   function pathFor(rend) {
@@ -959,7 +1069,10 @@
     teardown();
     currentBase = base;
     const activeBtn = btn || document.querySelector(`button.ch[data-path="${base}"]`);
-    if (activeBtn) activeBtn.classList.add("active");
+    if (activeBtn) {
+      activeBtn.classList.add("active");
+      revealChannel(activeBtn);
+    }
     syncIdleUi();
     // In auto mode always start on HI; the stats loop will step down if the
     // link can't carry it. Manual LO is honored if the path exists.
@@ -1464,6 +1577,23 @@
       b.addEventListener("click", () => connectChannel(path, b));
       host.appendChild(b);
     }
+    if (prevActive) {
+      const active = host.querySelector(`button.ch[data-path="${prevActive}"]`);
+      if (active) revealChannel(active);
+    }
+  }
+
+  // #channels is a horizontal scroller only on a phone (display:contents on
+  // desktop). Keep the tuned channel in view without scrolling the page.
+  function revealChannel(btn) {
+    const host = $("channels");
+    if (!host || !btn) return;
+    const ox = getComputedStyle(host).overflowX;
+    if (ox !== "auto" && ox !== "scroll") return;
+    const hb = host.getBoundingClientRect();
+    const bb = btn.getBoundingClientRect();
+    if (bb.left < hb.left) host.scrollLeft -= hb.left - bb.left;
+    else if (bb.right > hb.right) host.scrollLeft += bb.right - hb.right;
   }
 
   async function loadChannelMeta() {

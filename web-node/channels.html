@@ -386,6 +386,15 @@
   .audio-probe .suggest-list label { cursor: pointer; flex: 1; }
   .audio-probe .suggest-list .score { color: var(--dim); font-size: 11px; }
   .audio-probe .suggest-list .exact { color: var(--ok); }
+
+  /* Two-column settings grids and the file input are wider than a phone. */
+  @media (max-width: 759px), (max-height: 520px) and (max-width: 1024px) {
+    body { overflow-x: hidden; }
+    .network-grid, .tls-grid, .form-grid { grid-template-columns: minmax(0, 1fr); }
+    .panel, .branding-row, .bar { max-width: 100%; min-width: 0; }
+    .panel { overflow-x: auto; }
+    input[type="file"] { max-width: 100%; }
+  }
 </style>
 </head>
 <body>

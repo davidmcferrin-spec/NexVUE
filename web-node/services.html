@@ -151,6 +151,14 @@
     margin: 12px 0; text-align: left;
   }
   .qr-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* The bundle bar is flex-shrink:0, so on a phone it stays one long row. */
+  @media (max-width: 759px), (max-height: 520px) and (max-width: 1024px) {
+    body { overflow-x: hidden; }
+    .page-head, .support-bundle-bar, .log-bar, .layout { max-width: 100%; min-width: 0; }
+    .page-head .warn { flex-basis: 100%; }
+    .support-bundle-bar { flex: 1 1 100%; width: 100%; }
+  }
 </style>
 </head>
 <body>
