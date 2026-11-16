@@ -452,6 +452,20 @@
 }
 .nexvue-vu-label { font-size: 9px; color: var(--dim, #98a6b5); }
 .nexvue-vu-ch.solo .nexvue-vu-label { color: var(--acc, #56c4f5); font-weight: 600; }
+/* Tablet tiles are wide enough for larger meters, still inside the picture. */
+@media (min-width: 760px) and (max-width: 1279px) and (min-height: 640px) and ((hover: none) or (pointer: coarse) or (any-pointer: coarse)) {
+  .nexvue-vu { font-size: 12px; max-width: 72%; }
+  .nexvue-vu-toolbar button {
+    min-height: 44px; padding: 8px 10px; font-size: 12px;
+  }
+  .nexvue-vu-ch { min-width: 22px; }
+  .nexvue-vu-track { width: 14px; min-height: 64px; }
+  .nexvue-vu-label { font-size: 12px; }
+  .nexvue-vu-scale { width: 36px; flex-basis: 36px; font-size: 12px; }
+}
+@media (hover: none), (pointer: coarse) {
+  .nexvue-vu-toolbar button:active { color: var(--text, #d6dde6); border-color: var(--acc, #56c4f5); }
+}
 `;
     document.head.appendChild(s);
   }

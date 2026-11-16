@@ -40,7 +40,9 @@
     max-height: 100dvh;
   }
   body {
-    margin: 0; padding: 16px 16px 0; background: var(--bg); color: var(--text);
+    margin: 0;
+    padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+    background: var(--bg); color: var(--text);
     font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
     display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   }
@@ -366,6 +368,50 @@
     .pane-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     #grid { max-width: 100%; }
     .stage { min-width: 0; min-height: 120px; }
+  }
+
+  /* Same touch band as the player. 2-up in portrait, 3-up for quad in landscape.
+     Dual stays 2-up because there are only two panes. */
+  @media (min-width: 760px) and (max-width: 1279px) and (min-height: 640px) and ((hover: none) or (pointer: coarse) or (any-pointer: coarse)) {
+    .bar {
+      width: auto !important;
+      max-width: 100%;
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+    }
+    .bar button, .pane-bar select { min-height: 44px; }
+    .vol-wrap input[type="range"] {
+      -webkit-appearance: none; appearance: none;
+      height: 44px; background: transparent;
+    }
+    .vol-wrap input[type="range"]::-webkit-slider-runnable-track {
+      height: 6px; background: var(--edge); border-radius: 3px;
+    }
+    .vol-wrap input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 28px; height: 28px; margin-top: -11px;
+      border-radius: 50%; background: var(--acc); border: none;
+    }
+    .vol-wrap input[type="range"]::-moz-range-thumb {
+      width: 28px; height: 28px; border-radius: 50%; background: var(--acc); border: none;
+    }
+    button:active { border-color: var(--acc); }
+    #grid.dual, #grid.quad {
+      width: 100%;
+      height: auto;
+      max-height: 100%;
+      aspect-ratio: auto;
+    }
+    .pane { aspect-ratio: 16 / 9; min-height: 0; }
+  }
+  @media (min-width: 760px) and (max-width: 1279px) and (min-height: 640px) and (orientation: portrait) and ((hover: none) or (pointer: coarse) or (any-pointer: coarse)) {
+    #grid.dual, #grid.quad { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #grid.dual { grid-template-rows: auto; }
+    #grid.quad { grid-template-rows: auto auto; }
+  }
+  @media (min-width: 760px) and (max-width: 1279px) and (min-height: 640px) and (orientation: landscape) and ((hover: none) or (pointer: coarse) or (any-pointer: coarse)) {
+    #grid.dual { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto; }
+    #grid.quad { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto auto; }
   }
 </style>
 </head>
@@ -1447,11 +1493,17 @@
     }, TIP_DELAY_MS);
   }
 
+  const coarsePointer = window.matchMedia("(hover: none), (pointer: coarse)");
   document.querySelectorAll("#stats .stat[data-tip]").forEach((el) => {
     el.addEventListener("mouseenter", () => scheduleStatTip(el));
     el.addEventListener("mouseleave", () => { if (tipAnchor === el) hideStatTip(); });
     el.addEventListener("focus", () => scheduleStatTip(el));
     el.addEventListener("blur", () => { if (tipAnchor === el) hideStatTip(); });
+    el.addEventListener("click", () => {
+      if (!coarsePointer.matches) return;
+      if (tipAnchor === el && tipEl.classList.contains("visible")) hideStatTip();
+      else placeStatTip(el);
+    });
   });
   window.addEventListener("scroll", () => { if (tipEl.classList.contains("visible")) hideStatTip(); }, true);
   window.addEventListener("resize", hideStatTip);
@@ -1493,10 +1545,11 @@
     const bar = document.querySelector(".bar");
     if (!stage || !bar || !grid) return;
     const compactMq = window.matchMedia("(max-width: 759px), (max-height: 520px) and (max-width: 1024px)");
+    const tabletMq = window.matchMedia("(min-width: 760px) and (max-width: 1279px) and (min-height: 640px) and ((hover: none) or (pointer: coarse) or (any-pointer: coarse))");
     function sync() {
-      // Inline width tracks the centered grid on a desktop. On a phone that
-      // width is narrower than the controls and clips them.
-      if (compactMq.matches) {
+      // Inline width tracks the centered grid on a desktop. On a phone or
+      // tablet that width is narrower than the controls and clips them.
+      if (compactMq.matches || tabletMq.matches) {
         bar.style.width = "";
         bar.style.marginLeft = "";
         bar.style.marginRight = "";

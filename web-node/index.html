@@ -42,7 +42,9 @@
     max-height: 100dvh;
   }
   body {
-    margin: 0; padding: 16px 16px 0; background: var(--bg); color: var(--text);
+    margin: 0;
+    padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+    background: var(--bg); color: var(--text);
     font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
     display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   }
@@ -352,10 +354,15 @@
      open/closed choice is localStorage (nexvue-player-tools), per browser. */
   .tools-toggle { display: none; }
   .tools-toggle .caret { display: inline-block; transition: transform .15s ease; }
-  html.player-tools-open .tools-toggle .caret { transform: rotate(180deg); }
+  html.player-tools-open .tools-toggle .caret,
+  html.tablet-portrait-tools .tools-toggle .caret,
+  html.tablet-side-open .tools-toggle .caret { transform: rotate(180deg); }
 
   @media (max-width: 759px), (max-height: 520px) and (max-width: 1024px) {
-    body { padding: 8px 8px 0; overflow-x: hidden; }
+    body {
+      padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+      overflow-x: hidden;
+    }
     .topnav { margin: -8px -8px 8px; padding: 2px 8px; }
     .stats-drawer { margin-inline: -8px; }
     .stats-drawer #stats-toggle { min-height: 44px; }
@@ -412,7 +419,9 @@
   /* Landscape phone: the picture fills the frame. The channel row sits on
      the bottom edge so it does not steal a band of height. */
   @media (max-height: 520px) and (orientation: landscape) {
-    body { padding: 0; }
+    body {
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
     .topnav { margin: 0; padding: 0 8px; }
     .stats-drawer { margin-inline: 0; }
     .frame {
@@ -444,6 +453,130 @@
     }
     html.player-tools-open .bar.controls {
       margin: 0; max-height: 46dvh; overflow: auto;
+    }
+  }
+
+  /* iPad-class touch. A mouse below 1280 keeps the desktop bars (this query
+     requires no-hover or a coarse pointer). Half-width Split View is under
+     760px and stays on the phone rules above. */
+  @media (min-width: 760px) and (max-width: 1279px) and (min-height: 640px) and ((hover: none) or (pointer: coarse) or (any-pointer: coarse)) {
+    button, .seg button, .stats-drawer #stats-toggle { min-height: 44px; min-width: 44px; }
+    .bar.controls .icon-btn { min-width: 44px; }
+    .vol-wrap { min-height: 44px; }
+    .vol-wrap input[type="range"] {
+      -webkit-appearance: none; appearance: none;
+      height: 44px; background: transparent; cursor: pointer;
+    }
+    .vol-wrap input[type="range"]::-webkit-slider-runnable-track {
+      height: 6px; background: var(--edge); border-radius: 3px;
+    }
+    .vol-wrap input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 28px; height: 28px; margin-top: -11px;
+      border-radius: 50%; background: var(--acc); border: none;
+    }
+    .vol-wrap input[type="range"]::-moz-range-track {
+      height: 6px; background: var(--edge); border-radius: 3px; border: none;
+    }
+    .vol-wrap input[type="range"]::-moz-range-thumb {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: var(--acc); border: none;
+    }
+    /* Pressed state stands in for hover, which touch does not keep. */
+    button:active, .tools-toggle:active { border-color: var(--acc); color: var(--text); }
+  }
+
+  @media (min-width: 760px) and (max-width: 1279px) and (min-height: 640px) and (orientation: portrait) and ((hover: none) or (pointer: coarse) or (any-pointer: coarse)) {
+    .topnav {
+      margin: calc(-1 * max(16px, env(safe-area-inset-top))) calc(-1 * max(16px, env(safe-area-inset-right))) 8px calc(-1 * max(16px, env(safe-area-inset-left)));
+      padding-top: max(4px, env(safe-area-inset-top));
+      padding-bottom: 4px;
+    }
+    .stats-drawer {
+      margin-inline: calc(-1 * max(16px, env(safe-area-inset-right))) calc(-1 * max(16px, env(safe-area-inset-left)));
+    }
+    .frame { overflow: hidden; min-width: 0; }
+    .channel-bar { flex-wrap: nowrap; gap: 8px; margin-bottom: 0; min-width: 0; }
+    #channels {
+      display: flex; flex: 1 1 0; min-width: 0; gap: 8px;
+      overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain;
+    }
+    .channel-bar button { flex: 0 0 auto; }
+    .channel-bar #state {
+      flex: 0 0 auto; max-width: 14em;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .tools-toggle {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; min-height: 44px; margin: 0;
+      background: transparent; border: none; border-radius: 0; color: var(--dim);
+    }
+    .bar.controls { display: none; margin-bottom: 8px; }
+    /* One wrapping row, not the phone's stacked panel. */
+    html.tablet-portrait-tools .bar.controls {
+      display: flex; flex-direction: row; flex-wrap: wrap; align-items: center;
+      gap: 8px;
+    }
+    html.tablet-portrait-tools .bar.controls .bar-cluster,
+    html.tablet-portrait-tools .bar.controls .bar-cluster + .bar-cluster,
+    html.tablet-portrait-tools .bar.controls .bar-cluster.window {
+      margin-left: 0; padding-left: 0; border-left: none; width: auto;
+    }
+    .stage { align-items: flex-start; min-height: 0; }
+    .stage-row { align-items: flex-start; height: auto; width: 100%; }
+    .videowrap { width: 100%; height: auto; max-height: 100%; }
+  }
+
+  @media (min-width: 760px) and (max-width: 1279px) and (min-height: 640px) and (orientation: landscape) and ((hover: none) or (pointer: coarse) or (any-pointer: coarse)) {
+    body { padding-top: env(safe-area-inset-top); padding-bottom: 0; }
+    .topnav {
+      margin: calc(-1 * max(16px, env(safe-area-inset-top))) calc(-1 * max(16px, env(safe-area-inset-right))) 0 calc(-1 * max(16px, env(safe-area-inset-left)));
+      padding-top: max(2px, env(safe-area-inset-top));
+    }
+    .frame {
+      position: relative;
+      display: flex; flex-direction: column;
+      overflow: hidden; min-height: 0;
+    }
+    .channel-bar {
+      flex-wrap: nowrap; gap: 8px; margin: 0 96px 0 0; min-width: 0;
+    }
+    #channels {
+      display: flex; flex: 1 1 0; min-width: 0; gap: 8px;
+      overflow-x: auto; overflow-y: hidden;
+    }
+    .channel-bar button { flex: 0 0 auto; }
+    .channel-bar #state {
+      flex: 0 1 auto; min-width: 0; max-width: 12em;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .tools-toggle {
+      display: flex; align-items: center; justify-content: center;
+      position: absolute; top: 0; right: 0; z-index: 3;
+      width: auto; min-height: 44px; margin: 0; padding: 0 12px;
+      background: var(--panel); border: 1px solid var(--edge); border-radius: 4px;
+    }
+    .bar.controls { display: none; }
+    .stage { flex: 1; min-height: 0; align-items: center; }
+    .stage-row { height: 100%; width: 100%; align-items: center; }
+    .videowrap { width: auto; height: 100%; max-width: 100%; max-height: 100%; }
+    html.tablet-side-open .frame {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    html.tablet-side-open .channel-bar { grid-column: 1; grid-row: 1; margin-right: 0; }
+    html.tablet-side-open .tools-toggle { position: static; grid-column: 2; grid-row: 1; width: 100%; }
+    html.tablet-side-open .stage { grid-column: 1; grid-row: 2; }
+    html.tablet-side-open .bar.controls {
+      display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+      grid-column: 2; grid-row: 2; margin: 0; min-height: 0; overflow: auto;
+      padding: 8px; border-left: 1px solid var(--edge); background: var(--panel);
+    }
+    html.tablet-side-open .bar.controls .bar-cluster,
+    html.tablet-side-open .bar.controls .bar-cluster + .bar-cluster,
+    html.tablet-side-open .bar.controls .bar-cluster.window {
+      margin-left: 0; padding-left: 0; border-left: none; width: 100%; flex-wrap: wrap;
     }
   }
 
@@ -1695,11 +1828,18 @@
     }, TIP_DELAY_MS);
   }
 
+  const coarsePointer = window.matchMedia("(hover: none), (pointer: coarse)");
   document.querySelectorAll("#stats .stat[data-tip]").forEach((el) => {
     el.addEventListener("mouseenter", () => scheduleStatTip(el));
     el.addEventListener("mouseleave", () => { if (tipAnchor === el) hideStatTip(); });
     el.addEventListener("focus", () => scheduleStatTip(el));
     el.addEventListener("blur", () => { if (tipAnchor === el) hideStatTip(); });
+    // Touch has no hover. A tap shows the same explainer.
+    el.addEventListener("click", () => {
+      if (!coarsePointer.matches) return;
+      if (tipAnchor === el && tipEl.classList.contains("visible")) hideStatTip();
+      else placeStatTip(el);
+    });
   });
   window.addEventListener("scroll", () => { if (tipEl.classList.contains("visible")) hideStatTip(); }, true);
   window.addEventListener("resize", hideStatTip);
