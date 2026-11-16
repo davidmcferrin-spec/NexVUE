@@ -21,9 +21,21 @@
   var ROTATE_KEY = "nexvue-video-rotate";
   var THEATER_KEY = "nexvue-theater";
   var TOOLS_KEY = "nexvue-player-tools";
+  // Portrait slim bar. "0" collapsed; anything else (including unset) shown.
+  var TABLET_PORTRAIT_KEY = "nexvue-tablet-portrait";
+  // Landscape side panel. "1" open; unset stays hidden so the picture is tall.
+  var TABLET_SIDE_KEY = "nexvue-tablet-side";
   // Phones, plus short landscape (a landscape phone is wide but not tall).
-  // 759px leaves a 768px tablet on the desktop bars.
+  // Half of an iPad Pro 11 (about 597px landscape, 417px portrait) stays under 760.
   var COMPACT_MQ = "(max-width: 759px), (max-height: 520px) and (max-width: 1024px)";
+  // iPad-class touch between the phone and a 1280 mouse desktop.
+  // any-pointer:coarse keeps the tablet chrome when a trackpad is also attached.
+  // A mouse with no touch, and anything 1280 or wider, does not match.
+  var TABLET_POINTER = "((hover: none) or (pointer: coarse) or (any-pointer: coarse))";
+  var TABLET_MQ = "(min-width: 760px) and (max-width: 1279px) and (min-height: 640px) and " + TABLET_POINTER;
+  var TABLET_PORTRAIT_MQ = TABLET_MQ + " and (orientation: portrait)";
+  var TABLET_LANDSCAPE_MQ = TABLET_MQ + " and (orientation: landscape)";
+  var NAV_MQ = COMPACT_MQ + ", " + TABLET_MQ;
   var _maxChannels = 8;
 
   function normalizeRotate(deg) {
@@ -124,6 +136,45 @@
       /* private mode */
     }
     return on;
+  }
+
+  function readFlag(key) {
+    try {
+      return global.localStorage.getItem(key);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writeFlag(key, on) {
+    try {
+      global.localStorage.setItem(key, on ? "1" : "0");
+    } catch (e) {
+      /* private mode */
+    }
+  }
+
+  function mqMatches(query) {
+    try {
+      return !!(global.matchMedia && global.matchMedia(query).matches);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Phone options use player-tools-open. Tablet portrait/landscape have their
+  // own flags so a phone "closed" does not hide the slim bar, and a phone
+  // "open" does not cover the landscape picture.
+  function applyTabletChrome() {
+    var root = global.document && global.document.documentElement;
+    if (!root || !pageIsPlayer()) return { portrait: false, side: false, portraitOpen: false, sideOpen: false };
+    var portrait = mqMatches(TABLET_PORTRAIT_MQ);
+    var side = mqMatches(TABLET_LANDSCAPE_MQ);
+    var portraitOpen = portrait && readFlag(TABLET_PORTRAIT_KEY) !== "0";
+    var sideOpen = side && readFlag(TABLET_SIDE_KEY) === "1";
+    root.classList.toggle("tablet-portrait-tools", portraitOpen);
+    root.classList.toggle("tablet-side-open", sideOpen);
+    return { portrait: portrait, side: side, portraitOpen: portraitOpen, sideOpen: sideOpen };
   }
 
   function getTheaterPref() {
@@ -433,6 +484,7 @@
   if (pageIsPlayer() && readPlayerToolsOpen()) {
     global.document.documentElement.classList.add("player-tools-open");
   }
+  applyTabletChrome();
 
   function ensureVersionEl() {
     var el = global.document.getElementById("nav-version");
@@ -616,7 +668,7 @@
     s.textContent = [
       ".nav-menu-btn{display:none}",
       ".nav-menu{display:none}",
-      "@media " + COMPACT_MQ + "{",
+      "@media " + NAV_MQ + "{",
       ".topnav{position:relative;z-index:80;flex-wrap:nowrap;gap:6px}",
       ".topnav .brand{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".topnav .nav-logo{height:22px;max-width:64px;margin-right:4px}",
@@ -676,7 +728,7 @@
     else nav.insertBefore(menuBtn, nav.firstChild);
     nav.appendChild(panel);
 
-    var mq = global.matchMedia(COMPACT_MQ);
+    var mq = global.matchMedia(NAV_MQ);
     var layingOut = false;
 
     function closeMenu() {
@@ -803,16 +855,44 @@
   function wirePlayerTools() {
     var btn = global.document.getElementById("tools-toggle");
     if (!btn) return;
-    function sync() {
-      var on = global.document.documentElement.classList.contains("player-tools-open");
+    var root = global.document.documentElement;
+    function syncPhone() {
+      var on = root.classList.contains("player-tools-open");
       btn.setAttribute("aria-expanded", on ? "true" : "false");
     }
-    sync();
+    function syncTablet() {
+      var state = applyTabletChrome();
+      if (state.portrait) btn.setAttribute("aria-expanded", state.portraitOpen ? "true" : "false");
+      else if (state.side) btn.setAttribute("aria-expanded", state.sideOpen ? "true" : "false");
+      else syncPhone();
+    }
+    syncTablet();
     btn.addEventListener("click", function () {
-      var on = !global.document.documentElement.classList.contains("player-tools-open");
+      if (mqMatches(TABLET_PORTRAIT_MQ)) {
+        var show = !root.classList.contains("tablet-portrait-tools");
+        writeFlag(TABLET_PORTRAIT_KEY, show);
+        applyTabletChrome();
+        btn.setAttribute("aria-expanded", show ? "true" : "false");
+        return;
+      }
+      if (mqMatches(TABLET_LANDSCAPE_MQ)) {
+        var open = !root.classList.contains("tablet-side-open");
+        writeFlag(TABLET_SIDE_KEY, open);
+        applyTabletChrome();
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+        return;
+      }
+      var on = !root.classList.contains("player-tools-open");
       setPlayerToolsOpen(on);
-      sync();
+      syncPhone();
     });
+    function watch(query) {
+      var mq = global.matchMedia(query);
+      if (mq.addEventListener) mq.addEventListener("change", syncTablet);
+      else if (mq.addListener) mq.addListener(syncTablet);
+    }
+    watch(TABLET_PORTRAIT_MQ);
+    watch(TABLET_LANDSCAPE_MQ);
   }
 
   onReady(function () {
