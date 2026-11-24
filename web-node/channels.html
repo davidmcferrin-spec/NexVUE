@@ -143,7 +143,7 @@
   .tls-help { color: var(--muted); font-size: 12px; margin: 0 0 12px; max-width: 56em; }
   .tls-status {
     color: var(--text); font-size: 13px; margin: 0 0 14px; max-width: 56em;
-    line-height: 1.45;
+    line-height: 1.45; white-space: pre-wrap;
   }
   .tls-status .dim { color: var(--dim); }
   .tls-grid {
@@ -2459,8 +2459,18 @@
   }
 
   function formatTlsStatus(data) {
+    const jobErr = (!data.busy && data.job && data.job.ok === false && data.job.error)
+      ? "Last request failed: " + String(data.job.error)
+      : "";
+    const busyLine = data.busy
+      ? "A Let's Encrypt request is running — this page may disconnect while Apache is stopped."
+      : "";
     if (!data.present) {
-      return "No certificate installed. setup.sh creates a self-signed pair if these files are missing.";
+      return [
+        "No certificate installed. setup.sh creates a self-signed pair if these files are missing.",
+        busyLine,
+        jobErr,
+      ].filter(Boolean).join("\n");
     }
     const days = data.days_left;
     const dayText = (days === null || days === undefined)
@@ -2477,7 +2487,8 @@
       sans ? `Name: ${sans}` : "",
       data.issuer ? `Issuer: ${data.issuer}` : "",
       data.not_after ? `Expires: ${data.not_after}${dayText ? " · " + dayText : ""}` : "",
-      data.busy ? "A Let's Encrypt request is running — this page may disconnect while Apache is stopped." : "",
+      busyLine,
+      jobErr,
     ];
     return lines.filter(Boolean).join("\n");
   }
@@ -2514,10 +2525,13 @@
   function startTlsPoll() {
     stopTlsPoll();
     let n = 0;
+    // ~11 min, past the 10 min issue unit, so a slow lego is not reported as timed out.
+    const tlsPollLimit = 330;
     tlsPollTimer = setInterval(async () => {
       n += 1;
+      let data = null;
       try {
-        const data = await refreshTlsStatus();
+        data = await refreshTlsStatus();
         if (!data.busy) {
           stopTlsPoll();
           if (data.job && data.job.ok === false && data.job.error) {
@@ -2526,16 +2540,20 @@
             setTlsMsg(tlsMsg, "Certificate installed. Reload if this tab still shows a warning.", "ok");
           }
           tlsIssue.disabled = false;
-        } else {
-          setTlsMsg(tlsMsg, "Waiting for Let's Encrypt (this tab may drop while Apache is stopped)…", "");
+          return;
         }
+        setTlsMsg(tlsMsg, "Waiting for Let's Encrypt (this tab may drop while Apache is stopped)…", "");
       } catch {
         setTlsMsg(tlsMsg, "Web UI is down during the 443 challenge — retrying…", "");
       }
-      if (n >= 45) {
+      if (n >= tlsPollLimit) {
         stopTlsPoll();
-        tlsIssue.disabled = false;
-        setTlsMsg(tlsMsg, "Timed out waiting for the request. Reload and check status.", "err");
+        if (data && data.busy) {
+          setTlsMsg(tlsMsg, "Still working. Reload and check status.", "");
+        } else {
+          tlsIssue.disabled = false;
+          setTlsMsg(tlsMsg, "Timed out waiting for the request. Reload and check status.", "err");
+        }
       }
     }, 2000);
   }

@@ -10,9 +10,11 @@ import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -418,7 +420,11 @@ class TestWiring(unittest.TestCase):
         text = TLS_SH.read_text(encoding="utf-8")
         self.assertIn("TLS-ALPN-01", text)
         self.assertIn("port 80 is never used", text)
-        self.assertIn("systemctl stop apache2", text)
+        self.assertIn("stop apache2", text)
+        self.assertIn("TimeoutStartSec=10min", (ROOT / "nexvue-tls-issue.service").read_text(encoding="utf-8"))
+        self.assertIn("TimeoutStopSec=45", (ROOT / "nexvue-tls-issue.service").read_text(encoding="utf-8"))
+        self.assertNotIn("TimeoutStartSec=180", (ROOT / "nexvue-tls-issue.service").read_text(encoding="utf-8"))
+        self.assertIn("Last request failed:", CHANNELS.read_text(encoding="utf-8"))
 
     def test_deploy_hook_reads_lego_v5_env(self) -> None:
         text = TLS_PY.read_text(encoding="utf-8")
@@ -504,5 +510,435 @@ class TestLegoDeployPaths(unittest.TestCase):
             self.mod.lego_deploy_paths()
 
 
+def _dead_pid() -> int:
+    pid = (1 << 22) - 1
+    while pid > 2:
+        if not Path(f"/proc/{pid}").exists():
+            return pid
+        pid -= 1
+    return (1 << 22) - 1
+
+
+def _spawn_worker() -> subprocess.Popen:
+    """A process whose cmdline matches the issue script, so stale-pid checks own it."""
+    return subprocess.Popen(
+        ["bash", "-c", "exec -a nexvue-ops-tls sleep 120"],
+        start_new_session=True,
+    )
+
+
+def _stop_proc(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait(timeout=2)
+
+
+class TestIssueBusyState(unittest.TestCase):
+    def setUp(self) -> None:
+        self.mod = _load()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.td = Path(self.tmp.name)
+        self.state = self.td / "state"
+        self.state.mkdir()
+        self._saved = {
+            key: os.environ.get(key)
+            for key in ("NEXVUE_TLS_STATE_DIR", "NEXVUE_TLS_JOB_MAX_AGE")
+        }
+        os.environ["NEXVUE_TLS_STATE_DIR"] = str(self.state)
+        os.environ["NEXVUE_TLS_JOB_MAX_AGE"] = "660"
+
+    def tearDown(self) -> None:
+        for key, value in self._saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self.tmp.cleanup()
+
+    def _job(self, **fields: object) -> dict:
+        job = {
+            "busy": False,
+            "action": "issue",
+            "ok": None,
+            "error": "",
+            "started_at": 0,
+            "finished_at": 0,
+        }
+        job.update(fields)
+        (self.state / "job.json").write_text(json.dumps(job) + "\n", encoding="utf-8")
+        return job
+
+    def test_dead_pid_is_not_busy_and_records_why(self) -> None:
+        now = 1_700_000_000
+        (self.state / "issue.lock").write_text(f"{_dead_pid()}\n", encoding="utf-8")
+        job = self._job(busy=True, started_at=now - 5)
+        state = self.mod.apply_reconcile(job, "", 0, now=now)
+        self.assertFalse(state["busy"])
+        self.assertIn("interrupted", state["reason"])
+        self.assertFalse((self.state / "issue.lock").exists())
+        saved = json.loads((self.state / "job.json").read_text(encoding="utf-8"))
+        self.assertFalse(saved["busy"])
+        self.assertIs(saved["ok"], False)
+        self.assertIn("interrupted", saved["error"])
+
+    def test_finished_job_keeps_success_when_lock_is_dead(self) -> None:
+        now = 1_700_000_000
+        (self.state / "issue.lock").write_text(f"{_dead_pid()}\n", encoding="utf-8")
+        job = self._job(busy=False, ok=True, error="", started_at=now - 20, finished_at=now - 10)
+        state = self.mod.apply_reconcile(job, "", 0, now=now)
+        self.assertFalse(state["busy"])
+        self.assertFalse((self.state / "issue.lock").exists())
+        saved = json.loads((self.state / "job.json").read_text(encoding="utf-8"))
+        self.assertIs(saved["ok"], True)
+        self.assertEqual(saved["error"], "")
+
+    def test_young_worker_stays_busy(self) -> None:
+        proc = _spawn_worker()
+        try:
+            now = time.time()
+            (self.state / "issue.lock").write_text(f"{proc.pid}\n", encoding="utf-8")
+            job = self._job(busy=True, started_at=int(now))
+            state = self.mod.issue_busy_state(job, "", 0, now=now)
+            self.assertTrue(state["busy"])
+            self.assertTrue(state["live_pid"])
+            self.assertEqual(state["kill_pid"], 0)
+            self.assertIsNone(proc.poll())
+        finally:
+            _stop_proc(proc)
+
+    def test_expired_worker_is_not_busy_and_not_killed_here(self) -> None:
+        proc = _spawn_worker()
+        try:
+            now = time.time()
+            os.environ["NEXVUE_TLS_JOB_MAX_AGE"] = "30"
+            (self.state / "issue.lock").write_text(f"{proc.pid}\n", encoding="utf-8")
+            job = self._job(busy=True, started_at=int(now) - 120)
+            state = self.mod.apply_reconcile(job, "activating", proc.pid, now=now)
+            self.assertFalse(state["busy"])
+            self.assertIn("timed out", state["reason"])
+            self.assertEqual(state["kill_pid"], proc.pid)
+            self.assertTrue(state["stop_unit"])
+            self.assertTrue((self.state / "issue.lock").exists())
+            self.assertIsNone(proc.poll())
+        finally:
+            _stop_proc(proc)
+
+    def test_activating_without_a_lock_is_busy(self) -> None:
+        job = self._job(busy=False, started_at=0)
+        state = self.mod.issue_busy_state(job, "activating", 0, now=time.time())
+        self.assertTrue(state["busy"])
+
+    def test_activating_with_a_dead_main_pid_is_not_busy(self) -> None:
+        now = time.time()
+        job = self._job(busy=True, started_at=int(now))
+        state = self.mod.issue_busy_state(job, "activating", _dead_pid(), now=now)
+        self.assertFalse(state["busy"])
+        self.assertTrue(state["stop_unit"])
+
+    def test_lego_log_hint_is_the_failure_reason(self) -> None:
+        now = time.time()
+        (self.state / "lego.log").write_text(
+            "starting tls-alpn\nerror: dns lookup failed\n",
+            encoding="utf-8",
+        )
+        (self.state / "issue.lock").write_text(f"{_dead_pid()}\n", encoding="utf-8")
+        job = self._job(busy=True, started_at=int(now) - 2)
+        state = self.mod.apply_reconcile(job, "", 0, now=now)
+        self.assertIn("dns lookup failed", state["reason"])
+        saved = json.loads((self.state / "job.json").read_text(encoding="utf-8"))
+        self.assertIn("dns lookup failed", saved["error"])
+
+
+class TestTlsIssueLock(unittest.TestCase):
+    def setUp(self) -> None:
+        self.bash = shutil.which("bash")
+        if not self.bash:
+            self.skipTest("bash not on PATH")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.td = Path(self.tmp.name)
+        self.state = self.td / "state"
+        self.state.mkdir()
+        (self.td / "tls").mkdir()
+        (self.td / "lego-path").mkdir()
+        self.env_file = self.td / "nexvue.env"
+        self.env_file.write_text(
+            "NEXVUE_PUBLIC_HOSTNAME=nexvue.example.com\nNEXVUE_TLS_EMAIL=ops@example.com\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _env(self, **extra: str) -> dict[str, str]:
+        env = {
+            **os.environ,
+            "NEXVUE_TLS_PY": str(TLS_PY),
+            "NEXVUE_PYTHON": sys.executable,
+            "NEXVUE_TLS_STATE_DIR": str(self.state),
+            "NEXVUE_STATION_ENV": str(self.env_file),
+            "NEXVUE_TLS_DIR": str(self.td / "tls"),
+            "NEXVUE_DATA": str(self.td / "data"),
+            "NEXVUE_ETC": str(self.td / "etc"),
+            "NEXVUE_LEGO_PATH": str(self.td / "lego-path"),
+            "NEXVUE_TLS_SKIP_APACHE": "1",
+            "NEXVUE_TLS_SKIP_MEDIAMTX": "1",
+            "NEXVUE_TLS_SYNC": "1",
+            "NEXVUE_TLS_UNIT": "nexvue-tls-issue-not-installed.service",
+            "NEXVUE_TLS_JOB_MAX_AGE": "660",
+        }
+        env.update(extra)
+        return env
+
+    def _run(
+        self,
+        args: list[str],
+        env: dict[str, str] | None = None,
+        stdin: str = "",
+        timeout: float = 30,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [self.bash, str(TLS_SH), *args],
+            input=stdin,
+            text=True,
+            capture_output=True,
+            env=env or self._env(),
+            check=False,
+            timeout=timeout,
+        )
+
+    def _job(self, **fields: object) -> None:
+        job = {
+            "busy": False,
+            "action": "issue",
+            "ok": None,
+            "error": "",
+            "started_at": 0,
+            "finished_at": 0,
+        }
+        job.update(fields)
+        (self.state / "job.json").write_text(json.dumps(job) + "\n", encoding="utf-8")
+
+    def _read_job(self) -> dict:
+        return json.loads((self.state / "job.json").read_text(encoding="utf-8"))
+
+    def _fake_lego(self, body: str) -> Path:
+        path = self.td / "fake-lego"
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    def test_success_clears_lock_and_does_not_trip_set_u(self) -> None:
+        lego = self._fake_lego("#!/bin/sh\necho issued-by-fake-lego\nexit 0\n")
+        result = self._run(["run"], env=self._env(NEXVUE_LEGO=str(lego)))
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertNotIn("unbound variable", result.stderr)
+        data = json.loads(result.stdout)
+        self.assertTrue(data["issued"])
+        self.assertFalse((self.state / "issue.lock").is_file())
+        job = self._read_job()
+        self.assertFalse(job["busy"])
+        self.assertIs(job["ok"], True)
+        log = (self.state / "lego.log").read_text(encoding="utf-8")
+        self.assertIn("issued-by-fake-lego", log)
+        self.assertIn("issued-by-fake-lego", result.stderr)
+
+    def test_failure_keeps_the_log_and_puts_the_reason_on_the_job(self) -> None:
+        lego = self._fake_lego(
+            "#!/bin/sh\n"
+            "echo starting tls-alpn\n"
+            "echo 'error: challenge failed: connection refused'\n"
+            "exit 1\n"
+        )
+        result = self._run(["run"], env=self._env(NEXVUE_LEGO=str(lego)))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("unbound variable", result.stderr)
+        data = json.loads(result.stdout)
+        self.assertIn("connection refused", data["error"])
+        self.assertFalse((self.state / "issue.lock").is_file())
+        job = self._read_job()
+        self.assertFalse(job["busy"])
+        self.assertIs(job["ok"], False)
+        self.assertIn("connection refused", job["error"])
+        log = (self.state / "lego.log").read_text(encoding="utf-8")
+        self.assertIn("starting tls-alpn", log)
+        self.assertIn("connection refused", log)
+
+    def test_lego_log_rotates(self) -> None:
+        first = self._fake_lego("#!/bin/sh\necho first-run-marker\nexit 1\n")
+        self._run(["run"], env=self._env(NEXVUE_LEGO=str(first)))
+        second = self._fake_lego("#!/bin/sh\necho second-run-marker\nexit 1\n")
+        self._run(["run"], env=self._env(NEXVUE_LEGO=str(second)))
+        self.assertIn("second-run-marker", (self.state / "lego.log").read_text(encoding="utf-8"))
+        self.assertIn("first-run-marker", (self.state / "lego.log.1").read_text(encoding="utf-8"))
+
+    def test_missing_hostname_does_not_leave_a_lock(self) -> None:
+        self.env_file.write_text("", encoding="utf-8")
+        lego = self._fake_lego("#!/bin/sh\nexit 0\n")
+        result = self._run(["run"], env=self._env(NEXVUE_LEGO=str(lego)))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Public hostname", result.stdout)
+        self.assertNotIn("unbound variable", result.stderr)
+        self.assertFalse((self.state / "issue.lock").is_file())
+
+    def test_sigterm_clears_the_lock(self) -> None:
+        lego = self._fake_lego("#!/bin/sh\necho lego waiting\nexec sleep 120\n")
+        proc = subprocess.Popen(
+            [self.bash, str(TLS_SH), "run"],
+            env=self._env(NEXVUE_LEGO=str(lego)),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        lock = self.state / "issue.lock"
+        try:
+            for _ in range(100):
+                if lock.is_file() or proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+            self.assertTrue(lock.is_file(), "lock was not created")
+            os.killpg(proc.pid, signal.SIGTERM)
+            stdout, stderr = proc.communicate(timeout=10)
+        finally:
+            _stop_proc(proc)
+        self.assertNotIn("unbound variable", stderr)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertFalse(lock.is_file())
+        job = self._read_job()
+        self.assertFalse(job["busy"])
+        self.assertTrue(job["error"])
+        self.assertNotIn("unbound variable", stdout)
+
+    def test_status_clears_a_dead_lock(self) -> None:
+        self._job(busy=True, started_at=int(time.time()))
+        (self.state / "issue.lock").write_text(f"{_dead_pid()}\n", encoding="utf-8")
+        result = self._run(["status"])
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        data = json.loads(result.stdout)
+        self.assertFalse(data["busy"])
+        self.assertFalse(data["job"]["busy"])
+        self.assertIn("interrupted", data["job"]["error"])
+        self.assertFalse((self.state / "issue.lock").is_file())
+
+    def test_status_keeps_a_young_live_worker(self) -> None:
+        proc = _spawn_worker()
+        try:
+            self._job(busy=True, started_at=int(time.time()))
+            (self.state / "issue.lock").write_text(f"{proc.pid}\n", encoding="utf-8")
+            result = self._run(["status"])
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            data = json.loads(result.stdout)
+            self.assertTrue(data["busy"])
+            self.assertTrue((self.state / "issue.lock").is_file())
+            self.assertIsNone(proc.poll())
+        finally:
+            _stop_proc(proc)
+
+    def test_renew_recovers_a_dead_lock_instead_of_skipping(self) -> None:
+        self.env_file.write_text("", encoding="utf-8")
+        self._job(busy=True, started_at=int(time.time()))
+        (self.state / "issue.lock").write_text(f"{_dead_pid()}\n", encoding="utf-8")
+        result = self._run(["renew"])
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        data = json.loads(result.stdout)
+        self.assertTrue(data["skipped"])
+        self.assertNotEqual(data.get("reason"), "already running")
+        self.assertFalse((self.state / "issue.lock").is_file())
+        self.assertFalse(self._read_job()["busy"])
+
+    def test_renew_leaves_a_young_worker_alone(self) -> None:
+        self.env_file.write_text("", encoding="utf-8")
+        proc = _spawn_worker()
+        try:
+            self._job(busy=True, started_at=int(time.time()))
+            (self.state / "issue.lock").write_text(f"{proc.pid}\n", encoding="utf-8")
+            result = self._run(["renew"])
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            data = json.loads(result.stdout)
+            self.assertTrue(data["skipped"])
+            self.assertEqual(data.get("reason"), "already running")
+            self.assertTrue((self.state / "issue.lock").is_file())
+            self.assertIsNone(proc.poll())
+        finally:
+            _stop_proc(proc)
+
+    def test_renew_stops_an_expired_worker(self) -> None:
+        self.env_file.write_text("", encoding="utf-8")
+        proc = _spawn_worker()
+        try:
+            self._job(busy=True, started_at=int(time.time()) - 120)
+            (self.state / "issue.lock").write_text(f"{proc.pid}\n", encoding="utf-8")
+            result = self._run(["renew"], env=self._env(NEXVUE_TLS_JOB_MAX_AGE="30"))
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            data = json.loads(result.stdout)
+            self.assertTrue(data["skipped"])
+            self.assertNotEqual(data.get("reason"), "already running")
+            self.assertFalse((self.state / "issue.lock").is_file())
+            proc.wait(timeout=3)
+        finally:
+            _stop_proc(proc)
+
+    def test_issue_runs_when_the_lock_is_already_dead(self) -> None:
+        lego = self._fake_lego("#!/bin/sh\necho ok-from-lego\nexit 0\n")
+        self._job(busy=True, started_at=int(time.time()))
+        (self.state / "issue.lock").write_text(f"{_dead_pid()}\n", encoding="utf-8")
+        result = self._run(
+            ["issue"],
+            env=self._env(NEXVUE_LEGO=str(lego)),
+            stdin=json.dumps({"email": "ops@example.com", "accept_tos": True}),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertNotIn("unbound variable", result.stderr)
+        data = json.loads(result.stdout)
+        self.assertTrue(data.get("issued"))
+        self.assertFalse((self.state / "issue.lock").is_file())
+        self.assertFalse(self._read_job()["busy"])
+
+    def test_apache_stop_and_start_are_visible_to_cleanup(self) -> None:
+        log = self.td / "systemctl.log"
+        bindir = self.td / "bin"
+        bindir.mkdir()
+        fake = bindir / "systemctl"
+        fake.write_text(
+            "#!/bin/sh\n"
+            f"echo \"$*\" >> \"{log}\"\n"
+            "if [ \"$1\" = is-active ] && [ \"$3\" = apache2 ]; then\n"
+            "  exit 0\n"
+            "fi\n"
+            "if [ \"$1\" = show ]; then\n"
+            "  echo inactive\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        lego = self._fake_lego("#!/bin/sh\necho issued-by-fake-lego\nexit 0\n")
+        env = self._env(
+            NEXVUE_LEGO=str(lego),
+            NEXVUE_TLS_SKIP_APACHE="0",
+            PATH=str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+        )
+        result = self._run(["run"], env=env)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertNotIn("unbound variable", result.stderr)
+        text = log.read_text(encoding="utf-8")
+        self.assertIn("stop apache2", text)
+        self.assertIn("start apache2", text)
+        self.assertFalse((self.state / "issue.lock").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()
+
