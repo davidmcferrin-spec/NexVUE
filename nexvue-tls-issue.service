@@ -4,7 +4,9 @@
 # Settings → Certificates or by nexvue-tls-renew.timer. Do not enable this
 # unit on boot — it stops Apache while lego binds 443.
 #
-# EXIT trap in nexvue-ops-tls.sh always starts apache2 again.
+# The EXIT trap in nexvue-ops-tls.sh starts apache2 again. That start is
+# time-boxed so a hung restart cannot sit in this unit until SIGKILL and
+# leave issue.lock behind.
 
 [Unit]
 Description=NexVUE Let's Encrypt issue/renew (TLS-ALPN-01)
@@ -14,5 +16,9 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/nexvue-ops-tls.sh run
-TimeoutStartSec=180
+# Stop Apache, lego, start Apache. 180s was short enough that a slow stop
+# plus the challenge was SIGTERM'd and the lock was left busy.
+TimeoutStartSec=10min
+# Cleanup's Apache start is capped at 20s. Leave room for that before SIGKILL.
+TimeoutStopSec=45
 Nice=5

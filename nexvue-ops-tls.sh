@@ -23,11 +23,31 @@ PYTHON="${NEXVUE_PYTHON:-/usr/bin/python3}"
 LEGO="${NEXVUE_LEGO:-/usr/local/bin/lego}"
 LEGO_PATH="${NEXVUE_LEGO_PATH:-${DATA}/lego}"
 STATE_DIR="${NEXVUE_TLS_STATE_DIR:-${DATA}/tls}"
+export NEXVUE_TLS_STATE_DIR="$STATE_DIR"
 LOCK="${STATE_DIR}/issue.lock"
+LEGO_LOG="${STATE_DIR}/lego.log"
+LEGO_LOG_KEEP=5
 UNIT="${NEXVUE_TLS_UNIT:-nexvue-tls-issue.service}"
+export NEXVUE_TLS_UNIT="$UNIT"
 SKIP_APACHE="${NEXVUE_TLS_SKIP_APACHE:-0}"
 SKIP_MEDIAMTX="${NEXVUE_TLS_SKIP_MEDIAMTX:-0}"
 SYNC="${NEXVUE_TLS_SYNC:-0}"
+# Apache stop/start inside the run. Cleanup uses a shorter cap so it
+# finishes before systemd's TimeoutStopSec sends SIGKILL.
+APACHE_STOP_TIMEOUT="${NEXVUE_TLS_APACHE_STOP_TIMEOUT:-40}"
+APACHE_START_TIMEOUT="${NEXVUE_TLS_APACHE_START_TIMEOUT:-40}"
+APACHE_CLEANUP_TIMEOUT="${NEXVUE_TLS_APACHE_CLEANUP_TIMEOUT:-20}"
+
+# The EXIT trap runs after cmd_run returns, when that function's locals
+# are already gone. Under set -u that killed cleanup on the success path
+# (apache_was unbound) and left issue.lock behind. Keep the trap's state
+# global. child_pid is the foreground wait target so TERM can interrupt it.
+apache_was=0
+job_finished=0
+lock_owned=0
+lego_started=0
+fail_reason=""
+child_pid=0
 
 json_escape() {
   local s="${1:-}"
@@ -44,20 +64,271 @@ fail_json() {
   exit 1
 }
 
+run_fail() {
+  fail_reason="$(trim_reason "$1")"
+  fail_json "$fail_reason"
+}
+
+trim_reason() {
+  local s="${1:-}"
+  s="${s//$'\r'/}"
+  s="${s//$'\n'/ }"
+  if [[ ${#s} -gt 400 ]]; then
+    s="${s:0:400}"
+  fi
+  printf '%s' "$s"
+}
+
 tls_py() {
   "$PYTHON" "$HELPER" "$@"
 }
 
-busy_now() {
-  if [[ -f "$LOCK" ]]; then
-    return 0
+json_get() {
+  "$PYTHON" -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    print("0")
+    raise SystemExit(0)
+v = d.get(sys.argv[2])
+if isinstance(v, bool):
+    print("1" if v else "0")
+elif isinstance(v, int):
+    print(v)
+elif v is None or v == "":
+    print("0")
+else:
+    print(v)
+' "$1" "$2"
+}
+
+# bash does not run a trap while an external command is in the foreground,
+# so a lego that ignores SIGTERM never reaches cleanup and systemd's
+# SIGKILL leaves the lock. wait is interruptible.
+launch() {
+  local log="$1"
+  shift
+  if [[ -n "$log" ]]; then
+    "$@" >"$log" 2>&1 &
+  else
+    "$@" &
   fi
+  child_pid=$!
+  local rc=0
+  wait "$child_pid" || rc=$?
+  child_pid=0
+  return "$rc"
+}
+
+systemctl_bounded() {
+  local secs="$1"
+  shift
+  local rc=0
+  if command -v timeout >/dev/null 2>&1; then
+    launch /dev/null timeout --signal=TERM "$secs" systemctl "$@" || rc=$?
+  else
+    launch /dev/null systemctl "$@" || rc=$?
+  fi
+  return "$rc"
+}
+
+unit_state() {
+  local st=""
   if command -v systemctl >/dev/null 2>&1; then
-    if systemctl is-active --quiet "$UNIT" 2>/dev/null; then
-      return 0
+    st="$(systemctl show -p ActiveState --value "$UNIT" 2>/dev/null || true)"
+  fi
+  st="${st//$'\r'/}"
+  st="${st//$'\n'/}"
+  printf '%s' "$st"
+}
+
+unit_exec_pid() {
+  local pid=""
+  if command -v systemctl >/dev/null 2>&1; then
+    pid="$(systemctl show -p ExecMainPID --value "$UNIT" 2>/dev/null || true)"
+    pid="${pid//$'\r'/}"
+    pid="${pid//$'\n'/}"
+  fi
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$pid"
+  else
+    printf '0'
+  fi
+}
+
+# Drop a dead lock and a stale busy flag. recover=1 also signals a worker
+# that is still alive past the budget, and stops a unit systemd has not
+# reaped. cmd_run passes an empty unit snapshot: this process is the unit,
+# and systemctl stop here would kill us.
+reconcile_stale() {
+  local recover="$1"
+  local st="$2"
+  local epid="$3"
+  local out="" kill_pid=0 stop_unit=0
+  out="$(tls_py reconcile --unit-state "$st" --exec-pid "$epid" 2>/dev/null)" || return 0
+  [[ -n "$out" ]] || return 0
+  [[ "$recover" == "1" ]] || return 0
+  kill_pid="$(json_get "$out" kill_pid)"
+  stop_unit="$(json_get "$out" stop_unit)"
+  if [[ "${kill_pid:-0}" -gt 1 && "$kill_pid" != "$$" ]]; then
+    # The worker's own EXIT trap starts Apache (capped at 20s) and removes
+    # the lock. SIGKILL before that returns the stuck-button failure.
+    kill -TERM "$kill_pid" 2>/dev/null || true
+    local i=0
+    while [[ "$i" -lt 60 ]]; do
+      pid_is_alive "$kill_pid" || break
+      sleep 0.5
+      i=$((i + 1))
+    done
+    if pid_is_alive "$kill_pid"; then
+      kill -KILL "$kill_pid" 2>/dev/null || true
     fi
   fi
-  return 1
+  if [[ "$stop_unit" == "1" ]] && command -v systemctl >/dev/null 2>&1; then
+    systemctl_bounded 15 stop "$UNIT" >/dev/null 2>&1 || true
+    systemctl reset-failed "$UNIT" >/dev/null 2>&1 || true
+  fi
+  if [[ "${kill_pid:-0}" -gt 1 || "$stop_unit" == "1" ]]; then
+    tls_py reconcile --unit-state "$st" --exec-pid "$epid" >/dev/null 2>&1 || true
+  fi
+}
+
+request_in_progress() {
+  local st="$1"
+  local epid="$2"
+  local out=""
+  out="$(tls_py assess --unit-state "$st" --exec-pid "$epid" 2>/dev/null)" || return 1
+  [[ -n "$out" ]] || return 1
+  [[ "$(json_get "$out" busy)" == "1" || "$(json_get "$out" live_pid)" == "1" ]]
+}
+
+finish_job() {
+  local ok="$1" err="$2"
+  "$PYTHON" -c '
+import json, time, os, sys
+p = os.environ["NEXVUE_TLS_STATE_DIR"] + "/job.json"
+ok = sys.argv[1] == "1"
+err = sys.argv[2][:500]
+d = {"busy": False, "action": "issue", "ok": ok, "error": err, "started_at": 0, "finished_at": int(time.time())}
+try:
+    cur = json.loads(open(p, encoding="utf-8").read())
+    if isinstance(cur, dict):
+        if cur.get("started_at"):
+            d["started_at"] = int(cur["started_at"])
+        if cur.get("action"):
+            d["action"] = cur["action"]
+except Exception:
+    pass
+os.makedirs(os.path.dirname(p), exist_ok=True)
+open(p, "w", encoding="utf-8").write(json.dumps(d) + "\n")
+' "$ok" "$err"
+}
+
+begin_job() {
+  "$PYTHON" -c '
+import json, time, os
+p = os.environ["NEXVUE_TLS_STATE_DIR"] + "/job.json"
+os.makedirs(os.path.dirname(p), exist_ok=True)
+d = {"busy": True, "action": "issue", "ok": None, "error": "", "started_at": int(time.time()), "finished_at": 0}
+open(p, "w", encoding="utf-8").write(json.dumps(d) + "\n")
+'
+}
+
+lego_failure_reason() {
+  [[ -s "${LEGO_LOG:-}" ]] || return 0
+  local line=""
+  line="$(grep -E -i 'error|fatal' "$LEGO_LOG" 2>/dev/null | tail -n 1 || true)"
+  line="${line#"${line%%[![:space:]]*}"}"
+  trim_reason "$line"
+}
+
+rotate_lego_log() {
+  local i
+  rm -f "${LEGO_LOG}.${LEGO_LOG_KEEP}"
+  i=$((LEGO_LOG_KEEP - 1))
+  while [[ "$i" -ge 1 ]]; do
+    if [[ -f "${LEGO_LOG}.${i}" ]]; then
+      mv -f "${LEGO_LOG}.${i}" "${LEGO_LOG}.$((i + 1))"
+    fi
+    i=$((i - 1))
+  done
+  if [[ -f "$LEGO_LOG" ]]; then
+    mv -f "$LEGO_LOG" "${LEGO_LOG}.1"
+  fi
+}
+
+# kill -0 is true for a zombie. The parent may not have reaped it yet;
+# a zombie is not a running request and must not keep the wait loop open.
+pid_is_alive() {
+  local pid="${1:-0}" stat state
+  [[ "$pid" -gt 1 ]] || return 1
+  [[ -r "/proc/${pid}/stat" ]] || return 1
+  stat="$(cat "/proc/${pid}/stat" 2>/dev/null || true)"
+  state="${stat##*) }"
+  state="${state%% *}"
+  [[ -n "$state" && "$state" != "Z" && "$state" != "X" ]]
+}
+
+kill_child() {
+  local pid="${child_pid:-0}"
+  pid_is_alive "$pid" || { child_pid=0; return 0; }
+  kill -TERM "$pid" 2>/dev/null || true
+  local i
+  for i in 1 2 3 4 5; do
+    pid_is_alive "$pid" || break
+    sleep 0.2
+  done
+  if pid_is_alive "$pid"; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  child_pid=0
+}
+
+# Installed before the lock is taken. Always clears our lock and the busy
+# flag, including when systemd hits TimeoutStartSec (SIGTERM) or the
+# success path has already returned from cmd_run.
+cleanup() {
+  local ec=$?
+  trap '' EXIT TERM INT
+  set +e
+  set +u
+  kill_child
+  if [[ "${apache_was:-0}" -eq 1 && "${SKIP_APACHE:-0}" != "1" ]]; then
+    systemctl_bounded "${APACHE_CLEANUP_TIMEOUT:-20}" start apache2 >/dev/null 2>&1 || true
+  fi
+  if [[ "${lego_started:-0}" -eq 1 && -f "${LEGO_LOG:-}" ]]; then
+    cat "$LEGO_LOG" >&2 || true
+  fi
+  if [[ "${lock_owned:-0}" -eq 1 && "${job_finished:-0}" -eq 0 ]]; then
+    local why="${fail_reason:-}"
+    if [[ -z "$why" && "${lego_started:-0}" -eq 1 ]]; then
+      why="$(lego_failure_reason || true)"
+    fi
+    if [[ "$ec" -eq 0 ]]; then
+      finish_job 1 "" || true
+    else
+      if [[ -z "$why" ]]; then
+        case "$ec" in
+          143|130|124|137) why="certificate request timed out" ;;
+          *) why="certificate request failed" ;;
+        esac
+      fi
+      finish_job 0 "$why" || true
+    fi
+  fi
+  if [[ "${lock_owned:-0}" -eq 1 && -f "${LOCK:-}" ]]; then
+    local owner=""
+    owner="$(tr -cd '0-9' <"$LOCK" 2>/dev/null || true)"
+    if [[ -z "$owner" || "$owner" == "$$" ]]; then
+      rm -f "$LOCK"
+    fi
+  fi
+  exit "$ec"
+}
+
+on_term() {
+  exit "$1"
 }
 
 read_env_key() {
@@ -74,34 +345,40 @@ read_env_key() {
   printf '%s' "$val"
 }
 
+overlay_status() {
+  local raw="$1" busy="$2" timer="$3" next="$4"
+  "$PYTHON" -c '
+import json, sys
+d = json.loads(sys.argv[1])
+busy = sys.argv[2] == "1"
+d["busy"] = busy
+job = d.get("job")
+if isinstance(job, dict):
+    job["busy"] = busy
+    d["job"] = job
+d["timer_enabled"] = sys.argv[3] == "true"
+d["timer_next"] = sys.argv[4]
+print(json.dumps(d, separators=(",", ":")))
+' "$raw" "$busy" "$timer" "$next"
+}
+
 cmd_status() {
   [[ -f "$HELPER" ]] || fail_json "nexvue-tls.py not installed — re-run sudo ./setup.sh"
-  local raw timer="false" next=""
-  raw="$(tls_py status)" || fail_json "tls status failed"
+  local raw timer="false" next="" st pid busy=0
+  st="$(unit_state)"
+  pid="$(unit_exec_pid)"
+  reconcile_stale 0 "$st" "$pid"
+  raw="$(tls_py status --unit-state "$st" --exec-pid "$pid")" || fail_json "tls status failed"
   if command -v systemctl >/dev/null 2>&1; then
     if systemctl is-enabled --quiet nexvue-tls-renew.timer 2>/dev/null; then
       timer="true"
     fi
     next="$(systemctl show -p NextElapseUSecRealtime --value nexvue-tls-renew.timer 2>/dev/null || true)"
   fi
-  if busy_now; then
-    "$PYTHON" -c '
-import json, sys
-d = json.loads(sys.argv[1])
-d["busy"] = True
-d["timer_enabled"] = sys.argv[2] == "true"
-d["timer_next"] = sys.argv[3]
-print(json.dumps(d, separators=(",", ":")))
-' "$raw" "$timer" "${next}"
-  else
-    "$PYTHON" -c '
-import json, sys
-d = json.loads(sys.argv[1])
-d["timer_enabled"] = sys.argv[2] == "true"
-d["timer_next"] = sys.argv[3]
-print(json.dumps(d, separators=(",", ":")))
-' "$raw" "$timer" "${next}"
+  if request_in_progress "$st" "$pid"; then
+    busy=1
   fi
+  overlay_status "$raw" "$busy" "$timer" "$next"
 }
 
 require_tos() {
@@ -132,7 +409,7 @@ start_issue_unit() {
 }
 
 cmd_issue() {
-  local body cfg_out err
+  local body cfg_out err st pid
   body="$(cat)"
   require_tos "$body"
   if ! cfg_out="$(printf '%s' "$body" | tls_py config)"; then
@@ -143,18 +420,24 @@ except Exception:
     print("invalid domain or email")')"
     fail_json "$err"
   fi
-  if busy_now; then
+  st="$(unit_state)"
+  pid="$(unit_exec_pid)"
+  reconcile_stale 1 "$st" "$pid"
+  if request_in_progress "$(unit_state)" "$(unit_exec_pid)"; then
     fail_json "a certificate request is already running"
   fi
   start_issue_unit
 }
 
 cmd_renew() {
-  if busy_now; then
+  local st pid due
+  st="$(unit_state)"
+  pid="$(unit_exec_pid)"
+  reconcile_stale 1 "$st" "$pid"
+  if request_in_progress "$(unit_state)" "$(unit_exec_pid)"; then
     echo '{"ok":true,"skipped":true,"reason":"already running"}'
     return 0
   fi
-  local due
   due="$(tls_py should-renew)" || fail_json "renew check failed"
   if ! "$PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1]); raise SystemExit(0 if d.get("renew") else 1)' "$due"; then
     echo "$due" | "$PYTHON" -c 'import json,sys; d=json.loads(sys.stdin.read()); print(json.dumps({"ok":True,"skipped":True,"reason":d.get("reason","")}))'
@@ -164,7 +447,11 @@ cmd_renew() {
 }
 
 cmd_upload() {
-  if busy_now; then
+  local st pid
+  st="$(unit_state)"
+  pid="$(unit_exec_pid)"
+  reconcile_stale 0 "$st" "$pid"
+  if request_in_progress "$st" "$pid"; then
     fail_json "a certificate request is already running"
   fi
   local out
@@ -211,53 +498,17 @@ wait_port_free() {
 }
 
 cmd_run() {
-  mkdir -p "$STATE_DIR" "$LEGO_PATH"
-  if [[ -f "$LOCK" ]]; then
-    fail_json "a certificate request is already running"
-  fi
-  echo "$$" > "$LOCK"
-  local apache_was=0
-  local finished=0
-  "$PYTHON" -c '
-import json, time, os, sys
-p = os.environ.get("NEXVUE_TLS_STATE_DIR", "/var/lib/nexvue/tls") + "/job.json"
-d = {"busy": True, "action": "issue", "ok": None, "error": "", "started_at": int(time.time()), "finished_at": 0}
-open(p, "w", encoding="utf-8").write(json.dumps(d) + "\n")
-'
-
-  finish_job() {
-    local ok="$1" err="$2"
-    "$PYTHON" -c '
-import json, time, os, sys
-p = os.environ.get("NEXVUE_TLS_STATE_DIR", "/var/lib/nexvue/tls") + "/job.json"
-ok = sys.argv[1] == "1"
-err = sys.argv[2]
-d = {"busy": False, "action": "issue", "ok": ok, "error": err, "started_at": 0, "finished_at": int(time.time())}
-try:
-    cur = json.loads(open(p, encoding="utf-8").read())
-    if isinstance(cur, dict) and cur.get("started_at"):
-        d["started_at"] = cur["started_at"]
-except Exception:
-    pass
-open(p, "w", encoding="utf-8").write(json.dumps(d) + "\n")
-' "$ok" "$err"
-  }
-
-  cleanup() {
-    local ec=$?
-    if [[ "$apache_was" -eq 1 && "$SKIP_APACHE" != "1" ]]; then
-      systemctl start apache2 >/dev/null 2>&1 || true
-    fi
-    if [[ "$finished" -eq 0 ]]; then
-      if [[ "$ec" -eq 0 ]]; then
-        finish_job 1 ""
-      else
-        finish_job 0 "certificate request failed"
-      fi
-    fi
-    rm -f "$LOCK"
-  }
+  apache_was=0
+  job_finished=0
+  lock_owned=0
+  lego_started=0
+  fail_reason=""
+  child_pid=0
   trap cleanup EXIT
+  trap 'on_term 143' TERM
+  trap 'on_term 130' INT
+
+  mkdir -p "$STATE_DIR" "$LEGO_PATH" || fail_json "could not create ${STATE_DIR}"
 
   local domain email
   domain="$(read_env_key NEXVUE_PUBLIC_HOSTNAME)"
@@ -269,45 +520,56 @@ open(p, "w", encoding="utf-8").write(json.dumps(d) + "\n")
   [[ -n "$email" ]] || fail_json "Set an email for Let's Encrypt notices"
   [[ -x "$LEGO" || -f "$LEGO" ]] || fail_json "lego is not installed — re-run sudo ./setup.sh"
 
+  # Empty unit snapshot: we are the oneshot. Stopping $UNIT would kill us.
+  # issue/renew already stopped a stuck unit before starting this one.
+  reconcile_stale 1 "" "0"
+  if request_in_progress "" "0"; then
+    fail_json "a certificate request is already running"
+  fi
+
+  echo "$$" >"$LOCK"
+  lock_owned=1
+  begin_job
+
   if [[ "$SKIP_APACHE" != "1" ]] && command -v systemctl >/dev/null 2>&1; then
     if systemctl is-active --quiet apache2 2>/dev/null; then
       apache_was=1
-      systemctl stop apache2 || fail_json "could not stop Apache to free port 443"
+      if ! systemctl_bounded "$APACHE_STOP_TIMEOUT" stop apache2; then
+        run_fail "could not stop Apache to free port 443"
+      fi
       wait_port_free
     fi
   fi
 
-  local log
-  log="$(mktemp)"
-  set +e
-  "$LEGO" run \
+  rotate_lego_log
+  : >"$LEGO_LOG"
+  chmod 600 "$LEGO_LOG" 2>/dev/null || true
+  lego_started=1
+  local lec=0
+  launch "$LEGO_LOG" "$LEGO" run \
     --email "$email" \
     --domains "$domain" \
     --tls \
     --path "$LEGO_PATH" \
     --accept-tos \
-    --deploy-hook "$DEPLOY_HOOK" \
-    >"$log" 2>&1
-  local lec=$?
-  set -e
-  local tail
-  tail="$(tr -d '\r' <"$log" | tail -n 8 | tr '\n' ' ')"
-  rm -f "$log"
+    --deploy-hook "$DEPLOY_HOOK" || lec=$?
   if [[ "$lec" -ne 0 ]]; then
-    finished=1
-    finish_job 0 "${tail:-lego failed}"
-    fail_json "${tail:-lego failed}"
+    local why
+    why="$(lego_failure_reason || true)"
+    run_fail "${why:-lego failed}"
   fi
 
   if [[ "$SKIP_APACHE" != "1" && "$apache_was" -eq 1 ]]; then
-    systemctl start apache2 || fail_json "lego succeeded but Apache failed to start"
+    if ! systemctl_bounded "$APACHE_START_TIMEOUT" start apache2; then
+      run_fail "lego succeeded but Apache failed to start"
+    fi
     apache_was=0
   fi
   if [[ "$SKIP_MEDIAMTX" != "1" ]] && command -v systemctl >/dev/null 2>&1; then
-    systemctl restart mediamtx >/dev/null 2>&1 || true
+    systemctl_bounded 20 restart mediamtx >/dev/null 2>&1 || true
   fi
-  finished=1
   finish_job 1 ""
+  job_finished=1
   echo '{"ok":true,"issued":true,"challenge":"tls-alpn-01"}'
 }
 

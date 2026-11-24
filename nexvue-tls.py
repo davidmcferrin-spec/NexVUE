@@ -16,10 +16,13 @@ Commands:
                       (LEGO_HOOK_CERT_* from lego v5; LEGO_CERT_* v4 fallback;
                       else <lego>/certificates/<public-hostname>.{crt,key})
   should-renew        JSON {renew: bool} — Lego cert within --days (default 30)
+  assess              JSON busy/live/kill for the current lock + unit snapshot
+  reconcile           same, and drop a dead lock / stale busy flag
 
 Env overrides (tests):
   NEXVUE_TLS_DIR NEXVUE_TLS_CERT NEXVUE_TLS_KEY NEXVUE_TLS_STATE_DIR
   NEXVUE_STATION_ENV NEXVUE_LEGO NEXVUE_LEGO_PATH NEXVUE_TLS_RENEW_DAYS
+  NEXVUE_TLS_JOB_MAX_AGE NEXVUE_TLS_UNIT
 """
 from __future__ import annotations
 
@@ -44,6 +47,10 @@ UNQUOTED_SAFE_RE = re.compile(r"^[A-Za-z0-9_./:+=,@-]+$")
 PEM_BEGIN = b"-----BEGIN "
 PEM_MAX = 131072
 RENEW_DAYS_DEFAULT = 30
+# One minute past nexvue-tls-issue.service TimeoutStartSec (10min). A live
+# run is not stale before systemd gives up; a dead pid is stale immediately.
+JOB_MAX_AGE_DEFAULT = 660
+_UNIT_IN_FLIGHT = ("active", "activating", "deactivating")
 
 EMAIL_KEY = "NEXVUE_TLS_EMAIL"
 DOMAIN_KEY = "NEXVUE_TLS_DOMAIN"
@@ -135,6 +142,27 @@ def renew_days() -> int:
     except ValueError:
         return RENEW_DAYS_DEFAULT
     return n if n > 0 else RENEW_DAYS_DEFAULT
+
+
+def job_max_age() -> int:
+    raw = os.environ.get("NEXVUE_TLS_JOB_MAX_AGE", str(JOB_MAX_AGE_DEFAULT))
+    try:
+        n = int(raw)
+    except ValueError:
+        return JOB_MAX_AGE_DEFAULT
+    return n if n > 0 else JOB_MAX_AGE_DEFAULT
+
+
+def tls_unit() -> str:
+    return os.environ.get("NEXVUE_TLS_UNIT", "nexvue-tls-issue.service")
+
+
+def lock_path() -> Path:
+    return state_dir() / "issue.lock"
+
+
+def lego_log_path() -> Path:
+    return state_dir() / "lego.log"
 
 
 def json_out(obj: dict, code: int = 0) -> int:
@@ -584,6 +612,203 @@ def write_job(fields: dict) -> dict:
     return cur
 
 
+def read_lock_pid() -> int | None:
+    path = lock_path()
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    if not text.isdigit():
+        return None
+    pid = int(text)
+    return pid if pid > 1 else None
+
+
+def pid_alive(pid: int) -> bool:
+    """True when pid is running. Zombies are not a live request."""
+    if pid <= 1:
+        return False
+    stat_path = Path(f"/proc/{pid}/stat")
+    try:
+        text = stat_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    # comm is inside the last pair of parentheses and may itself contain ")".
+    end = text.rfind(")")
+    fields = text[end + 2 :].split() if end != -1 else []
+    if not fields:
+        return False
+    return fields[0] not in ("Z", "X")
+
+
+def pid_is_tls_worker(pid: int) -> bool:
+    """The lock must not be a signal to kill an unrelated recycled pid."""
+    if pid <= 1:
+        return False
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return False
+    text = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+    return "nexvue-ops-tls" in text or "/lego" in text or text.strip() == "lego"
+
+
+def _started_at(job: dict) -> int:
+    try:
+        return int(job.get("started_at") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def lego_error_hint(started_at: int) -> str:
+    """Last lego error line from this run, if the transcript is still on disk."""
+    path = lego_log_path()
+    if not path.is_file():
+        return ""
+    try:
+        if started_at and path.stat().st_mtime + 2 < started_at:
+            return ""
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    chosen = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        low = stripped.lower()
+        if "error" in low or "fatal" in low:
+            chosen = stripped
+    return chosen[:400]
+
+
+def systemctl_show_value(prop: str) -> str:
+    exe = shutil.which("systemctl")
+    if not exe:
+        return ""
+    try:
+        proc = subprocess.run(
+            [exe, "show", "-p", prop, "--value", tls_unit()],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    line = (proc.stdout or "").strip().splitlines()
+    return line[0].strip() if line else ""
+
+
+def systemctl_active_state() -> str:
+    return systemctl_show_value("ActiveState")
+
+
+def systemctl_exec_pid() -> int:
+    raw = systemctl_show_value("ExecMainPID")
+    if raw.isdigit():
+        pid = int(raw)
+        return pid if pid > 0 else 0
+    return 0
+
+
+def issue_busy_state(
+    job: dict,
+    unit_state: str,
+    exec_pid: int = 0,
+    now: float | None = None,
+) -> dict:
+    """Whether an issue/renew is actually in progress.
+
+    Not busy when the lock pid is dead, the unit is not running (or its
+    main pid is dead), or a busy mark is older than the job budget.
+    A finished job's started_at does not expire the next run.
+    """
+    now = time.time() if now is None else now
+    pid = read_lock_pid()
+    alive = pid is not None and pid_alive(pid)
+    # A recycled pid that is not our script or lego is not a running request.
+    worker = bool(alive and pid and pid_is_tls_worker(pid))
+    marked = bool(job.get("busy"))
+    started = _started_at(job)
+    expired = bool(marked and started and (now - started) > job_max_age())
+    in_flight = (unit_state or "") in _UNIT_IN_FLIGHT
+    exec_alive = exec_pid > 1 and pid_alive(exec_pid) and pid_is_tls_worker(exec_pid)
+    lock_exists = lock_path().is_file()
+    # Leftover lock (dead pid, junk, or a recycled pid) is not the startup
+    # window. The startup window is an in-flight unit with no lock yet.
+    dead_lock = lock_exists and not worker
+
+    state = {
+        "busy": False,
+        "reason": "",
+        "stop_unit": False,
+        "kill_pid": 0,
+        "live_pid": bool(worker and not expired),
+    }
+    if worker and not expired:
+        state["busy"] = True
+        return state
+    # Unit is up and has not recorded a dead worker. Covers the moment
+    # before the lock file exists, and a main pid systemd still tracks.
+    if not expired and (exec_alive or (in_flight and exec_pid <= 0 and not dead_lock)):
+        state["busy"] = True
+        state["live_pid"] = bool(exec_alive or worker)
+        return state
+
+    if expired:
+        state["reason"] = "certificate request timed out"
+    elif marked or lock_exists:
+        state["reason"] = "certificate request was interrupted"
+    if worker and expired and pid:
+        state["kill_pid"] = pid
+    if in_flight and not state["busy"]:
+        state["stop_unit"] = True
+    return state
+
+
+def apply_reconcile(
+    job: dict,
+    unit_state: str,
+    exec_pid: int = 0,
+    now: float | None = None,
+) -> dict:
+    """Drop leftover lock/busy state. Does not signal a live worker."""
+    state = issue_busy_state(job, unit_state, exec_pid, now)
+    state["cleared"] = False
+    if state["busy"]:
+        return state
+    pid = read_lock_pid()
+    worker = pid is not None and pid_alive(pid) and pid_is_tls_worker(pid)
+    if lock_path().is_file() and not worker:
+        try:
+            lock_path().unlink()
+            state["cleared"] = True
+        except OSError:
+            pass
+    if job.get("busy") and not worker:
+        reason = state["reason"] or "certificate request was interrupted"
+        hint = lego_error_hint(_started_at(job))
+        if hint:
+            reason = hint
+        write_job(
+            {
+                "busy": False,
+                "ok": False,
+                "error": reason[:500],
+                "finished_at": int(time.time() if now is None else now),
+            }
+        )
+        state["reason"] = reason[:500]
+        state["cleared"] = True
+    return state
+
+
 def lego_info() -> dict:
     path = lego_bin()
     if not path.is_file():
@@ -634,10 +859,34 @@ def _safe_email(raw: str) -> str:
         return ""
 
 
-def cmd_status(_args: argparse.Namespace) -> int:
+def _unit_from_args(args: argparse.Namespace) -> tuple[str, int]:
+    if getattr(args, "unit_state", None) is None:
+        unit_state = systemctl_active_state()
+    else:
+        unit_state = args.unit_state or ""
+    if getattr(args, "exec_pid", None) is None:
+        exec_pid = systemctl_exec_pid()
+    else:
+        exec_pid = int(args.exec_pid)
+    return unit_state, exec_pid
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    unit_state, exec_pid = _unit_from_args(args)
+    apply_reconcile(read_job(), unit_state, exec_pid)
     cfg = read_env_map()
     info = inspect_installed()
     job = read_job()
+    state = issue_busy_state(job, unit_state, exec_pid)
+    if not state["busy"] and job.get("busy"):
+        # Still alive but past the budget. Report the failure here; the
+        # worker may still write its own result when it exits.
+        shown = dict(job)
+        shown["busy"] = False
+        shown["ok"] = False
+        if not shown.get("error"):
+            shown["error"] = state["reason"] or "certificate request timed out"
+        job = shown
     renew, renew_reason = should_renew(info, cfg)
     try:
         resolved = resolve_domain(cfg)
@@ -650,13 +899,27 @@ def cmd_status(_args: argparse.Namespace) -> int:
         "public_hostname": _safe_domain(cfg.get("public_hostname") or ""),
         "resolved_domain": resolved,
         "job": job,
-        "busy": bool(job.get("busy")),
+        "busy": bool(state["busy"]),
         "renew_due": renew,
         "renew_reason": renew_reason,
         **lego_info(),
         "challenge": "tls-alpn-01",
     }
     return json_out(payload)
+
+
+def cmd_assess(args: argparse.Namespace) -> int:
+    unit_state, exec_pid = _unit_from_args(args)
+    state = issue_busy_state(read_job(), unit_state, exec_pid)
+    state["ok"] = True
+    return json_out(state)
+
+
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    unit_state, exec_pid = _unit_from_args(args)
+    state = apply_reconcile(read_job(), unit_state, exec_pid)
+    state["ok"] = True
+    return json_out(state)
 
 
 def cmd_config(_args: argparse.Namespace) -> int:
@@ -756,16 +1019,26 @@ def cmd_job(_args: argparse.Namespace) -> int:
     return json_out({"ok": True, "job": read_job()})
 
 
+def _add_unit_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--unit-state", default=None)
+    parser.add_argument("--exec-pid", type=int, default=None)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="nexvue-tls.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("status")
+    p_status = sub.add_parser("status")
+    _add_unit_args(p_status)
     sub.add_parser("config")
     sub.add_parser("validate")
     sub.add_parser("install")
     sub.add_parser("deploy")
     sub.add_parser("should-renew")
     sub.add_parser("job")
+    p_assess = sub.add_parser("assess")
+    _add_unit_args(p_assess)
+    p_reconcile = sub.add_parser("reconcile")
+    _add_unit_args(p_reconcile)
     args = ap.parse_args(argv)
     cmds = {
         "status": cmd_status,
@@ -775,6 +1048,8 @@ def main(argv: list[str] | None = None) -> int:
         "deploy": cmd_deploy,
         "should-renew": cmd_should_renew,
         "job": cmd_job,
+        "assess": cmd_assess,
+        "reconcile": cmd_reconcile,
     }
     try:
         return cmds[args.cmd](args)

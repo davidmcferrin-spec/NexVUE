@@ -35,6 +35,14 @@ ACME challenge and started again afterward. Issue and renew use the Public
 hostname. `nexvue-tls-renew.timer` renews a lego certificate inside 30 days
 of expiry and does nothing for a self-signed or uploaded pair.
 
+`nexvue-tls-issue.service` allows 10 minutes for the Apache stop, lego, and
+the Apache start. Cleanup limits the Apache start so a hung restart cannot
+leave Issue/Renew stuck on "request is running". A dead worker, a unit that
+is not actually running, or a busy flag older than the job budget is cleared
+on the next status check or renew, and the panel shows the error. Lego's
+transcript is `/var/lib/nexvue/tls/lego.log` (older runs rotate through
+`lego.log.1` … `lego.log.5`).
+
 The JWKS vhost on `127.0.0.1:9080` stays plain HTTP so MediaMTX can fetch
 keys without following the HTTPS redirect.
 
